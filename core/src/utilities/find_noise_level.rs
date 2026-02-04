@@ -8,29 +8,29 @@ where
     Y: IntoF64Slice<'a>,
 {
     let y = y.into_f64_slice();
-    let points = scan_points(y.as_ref());
-    if points.is_empty() {
+    let segments = scan_segments(y.as_ref());
+    if segments.is_empty() {
         return 0.0;
     }
 
-    let params = ClusterParams {
-        log_n: true,
-        log_i: true,
-        w_n: 3.0,
-        w_i: 1.0,
-    };
-    let labels = cluster_intensities(&points, params);
+    let params = ClusterParams::default();
+    let labels = cluster_intensities(&segments, params);
 
     let mut counts = [0usize; 2];
-    for &l in &labels {
-        if l < 2 {
-            counts[l] += 1;
-        }
+    for &label in &labels {
+        counts[label] += 1;
     }
     let noise_label = if counts[0] >= counts[1] { 0 } else { 1 };
 
     let mut max_in_noise = f64::NEG_INFINITY;
-    for (i, &(_n, intensity)) in points.iter().enumerate() {
+    for (
+        i,
+        &Segment {
+            width: _,
+            intensity,
+        },
+    ) in segments.iter().enumerate()
+    {
         if labels[i] == noise_label && intensity.is_finite() && intensity > max_in_noise {
             max_in_noise = intensity;
         }
@@ -93,114 +93,123 @@ impl<'a> IntoF64Slice<'a> for Vec<f32> {
 
 #[derive(Clone, Copy)]
 struct ClusterParams {
-    log_n: bool,
-    log_i: bool,
-    w_n: f64,
-    w_i: f64,
+    width_weight: f64,
+    intensity_weight: f64,
 }
 
-fn scan_points(y: &[f64]) -> Vec<(usize, f64)> {
-    let mut runs: Vec<(usize, f64)> = Vec::new();
-    if y.is_empty() {
-        return runs;
+impl Default for ClusterParams {
+    fn default() -> Self {
+        Self {
+            width_weight: 2.0,
+            intensity_weight: 1.0,
+        }
     }
-    let min = x_min_value(y);
+}
 
-    let mut in_run = false;
-    let mut count: usize = 0;
-    let mut max_val = f64::NEG_INFINITY;
+struct Segment {
+    width: f64,
+    intensity: f64,
+}
 
-    for &v in y {
-        let is_non_zero = v.is_finite() && v.abs() > min;
-        if is_non_zero {
-            if !in_run {
-                in_run = true;
-                count = 1;
-                max_val = v;
+fn scan_segments(y: &[f64]) -> Vec<Segment> {
+    let mut segments: Vec<Segment> = Vec::new();
+    if y.is_empty() {
+        return segments;
+    }
+
+    let threshold = x_min_value(y);
+
+    let mut in_segment = false;
+    let mut segment_width: usize = 0;
+    let mut segment_intensity = f64::NEG_INFINITY;
+
+    for &intensity in y {
+        let mask_on = intensity.is_finite() && intensity.abs() > threshold;
+
+        if mask_on {
+            if !in_segment {
+                in_segment = true;
+                segment_width = 1;
+                segment_intensity = intensity;
             } else {
-                count += 1;
-                if v > max_val {
-                    max_val = v;
+                segment_width += 1;
+                if intensity > segment_intensity {
+                    segment_intensity = intensity;
                 }
             }
-        } else {
-            if in_run {
-                runs.push((count, max_val));
-                in_run = false;
-                count = 0;
-                max_val = f64::NEG_INFINITY;
-            }
+        } else if in_segment {
+            segments.push(Segment {
+                width: segment_width as f64,
+                intensity: segment_intensity,
+            });
+            in_segment = false;
+            segment_width = 0;
+            segment_intensity = f64::NEG_INFINITY;
         }
     }
 
-    if in_run {
-        runs.push((count, max_val));
+    if in_segment {
+        segments.push(Segment {
+            width: segment_width as f64,
+            intensity: segment_intensity,
+        });
     }
 
-    runs
+    segments
 }
 
-fn cluster_intensities(points: &[(usize, f64)], params: ClusterParams) -> Vec<usize> {
+fn cluster_intensities(points: &[Segment], params: ClusterParams) -> Vec<usize> {
     if points.is_empty() {
         return Vec::new();
     }
 
-    let mut tx: Vec<f64> = Vec::with_capacity(points.len());
-    let mut ty: Vec<f64> = Vec::with_capacity(points.len());
-    for &(n, i) in points.iter() {
-        let a = if params.log_n {
-            log1p_safe(n as f64)
-        } else {
-            n as f64
-        };
-        let b = if params.log_i { log1p_safe(i) } else { i };
-        tx.push(a);
-        ty.push(b);
+    let mut widths: Vec<f64> = Vec::with_capacity(points.len());
+    let mut intensities: Vec<f64> = Vec::with_capacity(points.len());
+    for &Segment { width, intensity } in points.iter() {
+        widths.push(log1p_safe(width));
+        intensities.push(log1p_safe(intensity));
     }
 
-    let mx = x_mean(&tx);
-    let my = x_mean(&ty);
-    let sx = x_stddev(&tx);
-    let sy = x_stddev(&ty);
-    let sx = if sx == 0.0 { 1.0 } else { sx };
-    let sy = if sy == 0.0 { 1.0 } else { sy };
+    let meam_widths = mean(&widths);
+    let mean_intensity = mean(&intensities);
 
-    let wx = params.w_n.sqrt();
-    let wy = params.w_i.sqrt();
+    let width_std = match std_dev(&widths) {
+        0.0 => 1.0,
+        result => result,
+    };
+    let intensity_std = match std_dev(&intensities) {
+        0.0 => 1.0,
+        result => result,
+    };
 
-    let mut weighted: Vec<[f64; 2]> = Vec::with_capacity(points.len());
+    let ClusterParams {
+        width_weight,
+        intensity_weight,
+    } = params;
+
+    let mut weighted_points: Vec<[f64; 2]> = Vec::with_capacity(points.len());
     for i in 0..points.len() {
-        let a = (tx[i] - mx) / sx;
-        let b = (ty[i] - my) / sy;
-        weighted.push([a * wx, b * wy]);
+        let a = (widths[i] - meam_widths) / width_std;
+        let b = (intensities[i] - mean_intensity) / intensity_std;
+        weighted_points.push([a * width_weight, b * intensity_weight]);
     }
 
-    let seeds = farthest_seeds(&weighted);
+    let seeds: Vec<Vec<f64>> = farthest_seeds(&weighted_points);
+    let mut centroids = kmeans(&weighted_points, seeds);
+    centroids.sort_by(|a, b| a[1].total_cmp(&b[1]));
 
-    let mut km_points: Vec<Vec<f64>> = Vec::with_capacity(weighted.len());
-    for p in &weighted {
-        km_points.push(vec![p[0], p[1]]);
-    }
-    let centroids = kmeans(&km_points, seeds);
-
-    let mut centroids_sorted = centroids.clone();
-    centroids_sorted.sort_by(|a, b| a[1].partial_cmp(&b[1]).unwrap());
-
-    // println!("{centroids:#?}");
-    // println!("{centroids_sorted:#?}");
-
-    let mut result: Vec<usize> = Vec::with_capacity(weighted.len());
-    for p in weighted.iter() {
+    let mut result: Vec<usize> = Vec::with_capacity(weighted_points.len());
+    for p in weighted_points.iter() {
         let mut idx = 0usize;
         let mut best = {
-            let dx = p[0] - centroids_sorted[0][0];
-            let dy = p[1] - centroids_sorted[0][1];
-            (dx * dx + dy * dy).sqrt()
+            let dx = p[0] - centroids[0][0];
+            let dy = p[1] - centroids[0][1];
+            dx * dx + dy * dy
         };
-        for j in 1..centroids_sorted.len() {
-            let dx = p[0] - centroids_sorted[j][0];
-            let dy = p[1] - centroids_sorted[j][1];
-            let d = (dx * dx + dy * dy).sqrt();
+        for j in 1..centroids.len() {
+            let dx = p[0] - centroids[j][0];
+            let dy = p[1] - centroids[j][1];
+            let d = dx * dx + dy * dy;
             if d < best {
                 best = d;
                 idx = j;
@@ -212,60 +221,67 @@ fn cluster_intensities(points: &[(usize, f64)], params: ClusterParams) -> Vec<us
     result
 }
 
-fn farthest_seeds(weighted: &[[f64; 2]]) -> Vec<Vec<f64>> {
-    let mut min = weighted[0];
-    let mut max = weighted[0];
-    for &q in weighted.iter() {
-        if q[1] < min[1] {
-            min = q;
+fn farthest_seeds(weighted_points: &[[f64; 2]]) -> Vec<Vec<f64>> {
+    let mut min = weighted_points[0];
+    let mut max = weighted_points[0];
+    for &point in weighted_points.iter() {
+        if point[1] < min[1] {
+            min = point;
         }
-        if q[1] > max[1] {
-            max = q;
+        if point[1] > max[1] {
+            max = point;
         }
     }
     vec![vec![min[0], min[1]], vec![max[0], max[1]]]
 }
 
-fn x_min_value(a: &[f64]) -> f64 {
-    let mut m = f64::INFINITY;
-    for &v in a {
-        if v.is_finite() && v < m {
-            m = v;
+fn x_min_value(array: &[f64]) -> f64 {
+    let mut minimum = f64::INFINITY;
+    for &value in array {
+        if value.is_finite() {
+            let absolute_value = value.abs();
+            if absolute_value < minimum {
+                minimum = absolute_value;
+            }
         }
     }
-    if m.is_finite() { m.abs() } else { 0.0 }
+    if minimum.is_finite() { minimum } else { 0.0 }
 }
 
-fn x_mean(a: &[f64]) -> f64 {
-    if a.is_empty() {
+fn mean(array: &[f64]) -> f64 {
+    if array.is_empty() {
         return 0.0;
     }
-    let mut s = 0.0;
+    let mut sum = 0.0f64;
     let mut n = 0usize;
-    for &v in a {
-        if v.is_finite() {
-            s += v;
+    for &value in array {
+        if value.is_finite() {
+            sum += value;
             n += 1;
         }
     }
-    if n == 0 { 0.0 } else { s / n as f64 }
+    if n == 0 { 0.0 } else { sum / n as f64 }
 }
 
-fn x_stddev(a: &[f64]) -> f64 {
-    if a.is_empty() {
+fn std_dev(array: &[f64]) -> f64 {
+    if array.is_empty() {
         return 0.0;
     }
-    let mu = x_mean(a);
-    let mut s = 0.0;
+    let mean_value = mean(array);
+    let mut sum_sq_diff = 0.0f64;
     let mut n = 0usize;
-    for &v in a {
-        if v.is_finite() {
-            let d = v - mu;
-            s += d * d;
+    for &value in array {
+        if value.is_finite() {
+            let diff = value - mean_value;
+            sum_sq_diff += diff * diff;
             n += 1;
         }
     }
-    if n == 0 { 0.0 } else { (s / n as f64).sqrt() }
+    if n == 0 {
+        0.0
+    } else {
+        (sum_sq_diff / n as f64).sqrt()
+    }
 }
 
 fn log1p_safe(v: f64) -> f64 {

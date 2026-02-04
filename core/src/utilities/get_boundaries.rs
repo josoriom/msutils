@@ -19,12 +19,13 @@ pub struct BoundariesOptions {
     pub n_steps: usize,
     pub baseline_run: usize,
 }
+
 impl Default for BoundariesOptions {
     fn default() -> Self {
         Self {
             epsilon: 1e-5,
             noise: 0.0,
-            n_steps: 4,
+            n_steps: 3,
             baseline_run: 2,
         }
     }
@@ -144,7 +145,7 @@ fn walk(
             };
         }
 
-        let (ratio, slope) = compute_ratio_and_slope(x, y, iu, ju, dir, epsilon);
+        let slope = compute_ratio_and_slope(x, y, iu, ju, dir, epsilon);
 
         if is_asc_or_flat(slope) {
             if !checking {
@@ -158,14 +159,6 @@ fn walk(
                 if y_j <= noise {
                     below_noise = true;
                 }
-            }
-
-            if sharp_crossing(ratio, slope) {
-                let k = valley_idx.clamp(0, n - 1) as usize;
-                return Boundary {
-                    index: Some(k),
-                    value: Some(x[k]),
-                };
             }
 
             if steps_up >= n_steps {
@@ -243,11 +236,6 @@ fn is_asc_or_flat(slope: f64) -> bool {
     slope >= 0.0
 }
 
-fn sharp_crossing(ratio: f64, slope: f64) -> bool {
-    ratio >= 1.0 && is_asc_or_flat(slope)
-}
-
-/// Checks if the rise is not big enough to justify the split.
 #[inline]
 fn allow_rise(below_noise: bool, end_val: f64, noise: f64, rise: f64) -> bool {
     !((below_noise && end_val <= noise) || (rise >= noise))
@@ -260,7 +248,7 @@ fn compute_ratio_and_slope(
     ju: usize,
     dir: isize,
     epsilon: f64,
-) -> (f64, f64) {
+) -> f64 {
     let dx = x[ju] - x[iu];
     let denom = if dx.abs() < epsilon {
         if dir > 0 { epsilon } else { -epsilon }
@@ -269,9 +257,5 @@ fn compute_ratio_and_slope(
     };
     let dy = (y[ju] as f64) - (y[iu] as f64);
     let slope_dir = (dy / denom) * if dir > 0 { 1.0 } else { -1.0 };
-    let denom_y = (y[iu] as f64).abs().max(epsilon);
-    let ratio = (dy / denom_y).abs();
-    // let xx = x[iu];
-    // println!("dir: {dir}, x:{xx} ratio: {ratio}, slope: {slope_dir}");
-    (ratio, slope_dir)
+    slope_dir
 }
