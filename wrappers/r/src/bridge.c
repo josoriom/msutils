@@ -44,7 +44,6 @@ typedef struct
 } CPeakPOptions;
 
 typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, Buf *);
-typedef int32_t (*fn_parse_mzmlb)(const unsigned char *, size_t, Buf *);
 typedef int32_t (*fn_bin_to_json)(const unsigned char *, size_t, Buf *);
 typedef int32_t (*fn_bin_to_mzml)(const unsigned char *, size_t, Buf *);
 typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakPOptions *, Buf *);
@@ -63,7 +62,6 @@ typedef void (*fn_free_)(unsigned char *, size_t);
 typedef struct
 {
   fn_parse_mzml parse_mzml;
-  fn_parse_mzmlb parse_mzmlb;
   fn_bin_to_json bin_to_json;
   fn_bin_to_mzml bin_to_mzml;
   fn_get_peak get_peak;
@@ -110,7 +108,6 @@ int abi_load(const char *path, const char **err)
   }
   if (resolve_required((void **)&ABI.parse_mzml, "parse_mzml"))
     goto fail;
-  ABI.parse_mzmlb = (fn_parse_mzmlb)DLSYM(abi_handle, "parse_mzmlb");
   if (resolve_required((void **)&ABI.bin_to_json, "bin_to_json"))
     goto fail;
   if (resolve_required((void **)&ABI.bin_to_mzml, "bin_to_mzml"))
@@ -306,22 +303,6 @@ SEXP C_parse_mzml(SEXP data)
   Buf out = (Buf){0};
   int code = ABI.parse_mzml((const unsigned char *)RAW(data), (size_t)XLENGTH(data), &out);
   die_code("parse_mzml", code);
-  SEXP res = PROTECT(Rf_allocVector(RAWSXP, (R_xlen_t)out.len));
-  memcpy(RAW(res), out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
-  UNPROTECT(1);
-  return res;
-}
-
-SEXP C_parse_mzmlb(SEXP data)
-{
-  if (TYPEOF(data) != RAWSXP)
-    error("data");
-  REQUIRE_BOUND(ABI.parse_mzmlb, "parse_mzmlb");
-  REQUIRE_BOUND(ABI.free_, "free_");
-  Buf out = (Buf){0};
-  int code = ABI.parse_mzmlb((const unsigned char *)RAW(data), (size_t)XLENGTH(data), &out);
-  die_code("parse_mzmlb", code);
   SEXP res = PROTECT(Rf_allocVector(RAWSXP, (R_xlen_t)out.len));
   memcpy(RAW(res), out.ptr, out.len);
   ABI.free_(out.ptr, out.len);

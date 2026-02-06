@@ -4,7 +4,6 @@
 
 SEXP C_bind_rust(SEXP path);
 SEXP C_parse_mzml(SEXP data);
-SEXP C_parse_mzmlb(SEXP path);
 SEXP C_bin_to_json(SEXP bin);
 SEXP C_bin_to_mzml(SEXP bin);
 SEXP C_get_peak(SEXP x, SEXP y, SEXP rt, SEXP range, SEXP options);
@@ -21,7 +20,6 @@ SEXP C_parse_bin(SEXP bin);
 static const R_CallMethodDef CallEntries[] = {
     {"C_bind_rust", (DL_FUNC)&C_bind_rust, 1},
     {"C_parse_mzml", (DL_FUNC)&C_parse_mzml, 1},
-    {"C_parse_mzmlb", (DL_FUNC)&C_parse_mzmlb, 1},
     {"C_bin_to_json", (DL_FUNC)&C_bin_to_json, 1},
     {"C_bin_to_mzml", (DL_FUNC)&C_bin_to_mzml, 1},
     {"C_get_peak", (DL_FUNC)&C_get_peak, 5},

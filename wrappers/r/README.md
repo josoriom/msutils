@@ -89,5 +89,5 @@ targets <- data.frame(
 )
 bin <- readBin(path, "raw", file.info(path)$size)
 file <- msutils::parse_mzml(bin)
-peaks <- msutils::get_peaks_from_eic(file, targets, cores = 2)
+peaks <- msutils::get_peaks_from_eic(file, targets, auto_noise = TRUE, auto_baseline = TRUE, cores = 2L)
 ```

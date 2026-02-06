@@ -46,11 +46,6 @@ parse_mzml <- function(data) {
   .Call("C_parse_mzml", data, PACKAGE="msutils")
 }
 
-parse_mzmlb <- function(data) {
-  stopifnot(is.raw(data))
-  .Call("C_parse_mzmlb", data, PACKAGE = "msutils")
-}
-
 bin_to_json <- function(bin) {
   stopifnot(is.raw(bin))
   .Call("C_bin_to_json", bin, PACKAGE="msutils")
@@ -220,7 +215,7 @@ get_peak <- function(
 }
 
 get_peaks_from_eic <- function(
-  bin, df, from_left=0.5, to_right=0.5, cores=1L,
+  bin, df, from=0.5, to=5, cores=1L,
   integral_threshold=NaN, intensity_threshold=NaN, width_threshold=0L,
   noise=NaN, auto_noise=FALSE, auto_baseline=FALSE,
   baseline_window=0L, baseline_window_factor=0L,
@@ -249,7 +244,7 @@ get_peaks_from_eic <- function(
   ))
   out_json <- .Call("C_get_peaks_from_eic",
     bin, as.numeric(rts), as.numeric(mzs), as.numeric(ranges), as.character(id),
-    as.numeric(from_left), as.numeric(to_right), opt, as.integer(cores),
+    as.numeric(from), as.numeric(to), opt, as.integer(cores),
     PACKAGE="msutils"
   )
   res <- jsonlite::fromJSON(out_json, simplifyVector=TRUE)
