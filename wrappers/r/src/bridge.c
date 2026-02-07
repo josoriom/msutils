@@ -53,9 +53,9 @@ typedef int32_t (*fn_get_peaks_from_eic)(const unsigned char *, size_t, const do
 typedef int32_t (*fn_get_peaks_from_chrom)(const unsigned char *, size_t, const uint32_t *, const double *, const double *, size_t, const CPeakPOptions *, size_t, Buf *);
 typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_find_features)(const unsigned char *, size_t, double, double, double, double, double, double, int32_t, const CPeakPOptions *, Buf *);
+typedef int32_t (*fn_find_features)(const unsigned char *, size_t, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, Buf *);
 typedef int32_t (*fn_find_feature)(const unsigned char *, size_t, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
-typedef int32_t (*fn_convert_mzml_to_bin)(const unsigned char *, size_t, uint8_t, Buf *);
+typedef int32_t (*fn_convert_mzml_to_bin)(const unsigned char *, size_t, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 
@@ -545,23 +545,29 @@ SEXP C_calculate_baseline(SEXP y, SEXP baseline_window, SEXP baseline_window_fac
   return Ry;
 }
 
-SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol, SEXP grid_start, SEXP grid_end, SEXP grid_step_ppm, SEXP options)
+SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol, SEXP grid_start, SEXP grid_end, SEXP grid_step_ppm, SEXP options, SEXP cores)
 {
   if (TYPEOF(data) != RAWSXP)
     error("data must be raw");
   REQUIRE_BOUND(ABI.find_features, "find_features");
   REQUIRE_BOUND(ABI.free_, "free_");
+
+  int ncores = asInteger(cores);
+  if (ncores < 1)
+    error("cores must be a single number");
+
   CPeakPOptions opts;
   const CPeakPOptions *opt_ptr = NULL;
   (void)as_opts_ptr(options, &opts, &opt_ptr);
+
   Buf out = (Buf){0};
   int code = ABI.find_features(
       (const unsigned char *)RAW(data), (size_t)XLENGTH(data),
       asReal(from_time), asReal(to_time),
       asReal(eic_ppm_tol), asReal(eic_mz_tol),
       asReal(grid_start), asReal(grid_end),
-      (int32_t)asInteger(grid_step_ppm),
-      opt_ptr, &out);
+      asReal(grid_step_ppm),
+      opt_ptr, (int32_t)ncores, &out);
   die_code("find_features", code);
   SEXP res = mk_string_len(out.ptr, out.len);
   ABI.free_(out.ptr, out.len);
@@ -651,20 +657,33 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
   return res;
 }
 
-SEXP C_convert_mzml_to_bin(SEXP xml, SEXP level)
+SEXP C_convert_mzml_to_bin(SEXP xml, SEXP level, SEXP f32_compress)
 {
   if (TYPEOF(xml) != RAWSXP)
     error("xml must be a raw vector");
   if (!(TYPEOF(level) == INTSXP || TYPEOF(level) == REALSXP) || LENGTH(level) != 1)
     error("level must be a scalar number");
   int lv = asInteger(level);
-  if (lv < 0 || lv > 9)
-    error("level must be in [0,9]");
+  if (lv < 0 || lv > 22)
+    error("level must be in [0,22]");
+
+  int fc = asLogical(f32_compress);
+  if (fc == NA_LOGICAL)
+    error("f32_compress must be TRUE/FALSE");
+
   REQUIRE_BOUND(ABI.convert_mzml_to_bin, "convert_mzml_to_bin");
   REQUIRE_BOUND(ABI.free_, "free_");
+
   Buf out = (Buf){0};
-  int32_t code = ABI.convert_mzml_to_bin((const unsigned char *)RAW(xml), (size_t)XLENGTH(xml), (uint8_t)lv, &out);
+  int32_t code = ABI.convert_mzml_to_bin(
+      (const unsigned char *)RAW(xml),
+      (size_t)XLENGTH(xml),
+      &out,
+      (uint8_t)lv,
+      (uint8_t)(fc ? 1 : 0));
+
   die_code("convert_mzml_to_bin", code);
+
   SEXP res = PROTECT(Rf_allocVector(RAWSXP, (R_xlen_t)out.len));
   memcpy(RAW(res), out.ptr, out.len);
   ABI.free_(out.ptr, out.len);

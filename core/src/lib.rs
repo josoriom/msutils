@@ -587,7 +587,7 @@ pub unsafe extern "C" fn find_features(
     let run = || -> Result<(), c_int> {
         let bytes = unsafe { slice::from_raw_parts(data_ptr, data_len) };
 
-        let mzml = parse_mzml_rs(bytes, true).map_err(|_| ERR_PARSE)?;
+        let mzml = decode(bytes).map_err(|_| ERR_PARSE)?;
 
         let mut eic_opts = EicOptions::default();
         if eic_ppm_tolerance.is_finite() && eic_ppm_tolerance >= 0.0 {

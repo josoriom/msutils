@@ -242,6 +242,7 @@ get_peaks_from_eic <- function(
     baseline_window=baseline_window, baseline_window_factor=baseline_window_factor,
     allow_overlap=allow_overlap, window_size=window_size, sn_ratio=sn_ratio
   ))
+  cores <- .validate_cores(cores)
   out_json <- .Call("C_get_peaks_from_eic",
     bin, as.numeric(rts), as.numeric(mzs), as.numeric(ranges), as.character(id),
     as.numeric(from), as.numeric(to), opt, as.integer(cores),
@@ -279,6 +280,7 @@ get_peaks_from_chrom <- function(
     baseline_window=baseline_window, baseline_window_factor=baseline_window_factor,
     allow_overlap=allow_overlap, window_size=window_size, sn_ratio=sn_ratio
   ))
+  cores <- .validate_cores(cores)
   out_json <- .Call("C_get_peaks_from_chrom",
     bin, idxs, rts, wins, opt, as.integer(cores), PACKAGE="msutils"
   )
@@ -377,6 +379,8 @@ find_feature <- function(
     sn_ratio = sn_ratio
   ))
 
+  cores <- .validate_cores(cores)
+
   out_json <- .Call(
     "C_find_feature",
     bin,
@@ -403,12 +407,15 @@ find_features <- function(
   data, from = 0, to = 10,
   ppm_tolerance = NaN, mz_tolerance = NaN,
   grid_start = NaN, grid_end = NaN, grid_step_ppm = 0L,
+  cores = 1L,
   integral_threshold = NaN, intensity_threshold = NaN, width_threshold = 0L,
   noise = NaN, auto_noise = FALSE, auto_baseline = FALSE,
   baseline_window = 0L, baseline_window_factor = 0L,
   allow_overlap = FALSE, window_size = 0L, sn_ratio = NaN
 ) {
   stopifnot(is.raw(data))
+  cores <- .validate_cores(cores)
+
   if (!is.logical(auto_noise) || length(auto_noise) != 1 || is.na(auto_noise)) stop("auto_noise must be logical TRUE/FALSE")
   if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
   if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
@@ -433,7 +440,7 @@ find_features <- function(
     as.numeric(from), as.numeric(to),
     as.numeric(ppm_tolerance), as.numeric(mz_tolerance),
     as.numeric(grid_start), as.numeric(grid_end), as.integer(grid_step_ppm),
-    opt,
+    opt, as.integer(cores),
     PACKAGE = "msutils"
   )
 
@@ -446,18 +453,42 @@ find_features <- function(
   df
 }
 
-convert_mzml_to_bin <- function(mzml, level = 6L) {
+convert_mzml_to_bin <- function(mzml, level = 12L, f32_compress = FALSE) {
   if (!is.raw(mzml)) stop("`mzml` must be a raw vector (XML bytes)")
-  if (!is.numeric(level) || length(level) != 1 || is.na(level))
-    stop("`level` must be a single number 0..9")
-  lvl <- as.integer(level)
-  if (lvl < 0L || lvl > 9L)
-    stop("`level` must be between 0 and 9 (inclusive)")
-  .Call("C_convert_mzml_to_bin", mzml, lvl, PACKAGE = "msutils")
-}
 
+  if (!is.numeric(level) || length(level) != 1 || is.na(level))
+    stop("`level` must be a single number 0..22")
+  lvl <- as.integer(level)
+  if (lvl < 0L || lvl > 22L)
+    stop("`level` must be between 0 and 22 (inclusive)")
+
+  if (!is.logical(f32_compress) || length(f32_compress) != 1 || is.na(f32_compress))
+    stop("`f32_compress` must be TRUE/FALSE")
+
+  .Call("C_convert_mzml_to_bin", mzml, lvl, f32_compress, PACKAGE = "msutils")
+}
 
 parse_bin <- function(bin) {
   if (!is.raw(bin)) stop("`bin` must be a raw vector (BINZ bytes)")
   .Call("C_parse_bin", bin, PACKAGE = "msutils")
+}
+
+.validate_cores <- function(cores) {
+  if (!is.numeric(cores) || length(cores) != 1L || is.na(cores)) stop("cores must be a single number")
+
+  if (cores != floor(cores)) stop("cores must be a single number")
+
+  cores <- as.integer(cores)
+  if (is.na(cores) || cores < 1L) stop("cores must be a single number")
+
+  maxc <- NA_integer_
+  if (requireNamespace("parallel", quietly = TRUE)) {
+    maxc <- suppressWarnings(tryCatch(parallel::detectCores(logical = FALSE), error = function(e) NA_integer_))
+    if (is.na(maxc) || maxc < 1L) {
+      maxc <- suppressWarnings(tryCatch(parallel::detectCores(logical = TRUE), error = function(e) NA_integer_))
+    }
+  }
+  if (!is.na(maxc) && cores > maxc) stop("cores must be a single number")
+
+  cores
 }
