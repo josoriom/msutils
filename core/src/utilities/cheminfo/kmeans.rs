@@ -4,47 +4,88 @@ pub type Point = Vec<f64>;
 /// Pseudocode reference: Wikipedia — “K-means clustering”
 /// <https://en.wikipedia.org/wiki/K-means_clustering>
 
-pub fn kmeans(points: &[Point], mut centroids: Vec<Point>) -> Vec<Point> {
+pub fn kmeans<P>(points: &[P], mut centroids: Vec<Point>) -> Vec<Point>
+where
+    P: AsRef<[f64]>,
+{
     if points.is_empty() || centroids.is_empty() {
         return Vec::new();
     }
 
     let k = centroids.len();
+    let d = centroids[0].len();
+    if d == 0 {
+        return Vec::new();
+    }
+
     let mut converged = false;
     let mut iter = 0usize;
 
-    while !converged {
-        let mut clusters: Vec<Vec<usize>> = vec![Vec::new(); k];
+    let mut clusters: Vec<Vec<usize>> = (0..k).map(|_| Vec::new()).collect();
+    let approx = points.len() / k + 1;
+    for c in clusters.iter_mut() {
+        c.reserve(approx);
+    }
 
-        for (i, point) in points.iter().enumerate() {
+    let mut new_centroids: Vec<Point> = (0..k).map(|_| vec![0.0; d]).collect();
+
+    let tol2 = 1e-12_f64;
+
+    while !converged {
+        for c in clusters.iter_mut() {
+            c.clear();
+        }
+
+        for (i, p) in points.iter().enumerate() {
+            let point = p.as_ref();
+
             let mut closest_index = 0usize;
-            let mut min_distance = distance(point, &centroids[0]);
+            let mut min_distance = distance2(point, centroids[0].as_slice());
 
             for j in 1..k {
-                let d = distance(point, &centroids[j]);
-                if d < min_distance {
-                    min_distance = d;
+                let d2 = distance2(point, centroids[j].as_slice());
+                if d2 < min_distance {
+                    min_distance = d2;
                     closest_index = j;
                 }
             }
+
             clusters[closest_index].push(i);
         }
 
-        let mut new_centroids: Vec<Point> = Vec::with_capacity(k);
         for i in 0..k {
+            new_centroids[i].as_mut_slice().fill(0.0);
+
             if clusters[i].is_empty() {
-                new_centroids.push(centroids[i].clone());
+                new_centroids[i]
+                    .as_mut_slice()
+                    .copy_from_slice(centroids[i].as_slice());
             } else {
-                let mut cluster_points: Vec<&Point> = Vec::with_capacity(clusters[i].len());
-                for &ix in &clusters[i] {
-                    cluster_points.push(&points[ix]);
+                for &ix in clusters[i].iter() {
+                    let p = points[ix].as_ref();
+                    for t in 0..d {
+                        new_centroids[i][t] += p[t];
+                    }
                 }
-                new_centroids.push(calculate_centroid(&cluster_points));
+
+                let inv = 1.0 / clusters[i].len() as f64;
+                for t in 0..d {
+                    new_centroids[i][t] *= inv;
+                }
             }
         }
 
-        converged = new_centroids == centroids;
-        centroids = new_centroids;
+        let mut max_shift2 = 0.0f64;
+        for i in 0..k {
+            let s2 = distance2(centroids[i].as_slice(), new_centroids[i].as_slice());
+            if s2 > max_shift2 {
+                max_shift2 = s2;
+            }
+        }
+
+        converged = max_shift2 <= tol2;
+
+        core::mem::swap(&mut centroids, &mut new_centroids);
 
         iter += 1;
         if iter > 300 {
@@ -53,6 +94,16 @@ pub fn kmeans(points: &[Point], mut centroids: Vec<Point>) -> Vec<Point> {
     }
 
     centroids
+}
+
+#[inline]
+fn distance2(a: &[f64], b: &[f64]) -> f64 {
+    let mut sum = 0.0;
+    for i in 0..a.len() {
+        let d = a[i] - b[i];
+        sum += d * d;
+    }
+    sum
 }
 
 pub fn calculate_centroid(points_in_cluster: &[&Point]) -> Point {

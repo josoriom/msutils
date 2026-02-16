@@ -4,7 +4,7 @@ use crate::utilities::calculate_baseline::{BaselineOptions, calculate_baseline};
 use crate::utilities::closest_index;
 use crate::utilities::find_noise_level::find_noise_level;
 use crate::utilities::get_boundaries::{Boundaries, BoundariesOptions, get_boundaries};
-use crate::utilities::scan_for_peaks::{ScanPeaksOptions, scan_for_peaks_across_windows};
+use crate::utilities::scan_for_peaks::scan_for_peaks;
 use crate::utilities::structs::{DataXY, Peak};
 use crate::utilities::utilities::xy_integration;
 
@@ -66,7 +66,6 @@ impl From<PeakCandidate> for Peak {
 pub struct FindPeaksOptions {
     pub get_boundaries_options: Option<BoundariesOptions>,
     pub filter_peaks_options: Option<FilterPeaksOptions>,
-    pub scan_peaks_options: Option<ScanPeaksOptions>,
     pub baseline_options: Option<BaselineOptions>,
 }
 
@@ -75,7 +74,6 @@ impl Default for FindPeaksOptions {
         Self {
             get_boundaries_options: Some(BoundariesOptions::default()),
             filter_peaks_options: Some(FilterPeaksOptions::default()),
-            scan_peaks_options: Some(ScanPeaksOptions::default()),
             baseline_options: Some(BaselineOptions::default()),
         }
     }
@@ -124,10 +122,12 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
         filter_opts.noise.unwrap_or(0.0).max(0.0)
     };
 
-    let positions = scan_for_peaks_across_windows(&normalized_data, o.scan_peaks_options);
+    let positions = scan_for_peaks(&normalized_data);
     if positions.is_empty() {
         return Vec::new();
     }
+
+    // println!("Found {:#?} peak positions", positions);
 
     let mut bopt = o.get_boundaries_options.unwrap_or_default();
     bopt.noise = noise;

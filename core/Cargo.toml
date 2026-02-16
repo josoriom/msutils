@@ -12,6 +12,7 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 panic = "unwind"
+debug = true
 
 [dependencies]
 base64 = "0.22.1"

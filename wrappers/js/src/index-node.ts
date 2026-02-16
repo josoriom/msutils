@@ -1,6 +1,9 @@
 import * as fs from "fs";
 import * as path from "path";
 
+const snakeToCamel = (s: string) =>
+  s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+
 function firstExisting(...candidates: string[]) {
   for (const p of candidates) if (fs.existsSync(p)) return p;
   return candidates[0];
@@ -179,14 +182,17 @@ export function packPeakOptions(opts?: PeakOptions): Buffer | undefined {
   return b;
 }
 
-const parseMzMLFn = native.parseMzml || native.parseMzML;
+const parseMzMLFn = native.parseMzML;
 
 export function parseMzML(data: BinaryInput): Buffer {
   return parseMzMLFn(toBuffer(data)) as Buffer;
 }
 
 export function binToJson(bin: BinaryInput): string {
-  return native.binToJson(toBuffer(bin)) as string;
+  const s = native.binToJson(toBuffer(bin)) as string;
+  const obj = JSON.parse(s);
+  const camel = camelizeKeys(obj);
+  return JSON.stringify(camel);
 }
 
 export function convertBinToMzml(bin: BinaryInput): string {
@@ -533,3 +539,18 @@ module.exports = {
   convertMzmlToBin,
   parseBin,
 };
+
+function camelizeKeys(x: any): any {
+  if (Array.isArray(x)) return x.map(camelizeKeys);
+  if (x && typeof x === "object") {
+    if (Buffer.isBuffer(x)) return x;
+    if (ArrayBuffer.isView(x)) return x;
+
+    const out: any = {};
+    for (const [k, v] of Object.entries(x))
+      out[snakeToCamel(k)] = camelizeKeys(v);
+    return out;
+  }
+
+  return x;
+}

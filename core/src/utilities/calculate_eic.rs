@@ -447,6 +447,7 @@ fn bin_len(bin: &BinaryData) -> usize {
     match bin {
         BinaryData::F64(v) => v.len(),
         BinaryData::F32(v) => v.len(),
+        BinaryData::F16(v) => v.len(),
         BinaryData::I64(v) => v.len(),
         BinaryData::I32(v) => v.len(),
         BinaryData::I16(v) => v.len(),
@@ -458,6 +459,7 @@ fn bin_get_f64(bin: &BinaryData, i: usize) -> f64 {
     match bin {
         BinaryData::F64(v) => v[i],
         BinaryData::F32(v) => v[i] as f64,
+        BinaryData::F16(v) => v[i] as f64,
         BinaryData::I64(v) => v[i] as f64,
         BinaryData::I32(v) => v[i] as f64,
         BinaryData::I16(v) => v[i] as f64,

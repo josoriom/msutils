@@ -29,9 +29,7 @@ pub mod structs;
 pub mod cheminfo;
 
 pub mod utilities;
-pub use utilities::{
-    closest_index, mean_step, min_positive_step, min_sep, odd_in_range, quad_peak,
-};
+pub use utilities::closest_index;
 
 pub mod find_feature;
 pub use find_feature::find_feature;

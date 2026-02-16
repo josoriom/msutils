@@ -123,6 +123,7 @@ fn bda_to_f64(bda: &BinaryDataArray) -> Vec<f64> {
     match bin {
         BinaryData::F64(v) => v.clone(),
         BinaryData::F32(v) => v.iter().map(|&x| x as f64).collect(),
+        BinaryData::F16(v) => v.iter().map(|&x| x as f64).collect(),
         BinaryData::I64(v) => v.iter().map(|&x| x as f64).collect(),
         BinaryData::I32(v) => v.iter().map(|&x| x as f64).collect(),
         BinaryData::I16(v) => v.iter().map(|&x| x as f64).collect(),
@@ -136,6 +137,7 @@ fn bda_to_f32(bda: &BinaryDataArray) -> Vec<f32> {
     };
 
     match bin {
+        BinaryData::F16(v) => v.iter().map(|&x| x as f32).collect(),
         BinaryData::F32(v) => v.clone(),
         BinaryData::F64(v) => v.iter().map(|&x| x as f32).collect(),
         BinaryData::I64(v) => v.iter().map(|&x| x as f32).collect(),

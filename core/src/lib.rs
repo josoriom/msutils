@@ -23,7 +23,6 @@ use utilities::{
     get_peak::get_peak as get_peak_rs,
     get_peaks_from_chrom::get_peaks_from_chrom as get_peaks_from_chrom_rs,
     get_peaks_from_eic::get_peaks_from_eic as get_peaks_from_eic_rs,
-    scan_for_peaks::ScanPeaksOptions,
     structs::{ChromRoi, EicRoi},
     structs::{DataXY, FromTo, Roi},
 };
@@ -33,7 +32,6 @@ const ERR_INVALID_ARGS: c_int = 1;
 const ERR_PANIC: c_int = 2;
 const ERR_PARSE: c_int = 4;
 const ERR_ENCODE: c_int = 5;
-const EPS: f64 = 1e-5;
 
 #[repr(C)]
 pub struct Buf {
@@ -481,12 +479,13 @@ pub unsafe extern "C" fn bin_to_json(
         return ERR_INVALID_ARGS;
     }
     let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let bin = unsafe { slice::from_raw_parts(bin_ptr, bin_len) };
-        let mzml = decode(bin);
+        let bin: &[u8] = unsafe { slice::from_raw_parts(bin_ptr, bin_len) };
+        let mzml = decode(bin).map_err(|_| ERR_PARSE)?;
         let s = serde_json::to_string(&mzml).map_err(|_| ERR_PARSE)?;
         write_buf(out_json, s.into_bytes().into_boxed_slice());
         Ok(())
     }));
+
     match res {
         Ok(Ok(())) => OK,
         Ok(Err(code)) => code,
@@ -589,7 +588,7 @@ pub unsafe extern "C" fn find_features(
     let run = || -> Result<(), c_int> {
         let bytes = unsafe { slice::from_raw_parts(data_ptr, data_len) };
 
-        let mzml = parse_mzml_rs(bytes, true).map_err(|_| ERR_PARSE)?;
+        let mzml = decode(bytes).map_err(|_| ERR_PARSE)?;
 
         let mut eic_opts = EicOptions::default();
         if eic_ppm_tolerance.is_finite() && eic_ppm_tolerance >= 0.0 {
@@ -702,18 +701,6 @@ fn f64_slice_to_u8_box(v: &[f64]) -> Box<[u8]> {
     out.into_boxed_slice()
 }
 
-#[inline]
-fn odd_at_least(v: usize, min_: usize, def_: usize) -> usize {
-    let v = if v == 0 { def_ } else { v };
-    let v = v.max(min_);
-    if v % 2 == 0 { v | 1 } else { v }
-}
-
-#[inline]
-fn pos_usize(raw: c_int, def_: usize) -> usize {
-    if raw > 0 { raw as usize } else { def_ }
-}
-
 fn write_buf(out: *mut Buf, bytes: Box<[u8]>) {
     let len = bytes.len();
     let ptr_bytes = Box::into_raw(bytes) as *mut u8;
@@ -730,13 +717,7 @@ fn write_buf(out: *mut Buf, bytes: Box<[u8]>) {
 
 fn build_find_peaks_options(options: *const CPeakPOptions) -> FindPeaksOptions {
     if options.is_null() {
-        let ws = odd_at_least(17, 5, 17);
         return FindPeaksOptions {
-            scan_peaks_options: Some(ScanPeaksOptions {
-                epsilon: EPS,
-                window_size: ws,
-                ..Default::default()
-            }),
             get_boundaries_options: Some(BoundariesOptions {
                 ..Default::default()
             }),
@@ -749,7 +730,6 @@ fn build_find_peaks_options(options: *const CPeakPOptions) -> FindPeaksOptions {
         };
     }
     let options = unsafe { *options };
-    let ws = odd_at_least(pos_usize(options.window_size, 17), 5, 17);
     let integral = (options.integral_threshold.is_finite() && options.integral_threshold >= 0.0)
         .then_some(options.integral_threshold);
     let intensity = (options.intensity_threshold.is_finite() && options.intensity_threshold >= 0.0)
@@ -779,11 +759,6 @@ fn build_find_peaks_options(options: *const CPeakPOptions) -> FindPeaksOptions {
         ..Default::default()
     };
     FindPeaksOptions {
-        scan_peaks_options: Some(ScanPeaksOptions {
-            epsilon: EPS,
-            window_size: ws,
-            ..Default::default()
-        }),
         get_boundaries_options: Some(BoundariesOptions {
             ..Default::default()
         }),

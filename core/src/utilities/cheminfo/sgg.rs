@@ -128,20 +128,6 @@ fn get_hs(h: &[f64], center: usize, half: usize, derivative: usize) -> f64 {
     }
 }
 
-fn gram_poly(i: i32, m: i32, k: i32, s: i32) -> f64 {
-    if k > 0 {
-        let den = (k * (2 * m - k + 1)) as f64;
-        let a = (4 * k - 2) as f64 / den;
-        let b = ((k - 1) * (2 * m + k)) as f64 / den;
-        a * (i as f64 * gram_poly(i, m, k - 1, s) + s as f64 * gram_poly(i, m, k - 1, s - 1))
-            - b * gram_poly(i, m, k - 2, s)
-    } else if k == 0 && s == 0 {
-        1.0
-    } else {
-        0.0
-    }
-}
-
 fn gen_fact(a: i32, b: i32) -> f64 {
     if a >= b {
         let mut gf = 1.0f64;
@@ -157,34 +143,93 @@ fn gen_fact(a: i32, b: i32) -> f64 {
     }
 }
 
-fn weight(i: i32, t: i32, m: i32, n: i32, s: i32) -> f64 {
-    let mut sum = 0.0f64;
-    let mut k = 0;
-    while k <= n {
-        sum += (2 * k + 1) as f64
-            * (gen_fact(2 * m, k) / gen_fact(2 * m + k + 1, k + 1))
-            * gram_poly(i, m, k, 0)
-            * gram_poly(t, m, k, s);
-        k += 1;
+fn full_weights(m: usize, n: usize, s: usize) -> Vec<Vec<f64>> {
+    let half_window = (m / 2) as i32;
+    let polynomial_degree = n as i32;
+    let derivative_order = s;
+
+    let mut weights = vec![vec![0.0f64; m]; m];
+
+    let mut coefficient_by_order = vec![0.0f64; n + 1];
+    for polynomial_order in 0..=polynomial_degree {
+        let numerator = gen_fact(2 * half_window, polynomial_order);
+        let denominator = gen_fact(2 * half_window + polynomial_order + 1, polynomial_order + 1);
+        coefficient_by_order[polynomial_order as usize] =
+            (2 * polynomial_order + 1) as f64 * (numerator / denominator);
     }
-    sum
+
+    let mut gram_tables: Vec<Vec<Vec<f64>>> = Vec::with_capacity(m);
+    let mut relative_position = -half_window;
+    while relative_position <= half_window {
+        gram_tables.push(gram_table(
+            relative_position,
+            half_window,
+            polynomial_degree,
+            derivative_order as i32,
+        ));
+        relative_position += 1;
+    }
+
+    let mut row_position = -half_window;
+    while row_position <= half_window {
+        let row_index = (row_position + half_window) as usize;
+        let row_gram = &gram_tables[row_index];
+
+        let mut column_position = -half_window;
+        while column_position <= half_window {
+            let column_index = (column_position + half_window) as usize;
+            let column_gram = &gram_tables[column_index];
+
+            let mut accumulator = 0.0f64;
+            for polynomial_order in 0..=polynomial_degree {
+                let order_index = polynomial_order as usize;
+                accumulator += coefficient_by_order[order_index]
+                    * column_gram[order_index][0]
+                    * row_gram[order_index][derivative_order];
+            }
+            weights[row_index][column_index] = accumulator;
+
+            column_position += 1;
+        }
+
+        row_position += 1;
+    }
+
+    weights
 }
 
-fn full_weights(m: usize, n: usize, s: usize) -> Vec<Vec<f64>> {
-    let np = (m / 2) as i32;
-    let n_i = n as i32;
-    let s_i = s as i32;
-    let mut weights = vec![vec![0.0f64; m]; m];
-    let mut t = -np;
-    while t <= np {
-        let row = (t + np) as usize;
-        let mut j = -np;
-        while j <= np {
-            let col = (j + np) as usize;
-            weights[row][col] = weight(j, t, np, n_i, s_i);
-            j += 1;
+fn gram_table(i: i32, m: i32, n: i32, s: i32) -> Vec<Vec<f64>> {
+    let max_polynomial_order = n as usize;
+    let max_derivative_order = s.max(0) as usize;
+
+    let mut gram = vec![vec![0.0f64; max_derivative_order + 1]; max_polynomial_order + 1];
+    gram[0][0] = 1.0;
+
+    let position = i as f64;
+
+    for polynomial_order in 1..=max_polynomial_order {
+        let k = polynomial_order as i32;
+        let denominator = (k * (2 * m - k + 1)) as f64;
+
+        let a = (4 * k - 2) as f64 / denominator;
+        let b = ((k - 1) * (2 * m + k)) as f64 / denominator;
+
+        for derivative_order in 0..=max_derivative_order {
+            let mut mixed_term = position * gram[polynomial_order - 1][derivative_order];
+            if derivative_order > 0 {
+                mixed_term +=
+                    (derivative_order as f64) * gram[polynomial_order - 1][derivative_order - 1];
+            }
+
+            let two_orders_back = if polynomial_order >= 2 {
+                gram[polynomial_order - 2][derivative_order]
+            } else {
+                0.0
+            };
+
+            gram[polynomial_order][derivative_order] = a * mixed_term - b * two_orders_back;
         }
-        t += 1;
     }
-    weights
+
+    gram
 }
