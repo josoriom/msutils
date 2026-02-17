@@ -70,9 +70,7 @@ type BinaryInput = Uint8Array | ArrayBuffer;
 
 function toBuffer(v: BinaryInput): Buffer {
   if (Buffer.isBuffer(v)) return v;
-  if (v instanceof ArrayBuffer) {
-    return Buffer.from(v, 0, v.byteLength);
-  }
+  if (v instanceof ArrayBuffer) return Buffer.from(v);
   return Buffer.from(v.buffer, v.byteOffset, v.byteLength);
 }
 
@@ -184,28 +182,10 @@ export function packPeakOptions(opts?: PeakOptions): Buffer | undefined {
   return b;
 }
 
-export class MzMlFile {
-  _pointer: any;
-  constructor(pointer: any) {
-    this._pointer = pointer;
-  }
+const parseMzMLFn = native.parseMzML;
 
-  dispose() {
-    if (this._pointer) {
-      native.dispose(this._pointer);
-      this._pointer = null;
-    }
-  }
-}
-
-export function parseMzML(data: BinaryInput): MzMlFile {
-  const pointer = native.parseMzML(toBuffer(data));
-  return new MzMlFile(pointer);
-}
-
-export function parseBin(bin: BinaryInput): MzMlFile {
-  const pointer = native.parseBin(toBuffer(bin));
-  return new MzMlFile(pointer);
+export function parseMzML(data: BinaryInput): Buffer {
+  return parseMzMLFn(toBuffer(data)) as Buffer;
 }
 
 export function binToJson(bin: BinaryInput): string {
@@ -261,17 +241,13 @@ export const findNoiseLevel = native.findNoiseLevel as (
 ) => number;
 
 export function getPeaksFromEic(
-  file: MzMlFile,
+  bin: BinaryInput,
   targets: Target[],
-  fromTo: { from: number; to: number },
+  fromLeft = 0.5,
+  toRight = 0.5,
   options?: PeakOptions,
   cores = 1,
 ) {
-  const { from = 0.5, to = 5 } = fromTo;
-  if (!(file instanceof MzMlFile) || !file._pointer) {
-    throw new Error("getPeaksFromEic expects a valid MsFile object");
-  }
-
   const n = targets.length;
   const rts = new Float64Array(n);
   const mzs = new Float64Array(n);
@@ -292,13 +268,13 @@ export function getPeaksFromEic(
   }
 
   const json = native.getPeaksFromEic(
-    file._pointer,
+    toBuffer(bin),
     rts,
     mzs,
     rng,
     ids,
-    +from,
-    +to,
+    +fromLeft,
+    +toRight,
     packPeakOptions(options),
     toCores(cores),
   ) as string;
@@ -319,15 +295,11 @@ export function getPeaksFromEic(
 }
 
 export function getPeaksFromChrom(
-  file: MzMlFile,
+  bin: BinaryInput,
   items: ChromItem[],
   options?: PeakOptions,
   cores = 1,
 ) {
-  if (!(file instanceof MzMlFile) || !file._pointer) {
-    throw new Error("getPeaksFromChrom expects a valid MsFile object");
-  }
-
   const n = items.length;
   const idxs = new Uint32Array(n);
   const rts = new Float64Array(n);
@@ -347,7 +319,7 @@ export function getPeaksFromChrom(
   }
 
   const json = native.getPeaksFromChrom(
-    file._pointer,
+    toBuffer(bin),
     idxs,
     rts,
     rng,
@@ -381,14 +353,10 @@ export type Feature = {
 };
 
 export function findFeatures(
-  file: MzMlFile,
+  data: BinaryInput,
   fromTo: { from: number; to: number },
   options: FindFeaturesOptions = {},
 ): Feature[] {
-  if (!(file instanceof MzMlFile) || !file._pointer) {
-    throw new Error("findFeatures expects a valid MsFile object");
-  }
-
   const {
     eic = { mzTolerance: 0.0025, ppmTolerance: 5.0 },
     grid = { start: 20, end: 700, stepSize: 0.005 },
@@ -428,7 +396,7 @@ export function findFeatures(
       : NaN;
 
   const s = native.findFeatures(
-    file._pointer,
+    toBuffer(data),
     from,
     to,
     eicPpm,
@@ -457,17 +425,13 @@ export type FoundFeature = {
 };
 
 export function findFeature(
-  file: MzMlFile,
+  data: BinaryInput,
   targets: Target[],
   options: FindFeaturesOptions & {
     scanEic?: { ppmTolerance?: number; mzTolerance?: number };
     cores?: number;
   } = {},
 ): FoundFeature[] {
-  if (!(file instanceof MzMlFile) || !file._pointer) {
-    throw new Error("findFeature expects a valid MsFile object");
-  }
-
   let {
     scanEic: { ppmTolerance: scanPpm = 10, mzTolerance: scanMz = 0.003 } = {},
     eic: { ppmTolerance: eicPpm = 20, mzTolerance: eicMz = 0.005 } = {},
@@ -510,17 +474,17 @@ export function findFeature(
   }
 
   const s = native.findFeature(
-    file._pointer,
+    toBuffer(data),
     rts,
     mzs,
     wins,
     ids,
-    toCores(options.cores),
     +scanPpm,
     +scanMz,
     +eicPpm,
     +eicMz,
     peakBuf ?? null,
+    toCores(options.cores),
   ) as string;
 
   return parseJson<FoundFeature[]>(s);
@@ -553,6 +517,10 @@ export function convertMzmlToBin(
     level,
     f32Compress ? 1 : 0,
   ) as Buffer;
+}
+
+export function parseBin(bin: BinaryInput): Buffer {
+  return native.parseBin(toBuffer(bin)) as Buffer;
 }
 
 module.exports = {
