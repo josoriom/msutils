@@ -32,6 +32,7 @@
     stop(sprintf("msutils: Rust library not found for '%s'. Expected: %s\nAvailable under libs/: %s", arch, rust_path, paste(have, collapse = ", ")))
   }
   dyn.load(rust_path, local = FALSE, now = TRUE)
+  print(rust_path)
   .Call("C_bind_rust", rust_path, PACKAGE = "msutils")
   options(msutils.rust_dll_path = rust_path)
 }

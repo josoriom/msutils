@@ -1,4 +1,3 @@
-// tests/helpers.rs
 use msutils::utilities::structs::{DataXY, Peak};
 
 #[allow(dead_code)]
@@ -77,7 +76,7 @@ pub fn data_xy(xs: Vec<f64>, ys: Vec<f64>) -> DataXY {
 pub fn uniform_vec_f32(n: usize, lo: f32, hi: f32, seed: u64) -> Vec<f32> {
     assert!(hi > lo);
     let mut out = Vec::with_capacity(n);
-    let mut s = seed | 1; // odd
+    let mut s = seed | 1;
     for _ in 0..n {
         s = s
             .wrapping_mul(6364136223846793005)
