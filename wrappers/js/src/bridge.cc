@@ -48,23 +48,31 @@ typedef struct
   double sn_ratio;
 } CPeakPOptions;
 
+typedef struct MzML MzML;
+
+struct MzMLWrapper
+{
+  MzML *ptr;
+  size_t estimated_size;
+};
+
 static_assert(sizeof(CPeakPOptions) == 64, "CPeakPOptions must be 64 bytes");
 
-typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, Buf *);
+typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
+typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, MzML **);
+typedef void (*fn_free_mzml)(MzML *);
 typedef int32_t (*fn_bin_to_json)(const unsigned char *, size_t, Buf *);
 typedef int32_t (*fn_bin_to_mzml)(const unsigned char *, size_t, Buf *);
 typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_calculate_eic)(const unsigned char *, size_t, double, double, double, double, double, Buf *, Buf *);
 typedef double (*fn_find_noise_level)(const double *, size_t);
-typedef int32_t (*fn_get_peaks_from_eic)(const unsigned char *, size_t, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakPOptions *, size_t, Buf *);
-typedef int32_t (*fn_get_peaks_from_chrom)(const unsigned char *, size_t, const uint32_t *, const double *, const double *, size_t, const CPeakPOptions *, size_t, Buf *);
+typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakPOptions *, size_t, Buf *);
+typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakPOptions *, size_t, Buf *);
 typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_find_features)(const unsigned char *, size_t, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, Buf *);
-typedef int32_t (*fn_collect_ms1_scans)(const unsigned char *, size_t, double, double, Buf *, Buf *, Buf *, Buf *, Buf *);
-typedef int32_t (*fn_find_feature)(const unsigned char *, size_t, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
+typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, Buf *);
+typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_convert_mzml_to_bin)(const unsigned char *, size_t, Buf *, uint8_t, uint8_t);
-typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 
 typedef struct
@@ -75,16 +83,16 @@ typedef struct
   fn_get_peak get_peak;
   fn_calculate_eic calculate_eic;
   fn_find_noise_level find_noise_level;
-  fn_get_peaks_from_eic C_get_peaks_from_eic;
-  fn_get_peaks_from_chrom C_get_peaks_from_chrom;
+  fn_get_peaks_from_eic get_peaks_from_eic;
+  fn_get_peaks_from_chrom get_peaks_from_chrom;
   fn_find_peaks find_peaks;
   fn_calculate_baseline calculate_baseline;
   fn_find_features find_features;
-  fn_collect_ms1_scans collect_ms1_scans;
   fn_find_feature find_feature;
   fn_convert_mzml_to_bin convert_mzml_to_bin;
   fn_parse_bin parse_bin;
   fn_free_ free_;
+  fn_free_mzml free_mzml;
 } msabi_t;
 
 static msabi_t ABI{};
@@ -151,6 +159,46 @@ static void FinalizeExternalArrayBuffer(Napi::Env, void *, ExternalBuf *ext)
   }
 }
 
+static void FinalizeMzML(Napi::Env env, MzMLWrapper *wrapper)
+{
+  if (wrapper)
+  {
+    if (wrapper->ptr && ABI.free_mzml)
+    {
+      ABI.free_mzml(wrapper->ptr);
+      Napi::MemoryManagement::AdjustExternalMemory(env, -(int64_t)wrapper->estimated_size);
+    }
+    delete wrapper;
+  }
+}
+
+static Napi::Value DisposeMzML(const Napi::CallbackInfo &info)
+{
+  Napi::Env env = info.Env();
+  if (info.Length() < 1 || !info[0].IsExternal())
+    return env.Undefined();
+
+  MzMLWrapper *w = info[0].As<Napi::External<MzMLWrapper>>().Data();
+  if (w && w->ptr)
+  {
+    if (ABI.free_mzml)
+      ABI.free_mzml(w->ptr);
+    Napi::MemoryManagement::AdjustExternalMemory(env, -(int64_t)w->estimated_size);
+    w->ptr = nullptr;
+  }
+  return env.Undefined();
+}
+
+static MzML *GetHandle(Napi::Value val)
+{
+  if (!val.IsExternal())
+    return nullptr;
+  MzMLWrapper *w = val.As<Napi::External<MzMLWrapper>>().Data();
+  if (!w || !w->ptr)
+    return nullptr;
+  return w->ptr;
+}
+
 static int resolve_required(void **fn, const char *name)
 {
 #if !defined(_WIN32)
@@ -200,9 +248,9 @@ static int abi_load(const char *path, const char **err)
     goto fail;
   if (resolve_required((void **)&ABI.calculate_eic, "calculate_eic"))
     goto fail;
-  if (resolve_required((void **)&ABI.C_get_peaks_from_eic, "get_peaks_from_eic"))
+  if (resolve_required((void **)&ABI.get_peaks_from_eic, "get_peaks_from_eic"))
     goto fail;
-  if (resolve_required((void **)&ABI.C_get_peaks_from_chrom, "get_peaks_from_chrom"))
+  if (resolve_required((void **)&ABI.get_peaks_from_chrom, "get_peaks_from_chrom"))
     goto fail;
   if (resolve_required((void **)&ABI.find_peaks, "find_peaks"))
     goto fail;
@@ -215,8 +263,6 @@ static int abi_load(const char *path, const char **err)
     goto fail;
   if (resolve_required((void **)&ABI.find_feature, "find_feature"))
     goto fail;
-  if (resolve_required((void **)&ABI.collect_ms1_scans, "collect_ms1_scans"))
-    goto fail;
   if (resolve_required((void **)&ABI.convert_mzml_to_bin, "convert_mzml_to_bin"))
     goto fail;
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
@@ -225,6 +271,8 @@ static int abi_load(const char *path, const char **err)
   ABI.find_noise_level = (fn_find_noise_level)DLSYM(LIB_HANDLE, "find_noise_level");
   ABI.free_ = (fn_free_)DLSYM(LIB_HANDLE, "free_");
   if (!ABI.free_)
+    goto fail;
+  if (resolve_required((void **)&ABI.free_mzml, "free_mzml"))
     goto fail;
 
   return 0;
@@ -426,23 +474,21 @@ static Napi::Value Bind(const Napi::CallbackInfo &info)
 static Napi::Value ParseMzML(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (!ThrowIfMissing(env, (void *)ABI.parse_mzml, "parse_mzml"))
-    return env.Undefined();
-  if (!ThrowIfMissing(env, (void *)ABI.free_, "free_"))
-    return env.Undefined();
   if (info.Length() < 1 || !info[0].IsBuffer())
-  {
-    Napi::TypeError::New(env, "expected: (Buffer mzml)").ThrowAsJavaScriptException();
     return env.Undefined();
-  }
 
   Napi::Buffer<uint8_t> input = info[0].As<Napi::Buffer<uint8_t>>();
-  OwnedBuf out;
-  int32_t rc = ABI.parse_mzml(input.Data(), (size_t)input.Length(), out.Out());
+  size_t input_len = input.Length();
+
+  MzML *handle = nullptr;
+  int32_t rc = ABI.parse_mzml(input.Data(), input_len, &handle);
+
   if (rc != 0)
     return ThrowRc(env, "parse_mzml", rc);
 
-  return TakeBuffer(env, out.Out());
+  MzMLWrapper *w = new MzMLWrapper{handle, input_len};
+  Napi::MemoryManagement::AdjustExternalMemory(env, (int64_t)input_len);
+  return Napi::External<MzMLWrapper>::New(env, w, FinalizeMzML);
 }
 
 static Napi::Value BinToJson(const Napi::CallbackInfo &info)
@@ -592,126 +638,53 @@ static Napi::Value FindNoiseLevel(const Napi::CallbackInfo &info)
 static Napi::Value GetPeaksFromEic(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (!ThrowIfMissing(env, (void *)ABI.C_get_peaks_from_eic, "get_peaks_from_eic"))
+  if (info.Length() < 8)
     return env.Undefined();
-  if (!ThrowIfMissing(env, (void *)ABI.free_, "free_"))
-    return env.Undefined();
-  if (info.Length() < 7 || !info[0].IsBuffer())
-  {
-    Napi::TypeError::New(env, "expected: (Buffer bin, Float64Array rts, Float64Array mzs, Float64Array rng, string[] ids?, number fromLeft, number toRight, Buffer|null options?, number cores?)").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
+  MzML *handle = GetHandle(info[0]);
+  if (!handle)
+    return ThrowRc(env, "UseAfterFree", 0);
 
-  Napi::Buffer<uint8_t> bin = info[0].As<Napi::Buffer<uint8_t>>();
-  Napi::Float64Array rts_arr = info[1].As<Napi::Float64Array>();
-  Napi::Float64Array mzs_arr = info[2].As<Napi::Float64Array>();
-  Napi::Float64Array rng_arr = info[3].As<Napi::Float64Array>();
-
-  size_t count = rts_arr.ElementLength();
-  if (mzs_arr.ElementLength() != count || rng_arr.ElementLength() != count)
-  {
-    Napi::TypeError::New(env, "array lengths must match").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
-
-  const double *rts = Float64Ptr(rts_arr);
-  const double *mzs = Float64Ptr(mzs_arr);
-  const double *rng = Float64Ptr(rng_arr);
-
+  Napi::Float64Array rts = info[1].As<Napi::Float64Array>();
+  Napi::Float64Array mzs = info[2].As<Napi::Float64Array>();
+  Napi::Float64Array rng = info[3].As<Napi::Float64Array>();
+  size_t count = rts.ElementLength();
   PackedIds packed;
-  if (!BuildPackedIds(env, (info.Length() > 4 ? info[4] : env.Null()), count, &packed))
-  {
-    Napi::TypeError::New(env, "ids must be an array of length matching rts/mzs/rng").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
-
-  double from_left = info[5].As<Napi::Number>().DoubleValue();
-  double to_right = info[6].As<Napi::Number>().DoubleValue();
-
+  BuildPackedIds(env, info[4], count, &packed);
+  double f_l = info[5].As<Napi::Number>().DoubleValue();
+  double t_r = info[6].As<Napi::Number>().DoubleValue();
   CPeakPOptions opts;
-  const CPeakPOptions *p_opts = nullptr;
-  if (info.Length() > 7)
-    p_opts = ReadOptionsBuf(info[7], &opts);
-
-  size_t cores = 1;
-  if (info.Length() > 8 && info[8].IsNumber())
-  {
-    int64_t v = info[8].As<Napi::Number>().Int64Value();
-    if (v > 0)
-      cores = (size_t)v;
-  }
-
+  const CPeakPOptions *p_opts = ReadOptionsBuf(info[7], &opts);
+  size_t cores = info.Length() > 8 ? info[8].As<Napi::Number>().Uint32Value() : 1;
   OwnedBuf out;
-  int32_t rc = ABI.C_get_peaks_from_eic(
-      bin.Data(),
-      (size_t)bin.Length(),
-      rts,
-      mzs,
-      rng,
-      packed.offs_ptr,
-      packed.lens_ptr,
-      packed.ids_buf_ptr,
-      packed.ids_buf_len,
-      count,
-      from_left,
-      to_right,
-      p_opts,
-      cores,
-      out.Out());
-
+  int32_t rc = ABI.get_peaks_from_eic(handle, Float64Ptr(rts), Float64Ptr(mzs), Float64Ptr(rng),
+                                      packed.offs_ptr, packed.lens_ptr, packed.ids_buf_ptr, packed.ids_buf_len,
+                                      count, f_l, t_r, p_opts, cores, out.Out());
   if (rc != 0)
     return ThrowRc(env, "get_peaks_from_eic", rc);
-
   return TakeUtf8String(env, out.Out());
 }
 
 static Napi::Value GetPeaksFromChrom(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (!ThrowIfMissing(env, (void *)ABI.C_get_peaks_from_chrom, "get_peaks_from_chrom"))
+  if (info.Length() < 5)
     return env.Undefined();
-  if (!ThrowIfMissing(env, (void *)ABI.free_, "free_"))
-    return env.Undefined();
-  if (info.Length() < 4 || !info[0].IsBuffer())
-  {
-    Napi::TypeError::New(env, "expected: (Buffer bin, Uint32Array idx, Float64Array rts, Float64Array rng, Buffer|null options?, number cores?)").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
 
-  Napi::Buffer<uint8_t> bin = info[0].As<Napi::Buffer<uint8_t>>();
-  Napi::Uint32Array idxs_arr = info[1].As<Napi::Uint32Array>();
-  Napi::Float64Array rts_arr = info[2].As<Napi::Float64Array>();
-  Napi::Float64Array rng_arr = info[3].As<Napi::Float64Array>();
+  MzML *handle = GetHandle(info[0]);
+  if (!handle)
+    return ThrowRc(env, "UseAfterFree", 0);
 
-  size_t count = rts_arr.ElementLength();
-  if (rng_arr.ElementLength() != count)
-  {
-    Napi::TypeError::New(env, "array lengths must match").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
-
-  const uint32_t *idx = Uint32Ptr(idxs_arr);
-  const double *rts = Float64Ptr(rts_arr);
-  const double *rng = Float64Ptr(rng_arr);
-
+  Napi::Uint32Array idx = info[1].As<Napi::Uint32Array>();
+  Napi::Float64Array rts = info[2].As<Napi::Float64Array>();
+  Napi::Float64Array rng = info[3].As<Napi::Float64Array>();
+  size_t count = rts.ElementLength();
   CPeakPOptions opts;
-  const CPeakPOptions *p_opts = nullptr;
-  if (info.Length() > 4)
-    p_opts = ReadOptionsBuf(info[4], &opts);
-
-  size_t cores = 1;
-  if (info.Length() > 5 && info[5].IsNumber())
-  {
-    int64_t v = info[5].As<Napi::Number>().Int64Value();
-    if (v > 0)
-      cores = (size_t)v;
-  }
-
+  const CPeakPOptions *p_opts = ReadOptionsBuf(info[4], &opts);
+  size_t cores = info.Length() > 5 ? info[5].As<Napi::Number>().Uint32Value() : 1;
   OwnedBuf out;
-  int32_t rc = ABI.C_get_peaks_from_chrom(bin.Data(), (size_t)bin.Length(), idx, rts, rng, count, p_opts, cores, out.Out());
+  int32_t rc = ABI.get_peaks_from_chrom(handle, Uint32Ptr(idx), Float64Ptr(rts), Float64Ptr(rng), count, p_opts, cores, out.Out());
   if (rc != 0)
     return ThrowRc(env, "get_peaks_from_chrom", rc);
-
   return TakeUtf8String(env, out.Out());
 }
 
@@ -801,211 +774,57 @@ static Napi::Value CalculateBaseline(const Napi::CallbackInfo &info)
 static Napi::Value FindFeatures(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (!ThrowIfMissing(env, (void *)ABI.find_features, "find_features"))
-    return env.Undefined();
-  if (!ThrowIfMissing(env, (void *)ABI.free_, "free_"))
-    return env.Undefined();
   if (info.Length() < 10)
-  {
-    Napi::TypeError::New(env, "expected: (Buffer data, number from, number to, number eicPpm, number eicMz, number gridStart, number gridEnd, number gridStepPpm, Buffer|null options, number cores)").ThrowAsJavaScriptException();
     return env.Undefined();
-  }
 
-  Napi::Buffer<uint8_t> data = info[0].As<Napi::Buffer<uint8_t>>();
-  double from_time = info[1].As<Napi::Number>().DoubleValue();
-  double to_time = info[2].As<Napi::Number>().DoubleValue();
-  double eic_ppm = info[3].As<Napi::Number>().DoubleValue();
-  double eic_mz = info[4].As<Napi::Number>().DoubleValue();
-  double grid_start = info[5].As<Napi::Number>().DoubleValue();
-  double grid_end = info[6].As<Napi::Number>().DoubleValue();
-  double grid_step = info[7].As<Napi::Number>().DoubleValue();
+  MzML *handle = GetHandle(info[0]);
+  if (!handle)
+    return ThrowRc(env, "UseAfterFree", 0);
 
+  double from = info[1].As<Napi::Number>().DoubleValue();
+  double to = info[2].As<Napi::Number>().DoubleValue();
+  double ppm = info[3].As<Napi::Number>().DoubleValue();
+  double mz = info[4].As<Napi::Number>().DoubleValue();
+  double gs = info[5].As<Napi::Number>().DoubleValue();
+  double ge = info[6].As<Napi::Number>().DoubleValue();
+  double gst = info[7].As<Napi::Number>().DoubleValue();
   CPeakPOptions opts;
-  const CPeakPOptions *p_opts = nullptr;
-  if (!info[8].IsUndefined() && !info[8].IsNull())
-  {
-    if (!info[8].IsBuffer())
-    {
-      Napi::TypeError::New(env, "options must be a Buffer, null, or undefined").ThrowAsJavaScriptException();
-      return env.Undefined();
-    }
-    p_opts = ReadOptionsBuf(info[8], &opts);
-    if (p_opts == nullptr)
-    {
-      Napi::TypeError::New(env, "options Buffer must be exactly 64 bytes").ThrowAsJavaScriptException();
-      return env.Undefined();
-    }
-  }
-
-  if (!info[9].IsNumber())
-  {
-    Napi::TypeError::New(env, "cores must be a positive integer").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
+  const CPeakPOptions *p_opts = ReadOptionsBuf(info[8], &opts);
   int32_t cores = info[9].As<Napi::Number>().Int32Value();
-  if (cores <= 0)
-  {
-    Napi::TypeError::New(env, "cores must be > 0").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
-
   OwnedBuf out;
-  int32_t rc = ABI.find_features(data.Data(), (size_t)data.Length(), from_time, to_time, eic_ppm, eic_mz, grid_start, grid_end, grid_step, p_opts, cores, out.Out());
+  int32_t rc = ABI.find_features(handle, from, to, ppm, mz, gs, ge, gst, p_opts, cores, out.Out());
   if (rc != 0)
     return ThrowRc(env, "find_features", rc);
-
   return TakeUtf8String(env, out.Out());
-}
-
-static Napi::Value CollectMs1Scans(const Napi::CallbackInfo &info)
-{
-  Napi::Env env = info.Env();
-  if (!ThrowIfMissing(env, (void *)ABI.collect_ms1_scans, "collect_ms1_scans"))
-    return env.Undefined();
-  if (!ThrowIfMissing(env, (void *)ABI.free_, "free_"))
-    return env.Undefined();
-  if (info.Length() < 3 || !info[0].IsBuffer() || !info[1].IsNumber() || !info[2].IsNumber())
-  {
-    Napi::TypeError::New(env, "expected: (Buffer bin, number fromTime, number toTime)").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
-
-  Napi::Buffer<uint8_t> bin = info[0].As<Napi::Buffer<uint8_t>>();
-  double from_time = info[1].As<Napi::Number>().DoubleValue();
-  double to_time = info[2].As<Napi::Number>().DoubleValue();
-
-  OwnedBuf out_rt, out_offs, out_lens, out_mz, out_int;
-
-  int32_t rc = ABI.collect_ms1_scans(
-      bin.Data(),
-      (size_t)bin.Length(),
-      from_time,
-      to_time,
-      out_rt.Out(),
-      out_offs.Out(),
-      out_lens.Out(),
-      out_mz.Out(),
-      out_int.Out());
-
-  if (rc != 0)
-    return ThrowRc(env, "collect_ms1_scans", rc);
-
-  size_t n_rt = out_rt.buf.len / 8;
-  size_t n_offs = out_offs.buf.len / 4;
-  size_t n_lens = out_lens.buf.len / 4;
-  size_t n_mz = out_mz.buf.len / 8;
-  size_t n_int = out_int.buf.len / 8;
-
-  Napi::ArrayBuffer ab_rt = TakeArrayBuffer(env, out_rt.Out());
-  Napi::ArrayBuffer ab_offs = TakeArrayBuffer(env, out_offs.Out());
-  Napi::ArrayBuffer ab_lens = TakeArrayBuffer(env, out_lens.Out());
-  Napi::ArrayBuffer ab_mz = TakeArrayBuffer(env, out_mz.Out());
-  Napi::ArrayBuffer ab_int = TakeArrayBuffer(env, out_int.Out());
-
-  Napi::Float64Array RT = Napi::Float64Array::New(env, n_rt, ab_rt, 0);
-  Napi::Uint32Array OFFS = Napi::Uint32Array::New(env, n_offs, ab_offs, 0);
-  Napi::Uint32Array LENS = Napi::Uint32Array::New(env, n_lens, ab_lens, 0);
-  Napi::Float64Array MZ = Napi::Float64Array::New(env, n_mz, ab_mz, 0);
-  Napi::Float64Array INT = Napi::Float64Array::New(env, n_int, ab_int, 0);
-
-  Napi::Object out = Napi::Object::New(env);
-  out.Set("rt", RT);
-  out.Set("offsets", OFFS);
-  out.Set("lengths", LENS);
-  out.Set("mz", MZ);
-  out.Set("intensity", INT);
-  return out;
 }
 
 static Napi::Value FindFeature(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (!ThrowIfMissing(env, (void *)ABI.find_feature, "find_feature"))
+  if (info.Length() < 10)
     return env.Undefined();
-  if (!ThrowIfMissing(env, (void *)ABI.free_, "free_"))
-    return env.Undefined();
-  if (info.Length() < 9 || !info[0].IsBuffer() || !info[1].IsTypedArray() || !info[2].IsTypedArray() || !info[3].IsTypedArray() || !info[5].IsNumber() || !info[6].IsNumber() || !info[7].IsNumber() || !info[8].IsNumber())
-  {
-    Napi::TypeError::New(env, "expected: (Buffer bin, Float64Array rts, Float64Array mzs, Float64Array windows, string[] ids?, number scanPpm, number scanMz, number eicPpm, number eicMz, Buffer|null options?, number cores?)").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
 
-  Napi::Buffer<uint8_t> bin = info[0].As<Napi::Buffer<uint8_t>>();
-  Napi::Float64Array rts_arr = info[1].As<Napi::Float64Array>();
-  Napi::Float64Array mzs_arr = info[2].As<Napi::Float64Array>();
-  Napi::Float64Array wins_arr = info[3].As<Napi::Float64Array>();
+  MzML *handle = GetHandle(info[0]);
+  if (!handle)
+    return ThrowRc(env, "UseAfterFree", 0);
 
-  size_t count = rts_arr.ElementLength();
-  if (mzs_arr.ElementLength() != count || wins_arr.ElementLength() != count)
-  {
-    Napi::TypeError::New(env, "array lengths must match").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
-
-  const double *rts = Float64Ptr(rts_arr);
-  const double *mzs = Float64Ptr(mzs_arr);
-  const double *wins = Float64Ptr(wins_arr);
-
+  Napi::Float64Array rts = info[1].As<Napi::Float64Array>();
+  Napi::Float64Array mzs = info[2].As<Napi::Float64Array>();
+  Napi::Float64Array wins = info[3].As<Napi::Float64Array>();
+  size_t count = rts.ElementLength();
   PackedIds packed;
-  if (!BuildPackedIds(env, (info.Length() > 4 ? info[4] : env.Null()), count, &packed))
-  {
-    Napi::TypeError::New(env, "ids must be an array of length matching rts/mzs/windows").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
-
-  double scan_ppm = info[5].As<Napi::Number>().DoubleValue();
-  double scan_mz = info[6].As<Napi::Number>().DoubleValue();
-  double eic_ppm = info[7].As<Napi::Number>().DoubleValue();
-  double eic_mz = info[8].As<Napi::Number>().DoubleValue();
-
+  BuildPackedIds(env, info[4], count, &packed);
+  size_t cores = info[5].As<Napi::Number>().Uint32Value();
+  double s_ppm = info[6].As<Napi::Number>().DoubleValue();
+  double s_mz = info[7].As<Napi::Number>().DoubleValue();
+  double e_ppm = info[8].As<Napi::Number>().DoubleValue();
+  double e_mz = info[9].As<Napi::Number>().DoubleValue();
   CPeakPOptions opts;
-  const CPeakPOptions *p_opts = nullptr;
-  if (info.Length() > 9 && !info[9].IsUndefined() && !info[9].IsNull())
-  {
-    if (!info[9].IsBuffer())
-    {
-      Napi::TypeError::New(env, "options must be a 64-byte Buffer, null, or undefined").ThrowAsJavaScriptException();
-      return env.Undefined();
-    }
-    if (ReadOptionsBuf(info[9], &opts) == nullptr)
-    {
-      Napi::TypeError::New(env, "options Buffer must be exactly 64 bytes").ThrowAsJavaScriptException();
-      return env.Undefined();
-    }
-    p_opts = &opts;
-  }
-
-  size_t cores = 1;
-  if (info.Length() > 10 && info[10].IsNumber())
-  {
-    int64_t v = info[10].As<Napi::Number>().Int64Value();
-    if (v > 0)
-      cores = (size_t)v;
-  }
-
+  const CPeakPOptions *p_opts = ReadOptionsBuf(info[10], &opts);
   OwnedBuf out;
-  int32_t rc = ABI.find_feature(
-      bin.Data(),
-      (size_t)bin.Length(),
-      rts,
-      mzs,
-      wins,
-      packed.offs_ptr,
-      packed.lens_ptr,
-      packed.ids_buf_ptr,
-      packed.ids_buf_len,
-      count,
-      cores,
-      scan_ppm,
-      scan_mz,
-      eic_ppm,
-      eic_mz,
-      p_opts,
-      out.Out());
-
+  int32_t rc = ABI.find_feature(handle, Float64Ptr(rts), Float64Ptr(mzs), Float64Ptr(wins), packed.offs_ptr, packed.lens_ptr, packed.ids_buf_ptr, packed.ids_buf_len, count, cores, s_ppm, s_mz, e_ppm, e_mz, p_opts, out.Out());
   if (rc != 0)
     return ThrowRc(env, "find_feature", rc);
-
   return TakeUtf8String(env, out.Out());
 }
 
@@ -1041,23 +860,22 @@ static Napi::Value ConvertMzmlToBin(const Napi::CallbackInfo &info)
 static Napi::Value ParseBin(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (!ThrowIfMissing(env, (void *)ABI.parse_bin, "parse_bin"))
-    return env.Undefined();
-  if (!ThrowIfMissing(env, (void *)ABI.free_, "free_"))
-    return env.Undefined();
   if (info.Length() < 1 || !info[0].IsBuffer())
-  {
-    Napi::TypeError::New(env, "expected: (Buffer bin)").ThrowAsJavaScriptException();
     return env.Undefined();
-  }
 
-  Napi::Buffer<uint8_t> bin = info[0].As<Napi::Buffer<uint8_t>>();
-  OwnedBuf out;
-  int32_t rc = ABI.parse_bin(bin.Data(), (size_t)bin.Length(), out.Out());
+  Napi::Buffer<uint8_t> input = info[0].As<Napi::Buffer<uint8_t>>();
+  size_t input_len = input.Length();
+
+  MzML *handle = nullptr;
+  int32_t rc = ABI.parse_bin(input.Data(), input_len, &handle);
+
   if (rc != 0)
     return ThrowRc(env, "parse_bin", rc);
 
-  return TakeBuffer(env, out.Out());
+  MzMLWrapper *w = new MzMLWrapper{handle, input_len};
+  Napi::MemoryManagement::AdjustExternalMemory(env, (int64_t)input_len);
+
+  return Napi::External<MzMLWrapper>::New(env, w, FinalizeMzML);
 }
 
 static Napi::Object Init(Napi::Env env, Napi::Object exports)
@@ -1074,10 +892,10 @@ static Napi::Object Init(Napi::Env env, Napi::Object exports)
   exports.Set("findPeaks", Napi::Function::New(env, FindPeaks));
   exports.Set("calculateBaseline", Napi::Function::New(env, CalculateBaseline));
   exports.Set("findFeatures", Napi::Function::New(env, FindFeatures));
-  exports.Set("collectMs1Scans", Napi::Function::New(env, CollectMs1Scans));
   exports.Set("findFeature", Napi::Function::New(env, FindFeature));
   exports.Set("convertMzmlToBin", Napi::Function::New(env, ConvertMzmlToBin));
   exports.Set("parseBin", Napi::Function::New(env, ParseBin));
+  exports.Set("dispose", Napi::Function::New(env, DisposeMzML));
   return exports;
 }
 

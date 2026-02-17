@@ -8,7 +8,7 @@ use crate::utilities::structs::{FromTo, Peak};
 pub struct EicOptions {
     pub ppm_tolerance: f64,
     pub mz_tolerance: f64,
-    pub time_unit: TimeUnit, // input window unit (FromTo) coming from caller
+    pub time_unit: TimeUnit,
 }
 
 impl Default for EicOptions {
@@ -44,7 +44,7 @@ impl Default for TimeUnit {
 }
 
 pub struct Eic {
-    pub x: Vec<f64>, // minutes
+    pub x: Vec<f64>,
     pub y: Vec<f64>,
 }
 
@@ -79,7 +79,7 @@ pub fn calculate_eic_from_mzml(
 
 #[derive(Clone)]
 pub struct CentroidScan {
-    pub rt: f64, // minutes
+    pub rt: f64,
     pub mz: Arc<[f64]>,
     pub intensity: Arc<[f64]>,
 }
@@ -112,7 +112,6 @@ fn convert_rt_to_minutes(raw: f64, unit_acc: Option<&str>, unit_name: Option<&st
         return None;
     }
 
-    // <cvParam accession="MS:1000016" name="scan start time" ... unitAccession/unitName>
     let seconds = match unit_acc {
         Some(UO_SEC) => Some(raw),
         Some(UO_MIN) => Some(raw * 60.0),
@@ -130,7 +129,6 @@ fn convert_rt_to_minutes(raw: f64, unit_acc: Option<&str>, unit_name: Option<&st
 
 #[inline]
 fn scan_start_time_minutes_from_scan_list(sl: &octo::ScanList) -> Option<f64> {
-    // <scanList><scan><cvParam accession="MS:1000016" ... />
     for sc in &sl.scans {
         for cv in &sc.cv_params {
             if cv.accession.as_deref() == Some(ACC_SCAN_START_TIME) {
@@ -144,7 +142,6 @@ fn scan_start_time_minutes_from_scan_list(sl: &octo::ScanList) -> Option<f64> {
         }
     }
 
-    // <scanList><cvParam accession="MS:1000016" ... />
     for cv in &sl.cv_params {
         if cv.accession.as_deref() == Some(ACC_SCAN_START_TIME) {
             let raw = cv.value.as_deref()?.parse::<f64>().ok()?;
@@ -161,14 +158,12 @@ fn scan_start_time_minutes_from_scan_list(sl: &octo::ScanList) -> Option<f64> {
 
 #[inline]
 fn spectrum_rt_minutes(s: &Spectrum) -> Option<f64> {
-    // <spectrum><scanList>...
     if let Some(sl) = s.scan_list.as_ref() {
         if let Some(rt) = scan_start_time_minutes_from_scan_list(sl) {
             return Some(rt);
         }
     }
 
-    // <spectrumDescription><scanList>...
     if let Some(sd) = s.spectrum_description.as_ref() {
         if let Some(sl) = sd.scan_list.as_ref() {
             if let Some(rt) = scan_start_time_minutes_from_scan_list(sl) {
@@ -423,7 +418,6 @@ pub fn collect_ms1_scans(
 
 #[inline]
 fn spectrum_xy(s: &Spectrum) -> Option<(&BinaryDataArray, &BinaryDataArray)> {
-    // <binaryDataArrayList>
     let bal = s.binary_data_array_list.as_ref()?;
     let mz_bda = find_bda_by_accession(bal, ACC_MZ_ARRAY)?;
     let in_bda = find_bda_by_accession(bal, ACC_INTENSITY_ARRAY)?;

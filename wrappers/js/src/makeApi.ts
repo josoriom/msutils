@@ -96,39 +96,39 @@ export interface Exports {
     y: Float64Array,
     rt: number,
     range: number,
-    options?: FindPeaksOptions
+    options?: FindPeaksOptions,
   ) => Peak;
   getPeaksFromChrom: (
     bin: Uint8Array,
     items: { idx: number; rt: number; window: number }[],
     options?: FindPeaksOptions,
-    cores?: number
+    cores?: number,
   ) => ChromPeakRow[];
   getPeaksFromEic: (
     bin: Uint8Array,
     items: EicItem[],
     fromTo: { from: number; to: number },
     options?: FindPeaksOptions,
-    cores?: number
+    cores?: number,
   ) => EicPeakRow[];
   findPeaks: (
     x: Float64Array,
     y: Float64Array,
-    options?: FindPeaksOptions
+    options?: FindPeaksOptions,
   ) => Peak[];
   findFeature: (
     bin: Uint8Array,
     targets: Target[],
-    options?: FindFeaturesOptions
+    options?: FindFeaturesOptions,
   ) => FoundFeature[];
   findNoiseLevel: (y: Float32Array | ArrayLike<number>) => number;
   calculateBaseline: (
     y: Float64Array,
-    options?: BaselineOptions
+    options?: BaselineOptions,
   ) => Float64Array;
   collectMs1Scans: (
     bin: Uint8Array,
-    fromTo: { from: number; to: number }
+    fromTo: { from: number; to: number },
   ) => {
     rt: Float64Array;
     offsets: Uint32Array;
@@ -175,7 +175,7 @@ export function makeApi(instanceOrModule: any): Exports {
     p: number,
     n: number,
     outJsonBuf: number,
-    outBlobBuf: number
+    outBlobBuf: number,
   ) => number = pickFn(ex, ["parse_mzml_to_json"]);
 
   const find_peaks: (
@@ -183,7 +183,7 @@ export function makeApi(instanceOrModule: any): Exports {
     yPtr: number,
     len: number,
     optionsPtr: number,
-    outJsonBuf: number
+    outJsonBuf: number,
   ) => number = pickFn(ex, ["find_peaks"]);
 
   const get_peak: (
@@ -193,7 +193,7 @@ export function makeApi(instanceOrModule: any): Exports {
     rt: number,
     range: number,
     optionsPtr: number,
-    outJsonBuf: number
+    outJsonBuf: number,
   ) => number = pickFn(ex, ["get_peak"]);
 
   const get_peaks_from_chrom: (
@@ -205,7 +205,7 @@ export function makeApi(instanceOrModule: any): Exports {
     nItems: number,
     optionsPtr: number,
     cores: number,
-    outJsonBuf: number
+    outJsonBuf: number,
   ) => number = pickFn(ex, ["get_peaks_from_chrom"]);
 
   const get_peaks_from_eic: (
@@ -223,7 +223,7 @@ export function makeApi(instanceOrModule: any): Exports {
     toRight: number,
     optionsPtr: number,
     cores: number,
-    outJsonBuf: number
+    outJsonBuf: number,
   ) => number = pickFn(ex, ["get_peaks_from_eic"]);
 
   const find_noise_level: (yPtr: number, len: number) => number = pickFn(ex, [
@@ -235,7 +235,7 @@ export function makeApi(instanceOrModule: any): Exports {
     len: number,
     baselineWindow: number,
     baselineWindowFactor: number,
-    outBuf: number
+    outBuf: number,
   ) => number = pickFn(ex, ["calculate_baseline"]);
 
   const find_feature: (
@@ -255,7 +255,7 @@ export function makeApi(instanceOrModule: any): Exports {
     eicMz: number,
     optionsPtr: number,
     cores: number,
-    outJsonBuf: number
+    outJsonBuf: number,
   ) => number = pickFn(ex, ["find_feature"]);
 
   const collect_ms1_scans: (
@@ -267,7 +267,7 @@ export function makeApi(instanceOrModule: any): Exports {
     outOffsetsBufPtr: number,
     outLengthsBufPtr: number,
     outMzBufPtr: number,
-    outIntensityBufPtr: number
+    outIntensityBufPtr: number,
   ) => number = pickFn(ex, ["collect_ms1_scans"]);
 
   let HEAPU8 = new Uint8Array(memory.buffer);
@@ -335,11 +335,11 @@ export function makeApi(instanceOrModule: any): Exports {
     }
     setF64(
       0,
-      typeof o.integralThreshold === "number" ? o.integralThreshold : NaN
+      typeof o.integralThreshold === "number" ? o.integralThreshold : NaN,
     );
     setF64(
       8,
-      typeof o.intensityThreshold === "number" ? o.intensityThreshold : NaN
+      typeof o.intensityThreshold === "number" ? o.intensityThreshold : NaN,
     );
     setI32(16, typeof o.widthThreshold === "number" ? o.widthThreshold : 0);
     setF64(24, typeof o.noise === "number" ? o.noise : NaN);
@@ -348,7 +348,7 @@ export function makeApi(instanceOrModule: any): Exports {
     setI32(40, typeof o.baselineWindow === "number" ? o.baselineWindow : 0);
     setI32(
       44,
-      typeof o.baselineWindowFactor === "number" ? o.baselineWindowFactor : 0
+      typeof o.baselineWindowFactor === "number" ? o.baselineWindowFactor : 0,
     );
     setI32(48, o.allowOverlap ? 1 : 0);
     setI32(52, typeof o.windowSize === "number" ? o.windowSize : 0);
@@ -363,7 +363,7 @@ export function makeApi(instanceOrModule: any): Exports {
     n: number,
     _slim: number,
     outJsonBuf: number,
-    outBlobBuf: number
+    outBlobBuf: number,
   ) => _parse_mzml_to_json_raw(p, n, outJsonBuf, outBlobBuf);
 
   const parseMzML = makeParseMzML({
@@ -386,7 +386,7 @@ export function makeApi(instanceOrModule: any): Exports {
     y: Float64Array,
     rt: number,
     range: number,
-    options?: FindPeaksOptions
+    options?: FindPeaksOptions,
   ): Peak => {
     if (!(x instanceof Float64Array))
       throw new Error("getPeak: x must be Float64Array");
@@ -419,7 +419,7 @@ export function makeApi(instanceOrModule: any): Exports {
     bin: Uint8Array,
     items: { idx: number; rt: number; window: number }[],
     options?: FindPeaksOptions,
-    cores = 1
+    cores = 1,
   ): ChromPeakRow[] => {
     const n = items.length;
     if (n === 0) return [];
@@ -438,7 +438,7 @@ export function makeApi(instanceOrModule: any): Exports {
     const idxsU8 = new Uint8Array(
       idxs.buffer,
       idxs.byteOffset,
-      idxs.byteLength
+      idxs.byteLength,
     );
     const rtsU8 = new Uint8Array(rts.buffer, rts.byteOffset, rts.byteLength);
     const winU8 = new Uint8Array(wins.buffer, wins.byteOffset, wins.byteLength);
@@ -461,8 +461,8 @@ export function makeApi(instanceOrModule: any): Exports {
       winPtr,
       n,
       pOpts,
-      1, // hard coded to 1 (No multicore in browser)
-      SCRATCH_JSON
+      1,
+      SCRATCH_JSON,
     );
     free(binPtr, bin.length);
     free(idxsPtr, idxsU8.length);
@@ -479,7 +479,7 @@ export function makeApi(instanceOrModule: any): Exports {
     bin: Uint8Array,
     items: EicItem[],
     window: { from: number; to: number },
-    options?: FindPeaksOptions
+    options?: FindPeaksOptions,
   ) => {
     const n = items.length;
     if (n === 0) return [];
@@ -527,17 +527,17 @@ export function makeApi(instanceOrModule: any): Exports {
     const rngU8 = new Uint8Array(
       ranges.buffer,
       ranges.byteOffset,
-      ranges.byteLength
+      ranges.byteLength,
     );
     const offU8 = new Uint8Array(
       idsOff.buffer,
       idsOff.byteOffset,
-      idsOff.byteLength
+      idsOff.byteLength,
     );
     const lenU8 = new Uint8Array(
       idsLen.buffer,
       idsLen.byteOffset,
-      idsLen.byteLength
+      idsLen.byteLength,
     );
     const rtsPtr = alloc(rtsU8.length);
     const mzsPtr = alloc(mzsU8.length);
@@ -570,8 +570,8 @@ export function makeApi(instanceOrModule: any): Exports {
       window.from,
       window.to,
       pOpts,
-      1, // hard coded to 1 (No multicore in browser)
-      SCRATCH_JSON
+      1,
+      SCRATCH_JSON,
     );
     free(binPtr, bin.length);
     free(rtsPtr, rtsU8.length);
@@ -591,7 +591,7 @@ export function makeApi(instanceOrModule: any): Exports {
   const findPeaks = (
     x: Float64Array,
     y: Float64Array,
-    options: FindPeaksOptions = {}
+    options: FindPeaksOptions = {},
   ) => {
     if (!(x instanceof Float64Array))
       throw new Error("findPeaks: x must be Float64Array");
@@ -672,12 +672,12 @@ export function makeApi(instanceOrModule: any): Exports {
 
   const collectMs1Scans = (
     bin: Uint8Array,
-    fromTo: { from: number; to: number }
+    fromTo: { from: number; to: number },
   ) => {
     const u8 = bin;
     if (!(u8 instanceof Uint8Array) || !u8.byteLength)
       throw new Error(
-        "collectMs1Scans: first arg must be BIN1 bytes (Uint8Array)"
+        "collectMs1Scans: first arg must be BIN1 bytes (Uint8Array)",
       );
     const from = +fromTo.from,
       to = +fromTo.to;
@@ -702,13 +702,12 @@ export function makeApi(instanceOrModule: any): Exports {
       bOff,
       bLen,
       bMz,
-      bInt
+      bInt,
     );
 
     free(binPtr, u8.length);
 
     if (rc !== 0) {
-      // clean up any partial outputs
       try {
         readAndFreeF64(bRt);
       } catch {}
@@ -750,7 +749,7 @@ export function makeApi(instanceOrModule: any): Exports {
   const findFeature = (
     bin: Uint8Array,
     targets: Target[],
-    options: FindFeaturesOptions = {}
+    options: FindFeaturesOptions = {},
   ): FoundFeature[] => {
     const n = targets.length;
     if (n === 0) return [];
@@ -794,17 +793,17 @@ export function makeApi(instanceOrModule: any): Exports {
     const rngU8 = new Uint8Array(
       ranges.buffer,
       ranges.byteOffset,
-      ranges.byteLength
+      ranges.byteLength,
     );
     const offU8 = new Uint8Array(
       idsOff.buffer,
       idsOff.byteOffset,
-      idsOff.byteLength
+      idsOff.byteLength,
     );
     const lenU8 = new Uint8Array(
       idsLen.buffer,
       idsLen.byteOffset,
-      idsLen.byteLength
+      idsLen.byteLength,
     );
     const rtsPtr = alloc(rtsU8.length),
       mzsPtr = alloc(mzsU8.length),
@@ -841,8 +840,8 @@ export function makeApi(instanceOrModule: any): Exports {
       eicPpm,
       eicMz,
       pOpts,
-      1, // cores = 1
-      SCRATCH_JSON
+      1,
+      SCRATCH_JSON,
     );
 
     free(binPtr, bin.length);
