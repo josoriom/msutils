@@ -22,6 +22,8 @@ static const char *last_err = "LoadLibrary/GetProcAddress failed";
 static const char *last_err = NULL;
 #endif
 
+typedef struct MzML MzML;
+
 typedef struct
 {
   unsigned char *ptr;
@@ -43,21 +45,22 @@ typedef struct
   double sn_ratio;
 } CPeakPOptions;
 
-typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, Buf *);
+typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
 typedef int32_t (*fn_bin_to_json)(const unsigned char *, size_t, Buf *);
 typedef int32_t (*fn_bin_to_mzml)(const unsigned char *, size_t, Buf *);
 typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_calculate_eic)(const unsigned char *, size_t, double, double, double, double, double, Buf *, Buf *);
 typedef float (*fn_find_noise_level)(const float *, size_t);
-typedef int32_t (*fn_get_peaks_from_eic)(const unsigned char *, size_t, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakPOptions *, size_t, Buf *);
-typedef int32_t (*fn_get_peaks_from_chrom)(const unsigned char *, size_t, const uint32_t *, const double *, const double *, size_t, const CPeakPOptions *, size_t, Buf *);
+typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakPOptions *, size_t, Buf *);
+typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakPOptions *, size_t, Buf *);
 typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_find_features)(const unsigned char *, size_t, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, Buf *);
-typedef int32_t (*fn_find_feature)(const unsigned char *, size_t, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
+typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, Buf *);
+typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_convert_mzml_to_bin)(const unsigned char *, size_t, Buf *, uint8_t, uint8_t);
-typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, Buf *);
+typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, MzML **);
 typedef void (*fn_free_)(unsigned char *, size_t);
+typedef void (*fn_free_mzml)(MzML *);
 
 typedef struct
 {
@@ -76,6 +79,7 @@ typedef struct
   fn_find_feature find_feature;
   fn_convert_mzml_to_bin convert_mzml_to_bin;
   fn_parse_bin parse_bin;
+  fn_free_mzml free_mzml;
 } abi_type;
 
 static DLIB abi_handle = NULL;
@@ -133,6 +137,8 @@ int abi_load(const char *path, const char **err)
   if (resolve_required((void **)&ABI.convert_mzml_to_bin, "convert_mzml_to_bin"))
     goto fail;
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
+    goto fail;
+  if (resolve_required((void **)&ABI.free_mzml, "free_mzml"))
     goto fail;
   ABI.free_ = (fn_free_)DLSYM(abi_handle, "free_");
   if (!ABI.free_)
@@ -283,6 +289,16 @@ static int as_opts_ptr(SEXP options, CPeakPOptions *copy, const CPeakPOptions **
   return 0;
 }
 
+static MzML *GetHandle(SEXP ptr)
+{
+  if (TYPEOF(ptr) != EXTPTRSXP)
+    error("msutils: expected ExternalPtr");
+  MzML *h = (MzML *)R_ExternalPtrAddr(ptr);
+  if (!h)
+    error("msutils: use of disposed or null pointer");
+  return h;
+}
+
 SEXP C_bind_rust(SEXP path_)
 {
   if (TYPEOF(path_) != STRSXP || LENGTH(path_) != 1)
@@ -294,20 +310,37 @@ SEXP C_bind_rust(SEXP path_)
   return R_NilValue;
 }
 
+static void finalize_mzml(SEXP ptr)
+{
+  if (R_ExternalPtrAddr(ptr))
+  {
+    MzML *handle = (MzML *)R_ExternalPtrAddr(ptr);
+    if (ABI.free_mzml)
+      ABI.free_mzml(handle);
+    R_ClearExternalPtr(ptr);
+  }
+}
+
+SEXP C_dispose_mzml(SEXP ptr)
+{
+  finalize_mzml(ptr);
+  return R_NilValue;
+}
+
 SEXP C_parse_mzml(SEXP data)
 {
   if (TYPEOF(data) != RAWSXP)
-    error("data");
+    error("data must be raw");
   REQUIRE_BOUND(ABI.parse_mzml, "parse_mzml");
-  REQUIRE_BOUND(ABI.free_, "free_");
-  Buf out = (Buf){0};
-  int code = ABI.parse_mzml((const unsigned char *)RAW(data), (size_t)XLENGTH(data), &out);
+
+  MzML *handle = NULL;
+  int code = ABI.parse_mzml((const unsigned char *)RAW(data), (size_t)XLENGTH(data), &handle);
   die_code("parse_mzml", code);
-  SEXP res = PROTECT(Rf_allocVector(RAWSXP, (R_xlen_t)out.len));
-  memcpy(RAW(res), out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
+
+  SEXP ptr = PROTECT(R_MakeExternalPtr(handle, R_NilValue, R_NilValue));
+  R_RegisterCFinalizerEx(ptr, finalize_mzml, TRUE);
   UNPROTECT(1);
-  return res;
+  return ptr;
 }
 
 SEXP C_bin_to_json(SEXP bin)
@@ -360,22 +393,23 @@ SEXP C_get_peak(SEXP x, SEXP y, SEXP rt, SEXP range, SEXP options)
 
 SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, SEXP from_left, SEXP to_right, SEXP options, SEXP cores)
 {
-  if (TYPEOF(bin) != RAWSXP || TYPEOF(rts) != REALSXP || TYPEOF(mzs) != REALSXP || TYPEOF(ranges) != REALSXP)
-    error("bad args");
-  if (!(XLENGTH(rts) == XLENGTH(mzs) && XLENGTH(mzs) == XLENGTH(ranges)))
-    error("length mismatch");
+  MzML *handle = GetHandle(bin);
   REQUIRE_BOUND(ABI.get_peaks_from_eic, "get_peaks_from_eic");
   REQUIRE_BOUND(ABI.free_, "free_");
+
+  if (TYPEOF(rts) != REALSXP || TYPEOF(mzs) != REALSXP || TYPEOF(ranges) != REALSXP)
+    error("msutils: bad numeric arguments");
   R_xlen_t n = XLENGTH(rts);
-  uint32_t *offs = NULL, *lens = NULL;
+  if (XLENGTH(mzs) != n || XLENGTH(ranges) != n)
+    error("msutils: length mismatch");
+  uint32_t *offs = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
+  uint32_t *lens = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
   unsigned char *ids_buf = NULL;
   size_t ids_len = 0;
   if (ids != R_NilValue)
   {
     if (TYPEOF(ids) != STRSXP)
-      error("ids must be character");
-    offs = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
-    lens = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
+      error("msutils: ids must be character");
     size_t total = 0;
     for (R_xlen_t i = 0; i < n; i++)
     {
@@ -399,23 +433,23 @@ SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, S
         size_t L = (size_t)LENGTH(s);
         offs[i] = (uint32_t)cur;
         lens[i] = (uint32_t)L;
-        memcpy(ids_buf + cur, (const unsigned char *)CHAR(s), L);
+        memcpy(ids_buf + cur, CHAR(s), L);
         cur += L;
       }
     }
   }
+
   size_t ncores = (cores == R_NilValue) ? 1 : (size_t)asInteger(cores);
-  if (ncores < 1)
-    ncores = 1;
   CPeakPOptions opts;
   const CPeakPOptions *opt_ptr = NULL;
-  (void)as_opts_ptr(options, &opts, &opt_ptr);
+  as_opts_ptr(options, &opts, &opt_ptr);
+
   Buf out = (Buf){0};
   int code = ABI.get_peaks_from_eic(
-      (const unsigned char *)RAW(bin), (size_t)XLENGTH(bin),
-      REAL(rts), REAL(mzs), REAL(ranges),
-      (const uint32_t *)offs, (const uint32_t *)lens, (const unsigned char *)ids_buf, (size_t)ids_len,
+      handle, REAL(rts), REAL(mzs), REAL(ranges),
+      offs, lens, ids_buf, ids_len,
       (size_t)n, asReal(from_left), asReal(to_right), opt_ptr, ncores, &out);
+
   die_code("get_peaks_from_eic", code);
   SEXP res = mk_string_len(out.ptr, out.len);
   ABI.free_(out.ptr, out.len);
@@ -424,17 +458,18 @@ SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, S
 
 SEXP C_get_peaks_from_chrom(SEXP bin, SEXP idxs, SEXP rts, SEXP ranges, SEXP options, SEXP cores)
 {
-  if (TYPEOF(bin) != RAWSXP)
-    error("bin");
-  if (TYPEOF(rts) != REALSXP)
-    error("rt");
-  if (TYPEOF(ranges) != REALSXP)
-    error("range");
+  MzML *handle = GetHandle(bin);
+
+  if (TYPEOF(rts) != REALSXP || TYPEOF(ranges) != REALSXP)
+    error("msutils: numeric (double) required for rts/ranges");
+
   R_xlen_t n = XLENGTH(rts);
   if (XLENGTH(ranges) != n || XLENGTH(idxs) != n)
-    error("length");
+    error("msutils: length mismatch for chrom parameters");
+
   REQUIRE_BOUND(ABI.get_peaks_from_chrom, "get_peaks_from_chrom");
   REQUIRE_BOUND(ABI.free_, "free_");
+
   uint32_t *uidx = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
   if (TYPEOF(idxs) == INTSXP)
   {
@@ -455,17 +490,23 @@ SEXP C_get_peaks_from_chrom(SEXP bin, SEXP idxs, SEXP rts, SEXP ranges, SEXP opt
     }
   }
   else
-    error("idx must be integer/numeric");
+  {
+    error("msutils: idx must be integer or numeric");
+  }
+
   size_t ncores = (cores == R_NilValue) ? 1 : (size_t)asInteger(cores);
   if (ncores < 1)
     ncores = 1;
+
   CPeakPOptions opts;
   const CPeakPOptions *opt_ptr = NULL;
-  (void)as_opts_ptr(options, &opts, &opt_ptr);
+  as_opts_ptr(options, &opts, &opt_ptr);
+
   Buf out = (Buf){0};
   int code = ABI.get_peaks_from_chrom(
-      (const unsigned char *)RAW(bin), (size_t)XLENGTH(bin),
+      handle,
       uidx, REAL(rts), REAL(ranges), (size_t)n, opt_ptr, ncores, &out);
+
   die_code("get_peaks_from_chrom", code);
   SEXP res = mk_string_len(out.ptr, out.len);
   ABI.free_(out.ptr, out.len);
@@ -547,27 +588,27 @@ SEXP C_calculate_baseline(SEXP y, SEXP baseline_window, SEXP baseline_window_fac
 
 SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol, SEXP grid_start, SEXP grid_end, SEXP grid_step_ppm, SEXP options, SEXP cores)
 {
-  if (TYPEOF(data) != RAWSXP)
-    error("data must be raw");
+  MzML *handle = GetHandle(data);
   REQUIRE_BOUND(ABI.find_features, "find_features");
   REQUIRE_BOUND(ABI.free_, "free_");
 
   int ncores = asInteger(cores);
   if (ncores < 1)
-    error("cores must be a single number");
+    ncores = 1;
 
   CPeakPOptions opts;
   const CPeakPOptions *opt_ptr = NULL;
-  (void)as_opts_ptr(options, &opts, &opt_ptr);
+  as_opts_ptr(options, &opts, &opt_ptr);
 
   Buf out = (Buf){0};
   int code = ABI.find_features(
-      (const unsigned char *)RAW(data), (size_t)XLENGTH(data),
+      handle,
       asReal(from_time), asReal(to_time),
       asReal(eic_ppm_tol), asReal(eic_mz_tol),
       asReal(grid_start), asReal(grid_end),
       asReal(grid_step_ppm),
       opt_ptr, (int32_t)ncores, &out);
+
   die_code("find_features", code);
   SEXP res = mk_string_len(out.ptr, out.len);
   ABI.free_(out.ptr, out.len);
@@ -576,32 +617,26 @@ SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, 
 
 SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan_ppm, SEXP scan_mz, SEXP eic_ppm, SEXP eic_mz, SEXP options, SEXP cores)
 {
-  if (TYPEOF(bin) != RAWSXP)
-    error("bin must be a raw vector");
-  if (TYPEOF(rts) != REALSXP || TYPEOF(mzs) != REALSXP || TYPEOF(wins) != REALSXP)
-    error("rts, mzs, wins must be numeric (double)");
-  R_xlen_t n = XLENGTH(rts);
-  if (XLENGTH(mzs) != n || XLENGTH(wins) != n)
-    error("rts, mzs, wins must have the same length");
+  MzML *handle = GetHandle(bin);
   REQUIRE_BOUND(ABI.find_feature, "find_feature");
   REQUIRE_BOUND(ABI.free_, "free_");
 
-  const uint32_t *offs_ptr = NULL;
-  const uint32_t *lens_ptr = NULL;
-  const unsigned char *ids_buf_ptr = NULL;
-  size_t ids_buf_len = 0;
-  uint32_t *offs = NULL;
-  uint32_t *lens = NULL;
+  if (TYPEOF(rts) != REALSXP || TYPEOF(mzs) != REALSXP || TYPEOF(wins) != REALSXP)
+    error("msutils: numeric (double) required for rts/mzs/wins");
+
+  R_xlen_t n = XLENGTH(rts);
+  if (XLENGTH(mzs) != n || XLENGTH(wins) != n)
+    error("msutils: length mismatch for rts/mzs/wins");
+
+  uint32_t *offs = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
+  uint32_t *lens = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
   unsigned char *ids_buf = NULL;
+  size_t ids_len = 0;
 
   if (ids != R_NilValue)
   {
     if (TYPEOF(ids) != STRSXP)
-      error("ids must be a character vector or NULL");
-    if (XLENGTH(ids) != n)
-      error("ids length must match rts/mzs/wins");
-    offs = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
-    lens = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
+      error("msutils: ids must be character");
     size_t total = 0;
     for (R_xlen_t i = 0; i < n; i++)
     {
@@ -610,44 +645,37 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
         total += (size_t)LENGTH(s);
     }
     ids_buf = (unsigned char *)R_alloc(total, 1);
-    ids_buf_len = total;
+    ids_len = total;
     size_t cur = 0;
     for (R_xlen_t i = 0; i < n; i++)
     {
       SEXP s = STRING_ELT(ids, i);
       if (s == R_NilValue)
       {
-        offs[i] = 0u;
-        lens[i] = 0u;
+        offs[i] = 0;
+        lens[i] = 0;
       }
       else
       {
         size_t L = (size_t)LENGTH(s);
         offs[i] = (uint32_t)cur;
         lens[i] = (uint32_t)L;
-        memcpy(ids_buf + cur, (const unsigned char *)CHAR(s), L);
+        memcpy(ids_buf + cur, CHAR(s), L);
         cur += L;
       }
     }
-    offs_ptr = (const uint32_t *)offs;
-    lens_ptr = (const uint32_t *)lens;
-    ids_buf_ptr = (const unsigned char *)ids_buf;
   }
 
+  size_t ncores = (cores == R_NilValue) ? 1 : (size_t)asInteger(cores);
   CPeakPOptions opts;
   const CPeakPOptions *opt_ptr = NULL;
-  (void)as_opts_ptr(options, &opts, &opt_ptr);
-  size_t ncores = (cores == R_NilValue) ? 1 : (size_t)asInteger(cores);
-  if (ncores < 1)
-    ncores = 1;
+  as_opts_ptr(options, &opts, &opt_ptr);
 
   Buf out = (Buf){0};
   int32_t code = ABI.find_feature(
-      (const unsigned char *)RAW(bin), (size_t)XLENGTH(bin),
-      REAL(rts), REAL(mzs), REAL(wins),
-      offs_ptr, lens_ptr, ids_buf_ptr, ids_buf_len,
-      (size_t)n,
-      ncores,
+      handle, REAL(rts), REAL(mzs), REAL(wins),
+      offs, lens, ids_buf, ids_len,
+      (size_t)n, ncores,
       asReal(scan_ppm), asReal(scan_mz), asReal(eic_ppm), asReal(eic_mz),
       opt_ptr, &out);
 
@@ -694,15 +722,15 @@ SEXP C_convert_mzml_to_bin(SEXP xml, SEXP level, SEXP f32_compress)
 SEXP C_parse_bin(SEXP bin)
 {
   if (TYPEOF(bin) != RAWSXP)
-    error("bin must be a raw vector");
+    error("msutils: data must be a raw vector");
   REQUIRE_BOUND(ABI.parse_bin, "parse_bin");
-  REQUIRE_BOUND(ABI.free_, "free_");
-  Buf out = (Buf){0};
-  int32_t code = ABI.parse_bin((const unsigned char *)RAW(bin), (size_t)XLENGTH(bin), &out);
+
+  MzML *handle = NULL;
+  int code = ABI.parse_bin((const unsigned char *)RAW(bin), (size_t)XLENGTH(bin), &handle);
   die_code("parse_bin", code);
-  SEXP res = PROTECT(Rf_allocVector(RAWSXP, (R_xlen_t)out.len));
-  memcpy(RAW(res), out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
+
+  SEXP ptr = PROTECT(R_MakeExternalPtr(handle, R_NilValue, R_NilValue));
+  R_RegisterCFinalizerEx(ptr, finalize_mzml, TRUE);
   UNPROTECT(1);
-  return res;
+  return ptr;
 }
