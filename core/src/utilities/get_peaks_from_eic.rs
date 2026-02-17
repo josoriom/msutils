@@ -1,4 +1,4 @@
-use octo::MzML;
+use octo::{MzML, decode};
 use rayon::ThreadPoolBuilder;
 use rayon::prelude::*;
 
@@ -9,12 +9,13 @@ use crate::utilities::get_peak::get_peak;
 use crate::utilities::structs::{DataXY, EicRoi, FromTo, Peak, Roi};
 
 pub fn get_peaks_from_eic(
-    mzml: &MzML,
+    bytes: &[u8],
     from_to: FromTo,
     rois: &[EicRoi],
     options: Option<FindPeaksOptions>,
     cores: usize,
 ) -> Option<Vec<(String, f64, f64, Peak)>> {
+    let mzml = decode(bytes).ok()?;
     if cores <= 1 || rois.len() < 2 {
         let mut out: Vec<(String, f64, f64, Peak)> = Vec::with_capacity(rois.len());
         for roi in rois {

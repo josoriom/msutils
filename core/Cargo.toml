@@ -16,11 +16,11 @@ debug = true
 
 [dependencies]
 base64 = "0.22.1"
-memchr = "2.8.0"
+memchr = "2.7.5"
 miniz_oxide = "0.9.0"
 octo = { git = "https://github.com/josoriom/octo", branch = "main", version = "0.1.0" }
 once_cell = "1.21.3"
-quick-xml = "0.39.1"
+quick-xml = "0.39.0"
 rayon = "1.11.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
