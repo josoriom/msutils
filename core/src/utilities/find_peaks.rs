@@ -127,8 +127,6 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
         return Vec::new();
     }
 
-    // println!("Found {:#?} peak positions", positions);
-
     let mut bopt = o.get_boundaries_options.unwrap_or_default();
     bopt.noise = noise;
 

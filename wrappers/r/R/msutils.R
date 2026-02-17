@@ -41,6 +41,11 @@
   rawConnectionValue(con)
 }
 
+dispose <- function(bin) {
+  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer")
+  .Call("C_dispose_mzml", bin, PACKAGE = "msutils")
+}
+
 parse_mzml <- function(data) {
   stopifnot(is.raw(data))
   .Call("C_parse_mzml", data, PACKAGE="msutils")
@@ -221,7 +226,7 @@ get_peaks_from_eic <- function(
   baseline_window=0L, baseline_window_factor=0L,
   allow_overlap=FALSE, window_size=0L, sn_ratio=NaN
 ) {
-  stopifnot(is.raw(bin))
+  stopifnot(typeof(bin) == "externalptr") 
   if (!is.data.frame(df)) stop("`df` must be a data.frame")
   req <- c("id","rt","mz","ranges"); miss <- setdiff(req, names(df))
   if (length(miss)) stop(paste0("missing columns: ", paste(miss, collapse=", ")))
@@ -264,7 +269,7 @@ get_peaks_from_chrom <- function(
   baseline_window=0L, baseline_window_factor=0L,
   allow_overlap=FALSE, window_size=0L, sn_ratio=NaN
 ) {
-  stopifnot(is.raw(bin))
+  stopifnot(typeof(bin) == "externalptr")
   if (is.null(items) || !(is.list(items) || is.data.frame(items))) stop("items must be a list/data.frame")
   idxs <- suppressWarnings(as.integer(if (!is.null(items$idx)) items$idx else items$index))
   rts  <- suppressWarnings(as.numeric(items$rt))
@@ -346,10 +351,10 @@ find_feature <- function(
   baseline_window = 0L, baseline_window_factor = 0L,
   allow_overlap = FALSE, window_size = 0L, sn_ratio = NaN
 ) {
-  stopifnot(is.raw(bin))
-  if (!is.numeric(rt) || length(rt) != 1) stop("rt must be a single numeric")
-  if (!is.numeric(mz) || length(mz) != 1) stop("mz must be a single numeric")
-  if (!is.numeric(window) || length(window) != 1) stop("window must be a single numeric")
+  stopifnot(typeof(bin) == "externalptr")
+  if (!is.numeric(rt)) stop("rt must be numeric")
+  if (!is.numeric(mz)) stop("mz must be numeric")
+  if (!is.numeric(window)) stop("window must be numeric")
 
   if (!is.numeric(scan_ppm) || length(scan_ppm) != 1) stop("scan_ppm must be a single numeric")
   if (!is.numeric(scan_mz)  || length(scan_mz)  != 1) stop("scan_mz must be a single numeric")
@@ -360,9 +365,11 @@ find_feature <- function(
   if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
   if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
 
-  if (!is.null(id)) {
-    if (!is.character(id) || length(id) != 1) stop("id must be a single string or NULL")
-    if (is.na(id)) id <- ""
+  # FIX: Always pass a character vector so C GetHandle/R_alloc logic works
+  if (is.null(id)) {
+    id <- rep("", length(rt))
+  } else {
+    id <- as.character(id)
   }
 
   opt <- .pack_opts(list(
@@ -385,7 +392,7 @@ find_feature <- function(
     "C_find_feature",
     bin,
     as.numeric(rt), as.numeric(mz), as.numeric(window),
-    if (is.null(id)) NULL else as.character(id),
+    id,
     as.numeric(scan_ppm), as.numeric(scan_mz),
     as.numeric(eic_ppm), as.numeric(eic_mz),
     opt, as.integer(cores),
@@ -413,7 +420,7 @@ find_features <- function(
   baseline_window = 0L, baseline_window_factor = 0L,
   allow_overlap = FALSE, window_size = 0L, sn_ratio = NaN
 ) {
-  stopifnot(is.raw(data))
+  stopifnot(typeof(data) == "externalptr")
   cores <- .validate_cores(cores)
 
   if (!is.logical(auto_noise) || length(auto_noise) != 1 || is.na(auto_noise)) stop("auto_noise must be logical TRUE/FALSE")
@@ -439,7 +446,7 @@ find_features <- function(
     data,
     as.numeric(from), as.numeric(to),
     as.numeric(ppm_tolerance), as.numeric(mz_tolerance),
-    as.numeric(grid_start), as.numeric(grid_end), as.integer(grid_step_ppm),
+    as.numeric(grid_start), as.numeric(grid_end), as.numeric(grid_step_ppm),
     opt, as.integer(cores),
     PACKAGE = "msutils"
   )
