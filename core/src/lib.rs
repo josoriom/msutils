@@ -11,10 +11,7 @@ use octo::{MzML, bin_to_mzml as bin_to_mzml_rs, decode, encode, parse_mzml as pa
 pub mod utilities;
 use utilities::{
     calculate_baseline::{BaselineOptions, calculate_baseline as calculate_baseline_rs},
-    calculate_eic::TimeUnit,
-    calculate_eic::{
-        EicOptions, calculate_eic_from_bin1, collect_ms1_scans as collect_ms1_scans_rs,
-    },
+    calculate_eic::{EicOptions, calculate_eic as calculate_eic_rs},
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
     find_features::{FindFeaturesOptions, MzScanGrid, find_features as find_features_rs},
     find_noise_level::find_noise_level as find_noise_level_rs,
@@ -153,6 +150,71 @@ pub unsafe extern "C" fn parse_bin(
             OK
         }
         Ok(Err(error_code)) => error_code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bin_to_json(handle_ptr: *const MzML, out_json: *mut Buf) -> c_int {
+    if handle_ptr.is_null() || out_json.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let mzml = unsafe { &*handle_ptr };
+        let s = serde_json::to_string(mzml).map_err(|_| ERR_PARSE)?;
+        write_buf(out_json, s.into_bytes().into_boxed_slice());
+        Ok(())
+    }));
+
+    match res {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn bin_to_mzml(handle_ptr: *const MzML, out_mzml: *mut Buf) -> c_int {
+    if handle_ptr.is_null() || out_mzml.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let mzml = unsafe { &*handle_ptr };
+        let xml_bytes = bin_to_mzml_rs(mzml).map_err(|_| ERR_ENCODE)?;
+        write_buf(out_mzml, xml_bytes.into_bytes().into_boxed_slice());
+        Ok(())
+    }));
+
+    match res {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mzml_to_bin(
+    handle_ptr: *const MzML,
+    out_blob: *mut Buf,
+    level: u8,
+    f32_compress: u8,
+) -> c_int {
+    if handle_ptr.is_null() || out_blob.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let mzml = unsafe { &*handle_ptr };
+        let bin = encode(mzml, level, f32_compress != 0);
+        write_buf(out_blob, bin.into_boxed_slice());
+        Ok(())
+    }));
+
+    match res {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
         Err(_) => ERR_PANIC,
     }
 }
@@ -481,63 +543,14 @@ pub extern "C" fn find_noise_level(y_ptr: *const f32, len: usize) -> f32 {
         find_noise_level_rs(ys)
     };
     match catch_unwind(AssertUnwindSafe(compute)) {
-        Ok(noise) => noise as f32,
+        Ok(noise) => noise.intensity as f32,
         Err(_) => f32::INFINITY,
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn bin_to_json(
-    bin_ptr: *const u8,
-    bin_len: usize,
-    out_json: *mut Buf,
-) -> c_int {
-    if bin_ptr.is_null() || out_json.is_null() {
-        return ERR_INVALID_ARGS;
-    }
-    let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let bin: &[u8] = unsafe { slice::from_raw_parts(bin_ptr, bin_len) };
-        let mzml = decode(bin).map_err(|_| ERR_PARSE)?;
-        let s = serde_json::to_string(&mzml).map_err(|_| ERR_PARSE)?;
-        write_buf(out_json, s.into_bytes().into_boxed_slice());
-        Ok(())
-    }));
-
-    match res {
-        Ok(Ok(())) => OK,
-        Ok(Err(code)) => code,
-        Err(_) => ERR_PANIC,
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn bin_to_mzml(
-    bin_ptr: *const u8,
-    bin_len: usize,
-    out_mzml: *mut Buf,
-) -> c_int {
-    if bin_ptr.is_null() || out_mzml.is_null() {
-        return ERR_INVALID_ARGS;
-    }
-    let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let bin = unsafe { slice::from_raw_parts(bin_ptr, bin_len) };
-        let mzml = decode(bin).map_err(|_| ERR_PARSE)?;
-        let xml_bytes = bin_to_mzml_rs(&mzml).map_err(|_| ERR_ENCODE)?;
-        write_buf(out_mzml, xml_bytes.into_bytes().into_boxed_slice());
-
-        Ok(())
-    }));
-    match res {
-        Ok(Ok(())) => OK,
-        Ok(Err(code)) => code,
-        Err(_) => ERR_PANIC,
-    }
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn calculate_eic(
-    bin_ptr: *const u8,
-    bin_len: usize,
+    handle_ptr: *const MzML,
     target: f64,
     from_time: f64,
     to_time: f64,
@@ -546,14 +559,13 @@ pub unsafe extern "C" fn calculate_eic(
     out_x: *mut Buf,
     out_y: *mut Buf,
 ) -> c_int {
-    if bin_ptr.is_null() || out_x.is_null() || out_y.is_null() {
+    if handle_ptr.is_null() || out_x.is_null() || out_y.is_null() {
         return ERR_INVALID_ARGS;
     }
     let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let bin = unsafe { slice::from_raw_parts(bin_ptr, bin_len) };
-
-        let eic = calculate_eic_from_bin1(
-            bin,
+        let mzml = unsafe { &*handle_ptr };
+        let eic = calculate_eic_rs(
+            mzml,
             &target,
             FromTo {
                 from: from_time,
@@ -787,93 +799,6 @@ fn build_find_peaks_options(options: *const CPeakPOptions) -> FindPeaksOptions {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn collect_ms1_scans(
-    bin_ptr: *const u8,
-    bin_len: usize,
-    from_time: f64,
-    to_time: f64,
-    out_rt: *mut Buf,
-    out_offsets: *mut Buf,
-    out_lengths: *mut Buf,
-    out_mz: *mut Buf,
-    out_intensity: *mut Buf,
-) -> c_int {
-    if bin_ptr.is_null()
-        || out_rt.is_null()
-        || out_offsets.is_null()
-        || out_lengths.is_null()
-        || out_mz.is_null()
-        || out_intensity.is_null()
-        || !from_time.is_finite()
-        || !to_time.is_finite()
-        || !(to_time >= from_time)
-    {
-        return ERR_INVALID_ARGS;
-    }
-
-    let run = || -> Result<(), c_int> {
-        let bin = unsafe { slice::from_raw_parts(bin_ptr, bin_len) };
-        let mzml = decode(bin).map_err(|_| ERR_PARSE)?;
-        let (rt, scans) = collect_ms1_scans_rs(
-            &mzml,
-            FromTo {
-                from: from_time,
-                to: to_time,
-            },
-            TimeUnit::Minutes,
-        );
-
-        let n_scans = scans.len();
-        let mut offsets = Vec::<u32>::with_capacity(n_scans);
-        let mut lengths = Vec::<u32>::with_capacity(n_scans);
-
-        let total_points: usize = scans
-            .iter()
-            .map(|s| s.mz.len().min(s.intensity.len()))
-            .sum();
-
-        if total_points > (u32::MAX as usize) {
-            return Err(ERR_PARSE);
-        }
-
-        let mut mz_all = Vec::<f64>::with_capacity(total_points);
-        let mut intensity_all = Vec::<f64>::with_capacity(total_points);
-
-        let mut cursor: usize = 0;
-        for s in &scans {
-            let len = s.mz.len().min(s.intensity.len());
-            offsets.push(cursor as u32);
-            lengths.push(len as u32);
-
-            mz_all.extend_from_slice(&s.mz[..len]);
-            intensity_all.extend_from_slice(&s.intensity[..len]);
-
-            cursor += len;
-        }
-
-        let rt_bytes = f64_slice_to_u8_box(&rt);
-        let off_bytes = u32_slice_to_u8_box(&offsets);
-        let len_bytes = u32_slice_to_u8_box(&lengths);
-        let mz_bytes = f64_slice_to_u8_box(&mz_all);
-        let it_bytes = f64_slice_to_u8_box(&intensity_all);
-
-        write_buf(out_rt, rt_bytes);
-        write_buf(out_offsets, off_bytes);
-        write_buf(out_lengths, len_bytes);
-        write_buf(out_mz, mz_bytes);
-        write_buf(out_intensity, it_bytes);
-
-        Ok(())
-    };
-
-    match catch_unwind(AssertUnwindSafe(run)) {
-        Ok(Ok(())) => OK,
-        Ok(Err(code)) => code,
-        Err(_) => ERR_PANIC,
-    }
-}
-
-#[unsafe(no_mangle)]
 pub unsafe extern "C" fn find_feature(
     handle_ptr: *const MzML,
     rts_ptr: *const f64,
@@ -1043,39 +968,4 @@ pub unsafe extern "C" fn find_feature(
         Ok(Err(code)) => code,
         Err(_) => ERR_PANIC,
     }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn convert_mzml_to_bin(
-    data_ptr: *const u8,
-    data_len: usize,
-    out_blob: *mut Buf,
-    level: u8,
-    f32_compress: u8,
-) -> c_int {
-    if data_ptr.is_null() || out_blob.is_null() {
-        return ERR_INVALID_ARGS;
-    }
-    let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let data = unsafe { slice::from_raw_parts(data_ptr, data_len) };
-        let mzml = parse_mzml_rs(data, false).map_err(|_| ERR_PARSE)?;
-        let bin = encode(&mzml, level, f32_compress != 0);
-        write_buf(out_blob, bin.into_boxed_slice());
-        Ok(())
-    }));
-    match res {
-        Ok(Ok(())) => OK,
-        Ok(Err(code)) => code,
-        Err(_) => ERR_PANIC,
-    }
-}
-
-fn u32_slice_to_u8_box(v: &[u32]) -> Box<[u8]> {
-    let n = v.len() * 4;
-    let mut out = Vec::<u8>::with_capacity(n);
-    unsafe {
-        out.set_len(n);
-        ptr::copy_nonoverlapping(v.as_ptr() as *const u8, out.as_mut_ptr(), n);
-    }
-    out.into_boxed_slice()
 }

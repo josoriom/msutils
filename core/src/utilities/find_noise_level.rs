@@ -3,14 +3,30 @@ use std::f64;
 
 use crate::utilities::cheminfo::kmeans;
 
-pub fn find_noise_level<'a, Y>(y: Y) -> f64
+#[derive(Clone, Copy, Debug)]
+pub struct Noise {
+    pub width: usize,
+    pub intensity: f64,
+}
+
+impl Default for Noise {
+    fn default() -> Self {
+        Self {
+            width: 0,
+            intensity: 0.0,
+        }
+    }
+}
+
+pub fn find_noise_level<'a, Y>(y: Y) -> Noise
 where
     Y: IntoF64Slice<'a>,
 {
     let y = y.into_f64_slice();
-    let segments = scan_segments(y.as_ref());
+    let min_y = x_min_value(&y);
+    let segments = scan_segments(y.as_ref(), min_y);
     if segments.is_empty() {
-        return 0.0;
+        return Noise::default();
     }
 
     let params = ClusterParams::default();
@@ -23,23 +39,25 @@ where
     let noise_label = if counts[0] >= counts[1] { 0 } else { 1 };
 
     let mut max_in_noise = f64::NEG_INFINITY;
-    for (
-        i,
-        &Segment {
-            width: _,
-            intensity,
-        },
-    ) in segments.iter().enumerate()
-    {
-        if labels[i] == noise_label && intensity.is_finite() && intensity > max_in_noise {
-            max_in_noise = intensity;
+    let mut max_noise_width = 0usize;
+    for (i, &Segment { width, intensity }) in segments.iter().enumerate() {
+        if labels[i] == noise_label {
+            if intensity.is_finite() && intensity > max_in_noise {
+                max_in_noise = intensity;
+            }
+            if width > max_noise_width {
+                max_noise_width = width;
+            }
         }
     }
 
     if max_in_noise.is_finite() {
-        max_in_noise
+        Noise {
+            width: max_noise_width,
+            intensity: max_in_noise,
+        }
     } else {
-        0.0
+        Noise::default()
     }
 }
 
@@ -107,54 +125,42 @@ impl Default for ClusterParams {
 }
 
 struct Segment {
-    width: f64,
+    width: usize,
     intensity: f64,
 }
 
-fn scan_segments(y: &[f64]) -> Vec<Segment> {
-    let mut segments: Vec<Segment> = Vec::new();
+fn scan_segments(y: &[f64], threshold: f64) -> Vec<Segment> {
     if y.is_empty() {
-        return segments;
+        return Vec::new();
     }
 
-    let threshold = x_min_value(y);
+    let mut segments = Vec::with_capacity(32);
 
-    let mut in_segment = false;
-    let mut segment_width: usize = 0;
+    let mut segment_width = 0usize;
     let mut segment_intensity = f64::NEG_INFINITY;
 
-    for &intensity in y {
-        let mask_on = intensity.is_finite() && intensity.abs() > threshold;
-
-        if mask_on {
-            if !in_segment {
-                in_segment = true;
-                segment_width = 1;
-                segment_intensity = intensity;
-            } else {
-                segment_width += 1;
-                if intensity > segment_intensity {
-                    segment_intensity = intensity;
-                }
+    for &val in y {
+        if val > threshold && val.is_finite() {
+            segment_width += 1;
+            if val > segment_intensity {
+                segment_intensity = val;
             }
-        } else if in_segment {
+        } else if segment_width > 0 {
             segments.push(Segment {
-                width: segment_width as f64,
+                width: segment_width,
                 intensity: segment_intensity,
             });
-            in_segment = false;
             segment_width = 0;
             segment_intensity = f64::NEG_INFINITY;
         }
     }
 
-    if in_segment {
+    if segment_width > 0 {
         segments.push(Segment {
-            width: segment_width as f64,
+            width: segment_width,
             intensity: segment_intensity,
         });
     }
-
     segments
 }
 
@@ -163,62 +169,49 @@ fn cluster_intensities(points: &[Segment], params: ClusterParams) -> Vec<usize> 
         return Vec::new();
     }
 
-    let mut widths: Vec<f64> = Vec::with_capacity(points.len());
-    let mut intensities: Vec<f64> = Vec::with_capacity(points.len());
-    for &Segment { width, intensity } in points.iter() {
-        widths.push(log1p_safe(width));
-        intensities.push(log1p_safe(intensity));
+    let mut w_sum = 0.0;
+    let mut i_sum = 0.0;
+    let mut w_sq_sum = 0.0;
+    let mut i_sq_sum = 0.0;
+    let n = points.len() as f64;
+
+    for seg in points {
+        let lw = log1p_safe(seg.width as f64);
+        let li = log1p_safe(seg.intensity);
+        w_sum += lw;
+        i_sum += li;
+        w_sq_sum += lw * lw;
+        i_sq_sum += li * li;
     }
 
-    let meam_widths = mean(&widths);
-    let mean_intensity = mean(&intensities);
+    let m_w = w_sum / n;
+    let m_i = i_sum / n;
 
-    let width_std = match std_dev(&widths) {
-        0.0 => 1.0,
-        result => result,
-    };
-    let intensity_std = match std_dev(&intensities) {
-        0.0 => 1.0,
-        result => result,
-    };
+    // Variance = E[X^2] - (E[X])^2
+    let s_w = ((w_sq_sum / n) - (m_w * m_w)).sqrt().max(1e-6);
+    let s_i = ((i_sq_sum / n) - (m_i * m_i)).sqrt().max(1e-6);
 
-    let ClusterParams {
-        width_weight,
-        intensity_weight,
-    } = params;
+    let weighted_points: Vec<[f64; 2]> = points
+        .iter()
+        .map(|seg| {
+            let a = (log1p_safe(seg.width as f64) - m_w) / s_w;
+            let b = (log1p_safe(seg.intensity) - m_i) / s_i;
+            [a * params.width_weight, b * params.intensity_weight]
+        })
+        .collect();
 
-    let mut weighted_points: Vec<[f64; 2]> = Vec::with_capacity(points.len());
-    for i in 0..points.len() {
-        let a = (widths[i] - meam_widths) / width_std;
-        let b = (intensities[i] - mean_intensity) / intensity_std;
-        weighted_points.push([a * width_weight, b * intensity_weight]);
-    }
-
-    let seeds: Vec<Vec<f64>> = farthest_seeds(&weighted_points);
+    let seeds = farthest_seeds(&weighted_points);
     let mut centroids = kmeans(&weighted_points, seeds);
     centroids.sort_by(|a, b| a[1].total_cmp(&b[1]));
 
-    let mut result: Vec<usize> = Vec::with_capacity(weighted_points.len());
-    for p in weighted_points.iter() {
-        let mut idx = 0usize;
-        let mut best = {
-            let dx = p[0] - centroids[0][0];
-            let dy = p[1] - centroids[0][1];
-            dx * dx + dy * dy
-        };
-        for j in 1..centroids.len() {
-            let dx = p[0] - centroids[j][0];
-            let dy = p[1] - centroids[j][1];
-            let d = dx * dx + dy * dy;
-            if d < best {
-                best = d;
-                idx = j;
-            }
-        }
-        result.push(idx);
-    }
-
-    result
+    weighted_points
+        .iter()
+        .map(|p| {
+            let d0 = (p[0] - centroids[0][0]).powi(2) + (p[1] - centroids[0][1]).powi(2);
+            let d1 = (p[0] - centroids[1][0]).powi(2) + (p[1] - centroids[1][1]).powi(2);
+            if d0 < d1 { 0 } else { 1 }
+        })
+        .collect()
 }
 
 fn farthest_seeds(weighted_points: &[[f64; 2]]) -> Vec<Vec<f64>> {
@@ -246,42 +239,6 @@ fn x_min_value(array: &[f64]) -> f64 {
         }
     }
     if minimum.is_finite() { minimum } else { 0.0 }
-}
-
-fn mean(array: &[f64]) -> f64 {
-    if array.is_empty() {
-        return 0.0;
-    }
-    let mut sum = 0.0f64;
-    let mut n = 0usize;
-    for &value in array {
-        if value.is_finite() {
-            sum += value;
-            n += 1;
-        }
-    }
-    if n == 0 { 0.0 } else { sum / n as f64 }
-}
-
-fn std_dev(array: &[f64]) -> f64 {
-    if array.is_empty() {
-        return 0.0;
-    }
-    let mean_value = mean(array);
-    let mut sum_sq_diff = 0.0f64;
-    let mut n = 0usize;
-    for &value in array {
-        if value.is_finite() {
-            let diff = value - mean_value;
-            sum_sq_diff += diff * diff;
-            n += 1;
-        }
-    }
-    if n == 0 {
-        0.0
-    } else {
-        (sum_sq_diff / n as f64).sqrt()
-    }
 }
 
 fn log1p_safe(v: f64) -> f64 {

@@ -51,149 +51,29 @@ parse_mzml <- function(data) {
   .Call("C_parse_mzml", data, PACKAGE="msutils")
 }
 
+mzml_to_bin <- function(bin, level = 12L, f32_compress = FALSE) {
+  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML handle)")
+
+  if (!is.numeric(level) || length(level) != 1 || is.na(level))
+    stop("`level` must be a single number 0..22")
+  lvl <- as.integer(level)
+  if (lvl < 0L || lvl > 22L)
+    stop("`level` must be between 0 and 22 (inclusive)")
+
+  if (!is.logical(f32_compress) || length(f32_compress) != 1 || is.na(f32_compress))
+    stop("`f32_compress` must be TRUE/FALSE")
+
+  .Call("C_mzml_to_bin", bin, lvl, f32_compress, PACKAGE = "msutils")
+}
+
 bin_to_json <- function(bin) {
-  stopifnot(is.raw(bin))
+  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML handle)")
   .Call("C_bin_to_json", bin, PACKAGE="msutils")
 }
 
 bin_to_mzml <- function(bin) {
-  stopifnot(is.raw(bin))
+  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML handle)")
   .Call("C_bin_to_mzml", bin, PACKAGE = "msutils")
-}
-
-bin_to_df <- function(bin) {
-  stopifnot(is.raw(bin))
-  txt <- bin_to_json(bin)
-  x <- jsonlite::fromJSON(
-    txt,
-    simplifyVector   = TRUE,
-    simplifyDataFrame = TRUE,
-    simplifyMatrix   = TRUE
-  )
-
-  if (!is.null(x$Err) && length(x$Err) == 1L && !is.na(x$Err[1]) && nzchar(x$Err[1])) {
-    stop(x$Err[1])
-  }
-
-  root <- x
-  if (!is.null(root$Ok)) root <- root$Ok
-  if (!is.null(root$df)) root <- root$df
-
-  if (is.null(root$run)) return(root)
-
-  ensure_list_col <- function(df, col) {
-    if (!is.data.frame(df)) df <- as.data.frame(df, stringsAsFactors = FALSE)
-    n <- nrow(df)
-    if (n == 0L) {
-      df[[col]] <- I(vector("list", 0L))
-      return(df)
-    }
-    v <- df[[col]]
-
-    if (is.null(v)) {
-      v_out <- vector("list", n)
-      df[[col]] <- I(v_out)
-      return(df)
-    }
-
-    if (is.matrix(v)) {
-      v_out <- vector("list", n)
-      for (i in seq_len(n)) v_out[[i]] <- v[i, ]
-      df[[col]] <- I(v_out)
-      return(df)
-    }
-
-    if (!is.list(v)) {
-      v_out <- vector("list", n)
-      for (i in seq_len(n)) v_out[[i]] <- v[i]
-      df[[col]] <- I(v_out)
-      return(df)
-    }
-
-    df[[col]] <- I(v)
-    df
-  }
-
-  run <- root$run
-
-  chrom <- run$chromatograms
-  if (is.null(chrom)) {
-    chrom <- data.frame(
-      index          = integer(),
-      array_length   = integer(),
-      time_array     = I(list()),
-      intensity_array = I(list()),
-      id             = character(),
-      stringsAsFactors = FALSE
-    )
-  } else {
-    if (!is.data.frame(chrom)) chrom <- as.data.frame(chrom, stringsAsFactors = FALSE)
-    if (!("time_array" %in% names(chrom)) && "time" %in% names(chrom)) {
-      chrom$time_array <- chrom$time
-    }
-    if (!("intensity_array" %in% names(chrom)) && "intensity" %in% names(chrom)) {
-      chrom$intensity_array <- chrom$intensity
-    }
-    chrom <- ensure_list_col(chrom, "time_array")
-    chrom <- ensure_list_col(chrom, "intensity_array")
-
-    if (!("array_length" %in% names(chrom))) {
-      n <- nrow(chrom)
-      len <- integer(n)
-      ta <- chrom$time_array
-      for (i in seq_len(n)) {
-        v <- ta[[i]]
-        len[i] <- if (is.null(v)) NA_integer_ else length(v)
-      }
-      chrom$array_length <- len
-    }
-  }
-
-  spec <- run$spectra
-  if (is.null(spec)) {
-    spec <- data.frame(
-      index                 = integer(),
-      array_length          = integer(),
-      ms_level              = integer(),
-      polarity              = integer(),
-      spectrum_type         = integer(),
-      retention_time        = numeric(),
-      scan_window_lower_limit = numeric(),
-      scan_window_upper_limit = numeric(),
-      total_ion_current     = numeric(),
-      base_peak_intensity   = numeric(),
-      base_peak_mz          = numeric(),
-      mz_array              = I(list()),
-      intensity_array       = I(list()),
-      stringsAsFactors      = FALSE
-    )
-  } else {
-    if (!is.data.frame(spec)) spec <- as.data.frame(spec, stringsAsFactors = FALSE)
-    if (!("mz_array" %in% names(spec)) && "mz" %in% names(spec)) {
-      spec$mz_array <- spec$mz
-    }
-    if (!("intensity_array" %in% names(spec)) && "intensity" %in% names(spec)) {
-      spec$intensity_array <- spec$intensity
-    }
-    spec <- ensure_list_col(spec, "mz_array")
-    spec <- ensure_list_col(spec, "intensity_array")
-
-    if (!("array_length" %in% names(spec))) {
-      n <- nrow(spec)
-      len <- integer(n)
-      ma <- spec$mz_array
-      for (i in seq_len(n)) {
-        v <- ma[[i]]
-        len[i] <- if (is.null(v)) NA_integer_ else length(v)
-      }
-      spec$array_length <- len
-    }
-  }
-
-  run$chromatograms <- chrom
-  run$spectra <- spec
-  root$run <- run
-  root
 }
 
 get_peak <- function(
@@ -301,7 +181,8 @@ get_peaks_from_chrom <- function(
 }
 
 calculate_eic <- function(bin, targets, from, to, ppm_tolerance=20, mz_tolerance=0.005) {
-  stopifnot(is.raw(bin), is.numeric(targets), length(targets) == 1)
+  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML handle)")
+  stopifnot(is.numeric(targets), length(targets) == 1)
   .Call("C_calculate_eic",
     bin, as.numeric(targets), as.numeric(from), as.numeric(to),
     as.numeric(ppm_tolerance), as.numeric(mz_tolerance),
@@ -460,21 +341,6 @@ find_features <- function(
   df
 }
 
-convert_mzml_to_bin <- function(mzml, level = 12L, f32_compress = FALSE) {
-  if (!is.raw(mzml)) stop("`mzml` must be a raw vector (XML bytes)")
-
-  if (!is.numeric(level) || length(level) != 1 || is.na(level))
-    stop("`level` must be a single number 0..22")
-  lvl <- as.integer(level)
-  if (lvl < 0L || lvl > 22L)
-    stop("`level` must be between 0 and 22 (inclusive)")
-
-  if (!is.logical(f32_compress) || length(f32_compress) != 1 || is.na(f32_compress))
-    stop("`f32_compress` must be TRUE/FALSE")
-
-  .Call("C_convert_mzml_to_bin", mzml, lvl, f32_compress, PACKAGE = "msutils")
-}
-
 parse_bin <- function(bin) {
   if (!is.raw(bin)) stop("`bin` must be a raw vector (BINZ bytes)")
   .Call("C_parse_bin", bin, PACKAGE = "msutils")
@@ -498,4 +364,33 @@ parse_bin <- function(bin) {
   if (!is.na(maxc) && cores > maxc) stop("cores must be a single number")
 
   cores
+}
+
+bin_to_df <- function(bin) {
+  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer")
+  x <- jsonlite::fromJSON(bin_to_json(bin), simplifyVector = TRUE)
+  if (!is.null(x$Err)) stop(x$Err)
+  
+  root <- if (!is.null(x$Ok)) x$Ok else x
+  run <- root$run
+  if (is.null(run)) return(root)
+
+  process_node <- function(meta_list, data_node) {
+    if (is.null(meta_list$spectra) && is.null(meta_list$chromatograms)) return(data_node)
+    meta <- if (!is.null(meta_list$spectra)) meta_list$spectra else meta_list$chromatograms
+    df <- as.data.frame(meta, stringsAsFactors = FALSE)
+    
+    for (col in names(data_node)) {
+      if (is.list(data_node[[col]])) df[[col]] <- I(data_node[[col]])
+      else df[[col]] <- data_node[[col]]
+    }
+    df
+  }
+
+  run$spectra <- process_node(run$spectrum_list, run$spectra)
+  run$chromatograms <- process_node(run$chromatogram_list, run$chromatograms)
+
+  run$spectrum_list <- run$chromatogram_list <- root$spectra <- root$chromatograms <- NULL
+  root$run <- run
+  root
 }

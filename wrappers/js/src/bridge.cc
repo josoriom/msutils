@@ -61,10 +61,10 @@ static_assert(sizeof(CPeakPOptions) == 64, "CPeakPOptions must be 64 bytes");
 typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, MzML **);
 typedef void (*fn_free_mzml)(MzML *);
-typedef int32_t (*fn_bin_to_json)(const unsigned char *, size_t, Buf *);
-typedef int32_t (*fn_bin_to_mzml)(const unsigned char *, size_t, Buf *);
+typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *);
+typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *);
 typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakPOptions *, Buf *);
-typedef int32_t (*fn_calculate_eic)(const unsigned char *, size_t, double, double, double, double, double, Buf *, Buf *);
+typedef int32_t (*fn_calculate_eic)(const MzML *, double, double, double, double, double, Buf *, Buf *);
 typedef double (*fn_find_noise_level)(const double *, size_t);
 typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakPOptions *, size_t, Buf *);
 typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakPOptions *, size_t, Buf *);
@@ -72,7 +72,7 @@ typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const C
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, Buf *);
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
-typedef int32_t (*fn_convert_mzml_to_bin)(const unsigned char *, size_t, Buf *, uint8_t, uint8_t);
+typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
 typedef void (*fn_free_)(unsigned char *, size_t);
 
 typedef struct
@@ -89,7 +89,7 @@ typedef struct
   fn_calculate_baseline calculate_baseline;
   fn_find_features find_features;
   fn_find_feature find_feature;
-  fn_convert_mzml_to_bin convert_mzml_to_bin;
+  fn_mzml_to_bin mzml_to_bin;
   fn_parse_bin parse_bin;
   fn_free_ free_;
   fn_free_mzml free_mzml;
@@ -263,7 +263,7 @@ static int abi_load(const char *path, const char **err)
     goto fail;
   if (resolve_required((void **)&ABI.find_feature, "find_feature"))
     goto fail;
-  if (resolve_required((void **)&ABI.convert_mzml_to_bin, "convert_mzml_to_bin"))
+  if (resolve_required((void **)&ABI.mzml_to_bin, "mzml_to_bin"))
     goto fail;
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
     goto fail;
@@ -494,19 +494,12 @@ static Napi::Value ParseMzML(const Napi::CallbackInfo &info)
 static Napi::Value BinToJson(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (!ThrowIfMissing(env, (void *)ABI.bin_to_json, "bin_to_json"))
-    return env.Undefined();
-  if (!ThrowIfMissing(env, (void *)ABI.free_, "free_"))
-    return env.Undefined();
-  if (info.Length() < 1 || !info[0].IsBuffer())
-  {
-    Napi::TypeError::New(env, "expected: (Buffer bin)").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
+  MzML *handle = GetHandle(info[0]);
+  if (!handle)
+    return ThrowRc(env, "UseAfterFree/InvalidHandle", 0);
 
-  Napi::Buffer<uint8_t> bin = info[0].As<Napi::Buffer<uint8_t>>();
   OwnedBuf out;
-  int32_t rc = ABI.bin_to_json(bin.Data(), (size_t)bin.Length(), out.Out());
+  int32_t rc = ABI.bin_to_json(handle, out.Out());
   if (rc != 0)
     return ThrowRc(env, "bin_to_json", rc);
 
@@ -516,19 +509,12 @@ static Napi::Value BinToJson(const Napi::CallbackInfo &info)
 static Napi::Value BinToMzML(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (!ThrowIfMissing(env, (void *)ABI.bin_to_mzml, "bin_to_mzml"))
-    return env.Undefined();
-  if (!ThrowIfMissing(env, (void *)ABI.free_, "free_"))
-    return env.Undefined();
-  if (info.Length() < 1 || !info[0].IsBuffer())
-  {
-    Napi::TypeError::New(env, "expected: (Buffer bin)").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
+  MzML *handle = GetHandle(info[0]);
+  if (!handle)
+    return ThrowRc(env, "UseAfterFree/InvalidHandle", 0);
 
-  Napi::Buffer<uint8_t> bin = info[0].As<Napi::Buffer<uint8_t>>();
   OwnedBuf out;
-  int32_t rc = ABI.bin_to_mzml(bin.Data(), (size_t)bin.Length(), out.Out());
+  int32_t rc = ABI.bin_to_mzml(handle, out.Out());
   if (rc != 0)
     return ThrowRc(env, "bin_to_mzml", rc);
 
@@ -579,17 +565,22 @@ static Napi::Value GetPeak(const Napi::CallbackInfo &info)
 static Napi::Value CalculateEic(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (!ThrowIfMissing(env, (void *)ABI.calculate_eic, "calculate_eic"))
+
+  if (!ThrowIfMissing(env, (void *)ABI.calculate_eic, "calculate_eic") || !ThrowIfMissing(env, (void *)ABI.free_, "free_"))
     return env.Undefined();
-  if (!ThrowIfMissing(env, (void *)ABI.free_, "free_"))
-    return env.Undefined();
-  if (info.Length() < 6 || !info[0].IsBuffer())
+
+  MzML *handle = GetHandle(info[0]);
+  if (!handle)
+    return ThrowRc(env, "UseAfterFree/InvalidHandle", 0);
+
+  if (info.Length() < 6 || !info[1].IsNumber() || !info[2].IsNumber() ||
+      !info[3].IsNumber() || !info[4].IsNumber() || !info[5].IsNumber())
   {
-    Napi::TypeError::New(env, "expected: (Buffer bin, number targets, number fromRt, number toRt, number ppmTol, number mzTol)").ThrowAsJavaScriptException();
+    Napi::TypeError::New(env, "expected: (External handle, number target, number fromRt, number toRt, number ppmTol, number mzTol)")
+        .ThrowAsJavaScriptException();
     return env.Undefined();
   }
 
-  Napi::Buffer<uint8_t> bin = info[0].As<Napi::Buffer<uint8_t>>();
   double targets = info[1].As<Napi::Number>().DoubleValue();
   double from_rt = info[2].As<Napi::Number>().DoubleValue();
   double to_rt = info[3].As<Napi::Number>().DoubleValue();
@@ -599,7 +590,8 @@ static Napi::Value CalculateEic(const Napi::CallbackInfo &info)
   OwnedBuf x_buf;
   OwnedBuf y_buf;
 
-  int32_t rc = ABI.calculate_eic(bin.Data(), (size_t)bin.Length(), targets, from_rt, to_rt, ppm_tol, mz_tol, x_buf.Out(), y_buf.Out());
+  int32_t rc = ABI.calculate_eic(handle, targets, from_rt, to_rt, ppm_tol, mz_tol, x_buf.Out(), y_buf.Out());
+
   if (rc != 0)
     return ThrowRc(env, "calculate_eic", rc);
 
@@ -615,6 +607,7 @@ static Napi::Value CalculateEic(const Napi::CallbackInfo &info)
   Napi::Object out = Napi::Object::New(env);
   out.Set("x", X);
   out.Set("y", Y);
+
   return out;
 }
 
@@ -828,31 +821,20 @@ static Napi::Value FindFeature(const Napi::CallbackInfo &info)
   return TakeUtf8String(env, out.Out());
 }
 
-static Napi::Value ConvertMzmlToBin(const Napi::CallbackInfo &info)
+static Napi::Value MzmlToBin(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (!ThrowIfMissing(env, (void *)ABI.convert_mzml_to_bin, "convert_mzml_to_bin"))
-    return env.Undefined();
-  if (!ThrowIfMissing(env, (void *)ABI.free_, "free_"))
-    return env.Undefined();
+  MzML *handle = GetHandle(info[0]);
+  if (!handle)
+    return ThrowRc(env, "UseAfterFree/InvalidHandle", 0);
 
-  if (info.Length() < 3 || !info[0].IsBuffer() || !info[1].IsNumber() || !info[2].IsNumber())
-  {
-    Napi::TypeError::New(env, "expected: (Buffer mzmlXml, number level, number f32Compress)").ThrowAsJavaScriptException();
-    return env.Undefined();
-  }
-
-  Napi::Buffer<uint8_t> xml = info[0].As<Napi::Buffer<uint8_t>>();
   int32_t lv = info[1].As<Napi::Number>().Int32Value();
   int32_t c = info[2].As<Napi::Number>().Int32Value();
 
-  uint8_t level = (uint8_t)lv;
-  uint8_t f32_compress = (c != 0) ? 1 : 0;
-
   OwnedBuf out;
-  int32_t rc = ABI.convert_mzml_to_bin(xml.Data(), (size_t)xml.Length(), out.Out(), level, f32_compress);
+  int32_t rc = ABI.mzml_to_bin(handle, out.Out(), (uint8_t)lv, (uint8_t)(c != 0 ? 1 : 0));
   if (rc != 0)
-    return ThrowRc(env, "convert_mzml_to_bin", rc);
+    return ThrowRc(env, "mzml_to_bin", rc);
 
   return TakeBuffer(env, out.Out());
 }
@@ -893,7 +875,7 @@ static Napi::Object Init(Napi::Env env, Napi::Object exports)
   exports.Set("calculateBaseline", Napi::Function::New(env, CalculateBaseline));
   exports.Set("findFeatures", Napi::Function::New(env, FindFeatures));
   exports.Set("findFeature", Napi::Function::New(env, FindFeature));
-  exports.Set("convertMzmlToBin", Napi::Function::New(env, ConvertMzmlToBin));
+  exports.Set("mzmlToBin", Napi::Function::New(env, MzmlToBin));
   exports.Set("parseBin", Napi::Function::New(env, ParseBin));
   exports.Set("dispose", Napi::Function::New(env, DisposeMzML));
   return exports;

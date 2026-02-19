@@ -48,17 +48,7 @@ pub struct Eic {
     pub y: Vec<f64>,
 }
 
-pub fn calculate_eic_from_bin1(
-    bin1: &[u8],
-    target_mass: &f64,
-    from_to: FromTo,
-    options: EicOptions,
-) -> Result<Eic, &'static str> {
-    let mzml = decode(bin1).map_err(|_| "decode BIN1 failed")?;
-    calculate_eic_from_mzml(&mzml, target_mass, from_to, options)
-}
-
-pub fn calculate_eic_from_mzml(
+pub fn calculate_eic(
     mzml: &MzML,
     target_mass: &f64,
     from_to: FromTo,

@@ -46,10 +46,10 @@ typedef struct
 } CPeakPOptions;
 
 typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
-typedef int32_t (*fn_bin_to_json)(const unsigned char *, size_t, Buf *);
-typedef int32_t (*fn_bin_to_mzml)(const unsigned char *, size_t, Buf *);
+typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *); // typedef int32_t (*fn_bin_to_json)(const unsigned char *, size_t, Buf *);
+typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *); // typedef int32_t (*fn_bin_to_mzml)(const unsigned char *, size_t, Buf *);
 typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakPOptions *, Buf *);
-typedef int32_t (*fn_calculate_eic)(const unsigned char *, size_t, double, double, double, double, double, Buf *, Buf *);
+typedef int32_t (*fn_calculate_eic)(const MzML *, double, double, double, double, double, Buf *, Buf *); // typedef int32_t (*fn_calculate_eic)(const unsigned char *, size_t, double, double, double, double, double, Buf *, Buf *);
 typedef float (*fn_find_noise_level)(const float *, size_t);
 typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakPOptions *, size_t, Buf *);
 typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakPOptions *, size_t, Buf *);
@@ -57,7 +57,7 @@ typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const C
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, Buf *);
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
-typedef int32_t (*fn_convert_mzml_to_bin)(const unsigned char *, size_t, Buf *, uint8_t, uint8_t);
+typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t); // typedef int32_t (*fn_convert_mzml_to_bin)(const unsigned char *, size_t, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, MzML **);
 typedef void (*fn_free_)(unsigned char *, size_t);
 typedef void (*fn_free_mzml)(MzML *);
@@ -77,7 +77,7 @@ typedef struct
   fn_find_features find_features;
   fn_free_ free_;
   fn_find_feature find_feature;
-  fn_convert_mzml_to_bin convert_mzml_to_bin;
+  fn_mzml_to_bin mzml_to_bin;
   fn_parse_bin parse_bin;
   fn_free_mzml free_mzml;
 } abi_type;
@@ -134,7 +134,7 @@ int abi_load(const char *path, const char **err)
     goto fail;
   if (resolve_required((void **)&ABI.find_feature, "find_feature"))
     goto fail;
-  if (resolve_required((void **)&ABI.convert_mzml_to_bin, "convert_mzml_to_bin"))
+  if (resolve_required((void **)&ABI.mzml_to_bin, "mzml_to_bin"))
     goto fail;
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
     goto fail;
@@ -345,12 +345,11 @@ SEXP C_parse_mzml(SEXP data)
 
 SEXP C_bin_to_json(SEXP bin)
 {
-  if (TYPEOF(bin) != RAWSXP)
-    error("bin");
+  MzML *handle = GetHandle(bin);
   REQUIRE_BOUND(ABI.bin_to_json, "bin_to_json");
   REQUIRE_BOUND(ABI.free_, "free_");
   Buf out = (Buf){0};
-  int code = ABI.bin_to_json((const unsigned char *)RAW(bin), (size_t)XLENGTH(bin), &out);
+  int code = ABI.bin_to_json(handle, &out);
   die_code("bin_to_json", code);
   SEXP res = mk_string_len(out.ptr, out.len);
   ABI.free_(out.ptr, out.len);
@@ -359,15 +358,41 @@ SEXP C_bin_to_json(SEXP bin)
 
 SEXP C_bin_to_mzml(SEXP bin)
 {
-  if (TYPEOF(bin) != RAWSXP)
-    error("bin");
+  MzML *handle = GetHandle(bin);
   REQUIRE_BOUND(ABI.bin_to_mzml, "bin_to_mzml");
   REQUIRE_BOUND(ABI.free_, "free_");
   Buf out = (Buf){0};
-  int code = ABI.bin_to_mzml((const unsigned char *)RAW(bin), (size_t)XLENGTH(bin), &out);
+  int code = ABI.bin_to_mzml(handle, &out);
   die_code("bin_to_mzml", code);
   SEXP res = mk_string_len(out.ptr, out.len);
   ABI.free_(out.ptr, out.len);
+  return res;
+}
+
+SEXP C_mzml_to_bin(SEXP bin, SEXP level, SEXP f32_compress)
+{
+  MzML *handle = GetHandle(bin);
+  if (!(TYPEOF(level) == INTSXP || TYPEOF(level) == REALSXP) || LENGTH(level) != 1)
+    error("level must be a scalar number");
+  int lv = asInteger(level);
+  if (lv < 0 || lv > 22)
+    error("level must be in [0,22]");
+  int fc = asLogical(f32_compress);
+  if (fc == NA_LOGICAL)
+    error("f32_compress must be TRUE/FALSE");
+  REQUIRE_BOUND(ABI.mzml_to_bin, "mzml_to_bin");
+  REQUIRE_BOUND(ABI.free_, "free_");
+  Buf out = (Buf){0};
+  int32_t code = ABI.mzml_to_bin(
+      handle,
+      &out,
+      (uint8_t)lv,
+      (uint8_t)(fc ? 1 : 0));
+  die_code("mzml_to_bin", code);
+  SEXP res = PROTECT(Rf_allocVector(RAWSXP, (R_xlen_t)out.len));
+  memcpy(RAW(res), out.ptr, out.len);
+  ABI.free_(out.ptr, out.len);
+  UNPROTECT(1);
   return res;
 }
 
@@ -515,8 +540,7 @@ SEXP C_get_peaks_from_chrom(SEXP bin, SEXP idxs, SEXP rts, SEXP ranges, SEXP opt
 
 SEXP C_calculate_eic(SEXP bin, SEXP targets, SEXP from, SEXP to, SEXP ppm_tol, SEXP mz_tol)
 {
-  if (TYPEOF(bin) != RAWSXP)
-    error("bin");
+  MzML *handle = GetHandle(bin);
   if ((TYPEOF(targets) != REALSXP && TYPEOF(targets) != INTSXP) || LENGTH(targets) != 1)
     error("targets");
   REQUIRE_BOUND(ABI.calculate_eic, "calculate_eic");
@@ -524,7 +548,7 @@ SEXP C_calculate_eic(SEXP bin, SEXP targets, SEXP from, SEXP to, SEXP ppm_tol, S
   double t = asReal(targets);
   Buf bx = (Buf){0}, by = (Buf){0};
   int code = ABI.calculate_eic(
-      (const unsigned char *)RAW(bin), (size_t)XLENGTH(bin),
+      handle,
       t, asReal(from), asReal(to), asReal(ppm_tol), asReal(mz_tol),
       &bx, &by);
   die_code("calculate_eic", code);
@@ -682,40 +706,6 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
   die_code("find_feature", code);
   SEXP res = mk_string_len(out.ptr, out.len);
   ABI.free_(out.ptr, out.len);
-  return res;
-}
-
-SEXP C_convert_mzml_to_bin(SEXP xml, SEXP level, SEXP f32_compress)
-{
-  if (TYPEOF(xml) != RAWSXP)
-    error("xml must be a raw vector");
-  if (!(TYPEOF(level) == INTSXP || TYPEOF(level) == REALSXP) || LENGTH(level) != 1)
-    error("level must be a scalar number");
-  int lv = asInteger(level);
-  if (lv < 0 || lv > 22)
-    error("level must be in [0,22]");
-
-  int fc = asLogical(f32_compress);
-  if (fc == NA_LOGICAL)
-    error("f32_compress must be TRUE/FALSE");
-
-  REQUIRE_BOUND(ABI.convert_mzml_to_bin, "convert_mzml_to_bin");
-  REQUIRE_BOUND(ABI.free_, "free_");
-
-  Buf out = (Buf){0};
-  int32_t code = ABI.convert_mzml_to_bin(
-      (const unsigned char *)RAW(xml),
-      (size_t)XLENGTH(xml),
-      &out,
-      (uint8_t)lv,
-      (uint8_t)(fc ? 1 : 0));
-
-  die_code("convert_mzml_to_bin", code);
-
-  SEXP res = PROTECT(Rf_allocVector(RAWSXP, (R_xlen_t)out.len));
-  memcpy(RAW(res), out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
-  UNPROTECT(1);
   return res;
 }
 

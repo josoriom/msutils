@@ -1,5 +1,5 @@
 pub mod calculate_eic;
-pub use calculate_eic::{Eic, EicOptions, calculate_eic_from_bin1, calculate_eic_from_mzml};
+pub use calculate_eic::{Eic, EicOptions, calculate_eic};
 
 pub mod find_features;
 pub use find_features::find_features;

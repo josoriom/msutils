@@ -189,12 +189,21 @@ export class MzMlFile {
   constructor(pointer: any) {
     this._pointer = pointer;
   }
-
   dispose() {
     if (this._pointer) {
       native.dispose(this._pointer);
       this._pointer = null;
     }
+  }
+
+  toJson(): any {
+    return camelizeKeys(JSON.parse(native.binToJson(this._pointer)));
+  }
+  toMzml(): string {
+    return native.binToMzML(this._pointer);
+  }
+  toBin(level = 12, f32Compress = false): Buffer {
+    return native.mzmlToBin(this._pointer, level, f32Compress);
   }
 }
 
@@ -208,27 +217,40 @@ export function parseBin(bin: BinaryInput): MzMlFile {
   return new MzMlFile(pointer);
 }
 
-export function binToJson(bin: BinaryInput): string {
-  const s = native.binToJson(toBuffer(bin)) as string;
+export function binToJson(file: MzMlFile): string {
+  if (!(file instanceof MzMlFile) || !file._pointer)
+    throw new Error("binToJson: Invalid MzMlFile handle");
+
+  const s = native.binToJson(file._pointer) as string;
   const obj = JSON.parse(s);
-  const camel = camelizeKeys(obj);
-  return JSON.stringify(camel);
+  return JSON.stringify(camelizeKeys(obj));
 }
 
-export function convertBinToMzml(bin: BinaryInput): string {
-  return native.binToMzML(toBuffer(bin)) as string;
+export function convertBinToMzml(file: MzMlFile): string {
+  if (!(file instanceof MzMlFile) || !file._pointer)
+    throw new Error("convertBinToMzml: Invalid MzMlFile handle");
+
+  return native.binToMzML(file._pointer) as string;
 }
 
 export function calculateEic(
-  bin: BinaryInput,
+  file: MzMlFile,
   targets: number,
   from: number,
   to: number,
   ppmTol = 20,
   mzTol = 0.005,
 ) {
-  const b = toBuffer(bin);
-  return native.calculateEic(b, +targets, from, to, ppmTol, mzTol) as {
+  if (!(file instanceof MzMlFile) || !file._pointer)
+    throw new Error("Invalid MzMlFile");
+  return native.calculateEic(
+    file._pointer,
+    +targets,
+    from,
+    to,
+    ppmTol,
+    mzTol,
+  ) as {
     x: Float64Array;
     y: Float64Array;
   };
@@ -526,10 +548,14 @@ export function findFeature(
   return parseJson<FoundFeature[]>(s);
 }
 
-export function convertMzmlToBin(
-  data: BinaryInput,
+export function mzmlToBin(
+  file: MzMlFile,
   options: { level?: number; f32Compress?: boolean } = {},
 ): Buffer {
+  if (!(file instanceof MzMlFile) || !file._pointer) {
+    throw new Error("convertMzmlToBin: Invalid MzMlFile handle");
+  }
+
   const { level = 5, f32Compress = false } = options;
 
   if (
@@ -548,11 +574,7 @@ export function convertMzmlToBin(
     throw new TypeError("convertMzmlToBin: f32Compress must be a boolean");
   }
 
-  return native.convertMzmlToBin(
-    toBuffer(data),
-    level,
-    f32Compress ? 1 : 0,
-  ) as Buffer;
+  return native.mzmlToBin(file._pointer, level, f32Compress ? 1 : 0) as Buffer;
 }
 
 module.exports = {
@@ -568,7 +590,7 @@ module.exports = {
   calculateBaseline,
   findFeatures,
   findFeature,
-  convertMzmlToBin,
+  mzmlToBin,
   parseBin,
 };
 

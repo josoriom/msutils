@@ -116,10 +116,10 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
         y: y_center,
     };
 
-    let noise = if auto_noise {
-        find_noise_level(&normalized_data.y)
+    let noise: f64 = if auto_noise {
+        find_noise_level(&normalized_data.y).intensity
     } else {
-        filter_opts.noise.unwrap_or(0.0).max(0.0)
+        filter_opts.noise.unwrap_or_default()
     };
 
     let positions = scan_for_peaks(&normalized_data);
