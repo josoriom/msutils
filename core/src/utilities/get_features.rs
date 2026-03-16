@@ -21,8 +21,6 @@ use octo::MzML;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use octo::{decoder::decode, parse_mzml};
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use rayon::prelude::*;
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use std::{fs, time::Instant};
 
 #[derive(Debug)]
@@ -256,7 +254,7 @@ pub fn get_features(
     let clusters = clusterer.cluster(tagged);
 
     let results: Vec<ConsensusFeature> = clusters
-        .into_par_iter()
+        .into_iter()
         .filter_map(|cluster| build_consensus_feature(cluster, &datasets, &alignment_config))
         .collect();
 
@@ -270,6 +268,7 @@ pub fn get_features(
     .into_iter()
     .map(|(rt, mz, intensity)| (rt.to_bits(), mz.to_bits(), intensity.to_bits()))
     .collect();
+
     Ok(results
         .into_iter()
         .filter(|f| survivors.contains(&(f.rt.to_bits(), f.mz.to_bits(), f.intensity.to_bits())))
@@ -323,7 +322,7 @@ fn detect_features_per_sample(
     cores: usize,
 ) -> Vec<SampleDataset> {
     samples
-        .into_par_iter()
+        .into_iter()
         .enumerate()
         .map(|(idx, (name, mzml))| {
             let start = Instant::now();

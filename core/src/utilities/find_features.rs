@@ -195,11 +195,35 @@ pub fn find_features(
         return Err(FeatureError::NoScans);
     }
 
-    let masses = collect_candidate_masses(&scans, &time, &grid, &config, cores)?;
-    let masses = deduplicate_masses(masses, config.eic_options);
-    let features = extract_features_from_masses(&masses, &scans, &time, &config, cores);
-    let features = deduplicate_features(features, config.eic_options, 0.05);
-    Ok(sort_features(features))
+    run_with_cores(cores, || {
+        let masses = collect_candidate_masses(&scans, &time, &grid, &config)?;
+        let masses = deduplicate_masses(masses, config.eic_options);
+        let features = extract_features_from_masses(&masses, &scans, &time, &config);
+        let features = deduplicate_features(features, config.eic_options, 0.05);
+        Ok(sort_features(features))
+    })
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+fn run_with_cores<F, T>(cores: usize, f: F) -> T
+where
+    F: FnOnce() -> T + Send,
+    T: Send,
+{
+    ThreadPoolBuilder::new()
+        .num_threads(cores.max(1))
+        .thread_name(|i| format!("ff-{}", i))
+        .build()
+        .expect("failed to build rayon pool")
+        .install(f)
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+fn run_with_cores<F, T>(_cores: usize, f: F) -> T
+where
+    F: FnOnce() -> T,
+{
+    f()
 }
 
 fn build_coarse_opts(config: &FindFeaturesConfig) -> FindPeaksOptions {
@@ -238,7 +262,6 @@ fn collect_candidate_masses(
     time: &[f64],
     grid: &[f64],
     config: &FindFeaturesConfig,
-    cores: usize,
 ) -> Result<Vec<f64>, FeatureError> {
     let coarse_opts = build_coarse_opts(config);
 
@@ -251,24 +274,12 @@ fn collect_candidate_masses(
         .collect();
 
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    let masses: Vec<f64> = ThreadPoolBuilder::new()
-        .num_threads(cores.max(1))
-        .thread_name(|i| format!("ff-{}", i))
-        .build()
-        .expect("failed to build rayon pool")
-        .install(|| {
-            grid.par_iter()
-                .filter_map(|&mz| {
-                    process_single_grid_point(
-                        scans,
-                        time,
-                        mz,
-                        &coarse_opts,
-                        config.scan_eic_options,
-                    )
-                })
-                .collect()
-        });
+    let masses: Vec<f64> = grid
+        .par_iter()
+        .filter_map(|&mz| {
+            process_single_grid_point(scans, time, mz, &coarse_opts, config.scan_eic_options)
+        })
+        .collect();
 
     if masses.is_empty() {
         return Err(FeatureError::NoCandidateMasses);
@@ -346,7 +357,6 @@ fn extract_features_from_masses(
     scans: &[CentroidScan],
     time: &[f64],
     config: &FindFeaturesConfig,
-    cores: usize,
 ) -> Vec<Feature> {
     let final_w = config
         .find_peaks
@@ -363,21 +373,14 @@ fn extract_features_from_masses(
         .collect();
 
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    let features: Vec<Feature> = ThreadPoolBuilder::new()
-        .num_threads(cores.max(1))
-        .thread_name(|i| format!("ff-{}", i))
-        .build()
-        .expect("failed to build rayon pool")
-        .install(|| {
-            masses
-                .par_iter()
-                .map(|&mz| extract_peaks_for_mass(mz, scans, time, config, final_w))
-                .reduce(Vec::new, |mut a, mut b| {
-                    if !b.is_empty() {
-                        a.append(&mut b);
-                    }
-                    a
-                })
+    let features: Vec<Feature> = masses
+        .par_iter()
+        .map(|&mz| extract_peaks_for_mass(mz, scans, time, config, final_w))
+        .reduce(Vec::new, |mut a, mut b| {
+            if !b.is_empty() {
+                a.append(&mut b);
+            }
+            a
         });
 
     features
