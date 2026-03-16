@@ -73,6 +73,8 @@ typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_
 typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, Buf *);
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
+typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakPOptions *, int32_t, Buf *);
+typedef int32_t (*fn_collect_scans)(const MzML *, double, double, uint8_t, int32_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 
 typedef struct
@@ -93,6 +95,8 @@ typedef struct
   fn_parse_bin parse_bin;
   fn_free_ free_;
   fn_free_mzml free_mzml;
+  fn_get_features get_features;
+  fn_collect_scans collect_scans;
 } msabi_t;
 
 static msabi_t ABI{};
@@ -266,6 +270,10 @@ static int abi_load(const char *path, const char **err)
   if (resolve_required((void **)&ABI.mzml_to_bin, "mzml_to_bin"))
     goto fail;
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
+    goto fail;
+  if (resolve_required((void **)&ABI.get_features, "get_features"))
+    goto fail;
+  if (resolve_required((void **)&ABI.collect_scans, "collect_scans"))
     goto fail;
 
   ABI.find_noise_level = (fn_find_noise_level)DLSYM(LIB_HANDLE, "find_noise_level");
@@ -860,6 +868,97 @@ static Napi::Value ParseBin(const Napi::CallbackInfo &info)
   return Napi::External<MzMLWrapper>::New(env, w, FinalizeMzML);
 }
 
+static Napi::Value GetFeatures(const Napi::CallbackInfo &info)
+{
+  Napi::Env env = info.Env();
+
+  if (info.Length() < 14 || !info[0].IsString()) // was 13, now 14
+  {
+    Napi::TypeError::New(env, "Invalid arguments for getFeatures").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  std::string dir_path = info[0].As<Napi::String>().Utf8Value();
+
+  double from = info[1].As<Napi::Number>().DoubleValue();
+  double to = info[2].As<Napi::Number>().DoubleValue();
+  double eic_ppm = info[3].As<Napi::Number>().DoubleValue();
+  double eic_mz = info[4].As<Napi::Number>().DoubleValue();
+  double g_start = info[5].As<Napi::Number>().DoubleValue();
+  double g_end = info[6].As<Napi::Number>().DoubleValue();
+  double g_step = info[7].As<Napi::Number>().DoubleValue();
+  double group_ppm = info[8].As<Napi::Number>().DoubleValue();
+  double group_da = info[9].As<Napi::Number>().DoubleValue();
+  double group_rt = info[10].As<Napi::Number>().DoubleValue();
+  int32_t prevalence = info[11].As<Napi::Number>().Int32Value();
+
+  CPeakPOptions opts;
+  const CPeakPOptions *p_opts = ReadOptionsBuf(info[12], &opts);
+
+  int32_t cores = info[13].As<Napi::Number>().Int32Value();
+
+  OwnedBuf out;
+  int32_t rc = ABI.get_features(
+      dir_path.c_str(),
+      from, to,
+      eic_ppm, eic_mz,
+      g_start, g_end, g_step,
+      group_ppm, group_da, group_rt,
+      prevalence,
+      p_opts,
+      cores,
+      out.Out());
+
+  if (rc != 0)
+    return ThrowRc(env, "get_features", rc);
+
+  return TakeUtf8String(env, out.Out());
+}
+
+static Napi::Value CollectScans(const Napi::CallbackInfo &info)
+{
+  Napi::Env env = info.Env();
+  if (!ThrowIfMissing(env, (void *)ABI.collect_scans, "collect_scans"))
+    return env.Undefined();
+
+  MzML *handle = GetHandle(info[0]);
+  if (!handle)
+    return ThrowRc(env, "UseAfterFree/InvalidHandle", 0);
+
+  if (info.Length() < 4 || !info[1].IsNumber() || !info[2].IsNumber() || !info[3].IsNumber())
+  {
+    Napi::TypeError::New(env, "expected: (External handle, number fromRt, number toRt, number level, boolean|number includeMetadata?)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  double from_rt = info[1].As<Napi::Number>().DoubleValue();
+  double to_rt = info[2].As<Napi::Number>().DoubleValue();
+  uint8_t level = (uint8_t)info[3].As<Napi::Number>().Uint32Value();
+
+  int32_t include_metadata = 0;
+  if (info.Length() > 4 && !info[4].IsUndefined() && !info[4].IsNull())
+  {
+    if (info[4].IsBoolean())
+      include_metadata = info[4].As<Napi::Boolean>().Value() ? 1 : 0;
+    else if (info[4].IsNumber())
+      include_metadata = info[4].As<Napi::Number>().Int32Value() != 0 ? 1 : 0;
+    else
+    {
+      Napi::TypeError::New(env, "includeMetadata must be a boolean or number")
+          .ThrowAsJavaScriptException();
+      return env.Undefined();
+    }
+  }
+
+  OwnedBuf out;
+  int32_t rc = ABI.collect_scans(handle, from_rt, to_rt, level, include_metadata, out.Out());
+  if (rc != 0)
+    return ThrowRc(env, "collect_scans", rc);
+
+  return TakeUtf8String(env, out.Out());
+}
+
 static Napi::Object Init(Napi::Env env, Napi::Object exports)
 {
   exports.Set("bind", Napi::Function::New(env, Bind));
@@ -878,6 +977,8 @@ static Napi::Object Init(Napi::Env env, Napi::Object exports)
   exports.Set("mzmlToBin", Napi::Function::New(env, MzmlToBin));
   exports.Set("parseBin", Napi::Function::New(env, ParseBin));
   exports.Set("dispose", Napi::Function::New(env, DisposeMzML));
+  exports.Set("getFeatures", Napi::Function::New(env, GetFeatures));
+  exports.Set("collectScans", Napi::Function::New(env, CollectScans));
   return exports;
 }
 

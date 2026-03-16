@@ -2,13 +2,13 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "module": "ES2022",
-    "outDir": "lib-esm",
-    "declaration": false
+    "moduleResolution": "Node",
+    "target": "ES2022",
+    "strict": false,
+    "skipLibCheck": true
   },
   "include": [
-    "src/index.ts",
     "src/index-wasm.ts",
-    "src/makeApi.ts",
     "src/types/**/*.d.ts"
   ]
 }

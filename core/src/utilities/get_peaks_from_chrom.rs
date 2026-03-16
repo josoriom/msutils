@@ -1,3 +1,6 @@
+use octo::{BinaryData, BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML};
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::{ThreadPoolBuilder, prelude::*};
 
 use crate::utilities::{
@@ -6,8 +9,6 @@ use crate::utilities::{
     get_peak::get_peak,
     structs::{ChromRoi, DataXY, Roi},
 };
-
-use octo::{BinaryData, BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML};
 
 const ACC_TIME_ARRAY: &str = "MS:1000595";
 const ACC_INTENSITY_ARRAY: &str = "MS:1000515";
@@ -74,9 +75,16 @@ pub fn get_peaks_from_chrom(
         compute_one(ch_index, ch.id.as_str(), x, y, roi, ts, &opts)
     };
 
-    if cores <= 1 || items.len() < 2 {
-        Some(items.iter().map(f).collect())
-    } else {
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    {
+        return Some(items.iter().map(f).collect());
+    }
+
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    {
+        if cores <= 1 || items.len() < 2 {
+            return Some(items.iter().map(f).collect());
+        }
         let pool = ThreadPoolBuilder::new().num_threads(cores).build().ok()?;
         Some(pool.install(|| items.par_iter().map(f).collect()))
     }
@@ -119,7 +127,6 @@ fn bda_to_f64(bda: &BinaryDataArray) -> Vec<f64> {
     let Some(bin) = bda.binary.as_ref() else {
         return Vec::new();
     };
-
     match bin {
         BinaryData::F64(v) => v.clone(),
         BinaryData::F32(v) => v.iter().map(|&x| x as f64).collect(),
@@ -135,7 +142,6 @@ fn bda_to_f32(bda: &BinaryDataArray) -> Vec<f32> {
     let Some(bin) = bda.binary.as_ref() else {
         return Vec::new();
     };
-
     match bin {
         BinaryData::F16(v) => v.iter().map(|&x| x as f32).collect(),
         BinaryData::F32(v) => v.clone(),

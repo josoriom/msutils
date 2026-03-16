@@ -46,10 +46,10 @@ typedef struct
 } CPeakPOptions;
 
 typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
-typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *); // typedef int32_t (*fn_bin_to_json)(const unsigned char *, size_t, Buf *);
-typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *); // typedef int32_t (*fn_bin_to_mzml)(const unsigned char *, size_t, Buf *);
+typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *);
+typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *);
 typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakPOptions *, Buf *);
-typedef int32_t (*fn_calculate_eic)(const MzML *, double, double, double, double, double, Buf *, Buf *); // typedef int32_t (*fn_calculate_eic)(const unsigned char *, size_t, double, double, double, double, double, Buf *, Buf *);
+typedef int32_t (*fn_calculate_eic)(const MzML *, double, double, double, double, double, Buf *, Buf *);
 typedef float (*fn_find_noise_level)(const float *, size_t);
 typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakPOptions *, size_t, Buf *);
 typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakPOptions *, size_t, Buf *);
@@ -57,8 +57,10 @@ typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const C
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, Buf *);
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
-typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t); // typedef int32_t (*fn_convert_mzml_to_bin)(const unsigned char *, size_t, Buf *, uint8_t, uint8_t);
+typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, MzML **);
+typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakPOptions *, int32_t, Buf *);
+typedef int32_t (*fn_collect_scans)(const MzML *, double, double, uint8_t, int32_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 typedef void (*fn_free_mzml)(MzML *);
 
@@ -80,6 +82,8 @@ typedef struct
   fn_mzml_to_bin mzml_to_bin;
   fn_parse_bin parse_bin;
   fn_free_mzml free_mzml;
+  fn_get_features get_features;
+  fn_collect_scans collect_scans;
 } abi_type;
 
 static DLIB abi_handle = NULL;
@@ -139,6 +143,10 @@ int abi_load(const char *path, const char **err)
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
     goto fail;
   if (resolve_required((void **)&ABI.free_mzml, "free_mzml"))
+    goto fail;
+  if (resolve_required((void **)&ABI.get_features, "get_features"))
+    goto fail;
+  if (resolve_required((void **)&ABI.collect_scans, "collect_scans"))
     goto fail;
   ABI.free_ = (fn_free_)DLSYM(abi_handle, "free_");
   if (!ABI.free_)
@@ -723,4 +731,68 @@ SEXP C_parse_bin(SEXP bin)
   R_RegisterCFinalizerEx(ptr, finalize_mzml, TRUE);
   UNPROTECT(1);
   return ptr;
+}
+
+SEXP C_collect_scans(SEXP bin, SEXP from_time, SEXP to_time, SEXP level, SEXP include_metadata)
+{
+  MzML *handle = GetHandle(bin);
+  REQUIRE_BOUND(ABI.collect_scans, "collect_scans");
+  REQUIRE_BOUND(ABI.free_, "free_");
+
+  uint8_t lv = (uint8_t)asInteger(level);
+
+  int32_t meta = 0;
+  if (include_metadata != R_NilValue)
+  {
+    if (TYPEOF(include_metadata) == LGLSXP)
+      meta = (asLogical(include_metadata) == TRUE) ? 1 : 0;
+    else
+      meta = asInteger(include_metadata) != 0 ? 1 : 0;
+  }
+
+  Buf out = (Buf){0};
+  int code = ABI.collect_scans(handle, asReal(from_time), asReal(to_time), lv, meta, &out);
+  die_code("collect_scans", code);
+  SEXP res = mk_string_len(out.ptr, out.len);
+  ABI.free_(out.ptr, out.len);
+  return res;
+}
+
+SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
+                    SEXP eic_ppm_tol, SEXP eic_mz_tol,
+                    SEXP grid_start, SEXP grid_end, SEXP grid_step,
+                    SEXP group_ppm_tol, SEXP group_da_tol, SEXP group_rt_tol,
+                    SEXP prevalence, SEXP options, SEXP cores)
+{
+  if (TYPEOF(dir_path) != STRSXP || LENGTH(dir_path) != 1)
+    error("dir_path must be a length-1 character string");
+  REQUIRE_BOUND(ABI.get_features, "get_features");
+  REQUIRE_BOUND(ABI.free_, "free_");
+
+  const char *path = CHAR(STRING_ELT(dir_path, 0));
+
+  int ncores = asInteger(cores);
+  if (ncores < 1)
+    ncores = 1;
+
+  CPeakPOptions opts;
+  const CPeakPOptions *opt_ptr = NULL;
+  as_opts_ptr(options, &opts, &opt_ptr);
+
+  Buf out = (Buf){0};
+  int code = ABI.get_features(
+      path,
+      asReal(from_time), asReal(to_time),
+      asReal(eic_ppm_tol), asReal(eic_mz_tol),
+      asReal(grid_start), asReal(grid_end), asReal(grid_step),
+      asReal(group_ppm_tol), asReal(group_da_tol), asReal(group_rt_tol),
+      asInteger(prevalence),
+      opt_ptr,
+      (int32_t)ncores,
+      &out);
+
+  die_code("get_features", code);
+  SEXP res = mk_string_len(out.ptr, out.len);
+  ABI.free_(out.ptr, out.len);
+  return res;
 }

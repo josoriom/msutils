@@ -8,13 +8,18 @@
   "types": "./lib/index-node.d.ts",
   "exports": {
     ".": {
-      "types": "./lib/index-node.d.ts",
-      "node": {
-        "import": "./lib/index-node.js",
-        "require": "./lib/index-node.js"
+      "browser": {
+        "types": "./dist/index-wasm.d.ts",
+        "default": "./dist/msutils.js"
       },
-      "browser": "./dist/index-wasm.js",
-      "default": "./lib/index-node.js"
+      "require": {
+        "types": "./lib/index-node.d.ts",
+        "default": "./lib/index-node.js"
+      },
+      "default": {
+        "types": "./lib/index-node.d.ts",
+        "default": "./lib/index-node.js"
+      }
     }
   },
   "files": [
@@ -29,23 +34,16 @@
     "node": ">=18"
   },
   "scripts": {
-    "build-cdn": "npm run tsc-esm && npx webpack && cp ../../artifacts/wasm/msutils.wasm dist/msutils.wasm",
-    "install": "node-gyp rebuild",
-    "build": "npm run tsc",
-    "check-types": "tsc --noEmit",
     "clean": "rimraf dist lib types",
-    "eslint": "eslint src --cache",
-    "eslint-fix": "npm run eslint -- --fix",
-    "prepack": "npm run tsc",
+    "check-types": "tsc --noEmit",
+    "prepack": "npm run clean && npm run build && npm run tsc-cjs",
+    "build": "webpack --config webpack.config.cjs && cp ./native/msutils.wasm dist/msutils.wasm && tsc --project tsconfig.wasm-types.json",
+    "tsc-cjs": "tsc --project tsconfig.cjs.json && node -e \"const fs=require('fs');fs.mkdirSync('lib',{recursive:true});fs.writeFileSync('lib/package.json','{\\n  \\\"type\\\": \\\"commonjs\\\"\\n}\\n')\"",
     "prettier": "prettier --check src",
     "prettier-write": "prettier --write src",
     "test": "npm run check-types && npm run eslint && npm run prettier && npm run test-only",
     "test-coverage": "npm run test-only -- --coverage",
-    "test-only": "jest",
-    "tsc": "rimraf dist lib lib-esm types && npm run tsc-cjs",
-    "tsc-cjs": "tsc --project tsconfig.cjs.json && node -e \"const fs=require('fs');fs.mkdirSync('lib',{recursive:true});fs.writeFileSync('lib/package.json','{\\n  \\\"type\\\": \\\"commonjs\\\"\\n}\\n')\"",
-    "tsc-esm": "tsc --project tsconfig.esm.json",
-    "copy-wasm": "cp ../../artifacts/wasm/msutils.wasm lib/msutils.wasm && cp ../../artifacts/wasm/msutils.wasm lib-esm/msutils.wasm"
+    "test-only": "jest"
   },
   "dependencies": {
     "ml-spectra-processing": "14.5.0",
@@ -58,6 +56,7 @@
     "@types/node": "^24.3.1",
     "@types/webpack": "^5.28.5",
     "rimraf": "^6.0.1",
+    "ts-loader": "^9.5.4",
     "tsx": "^4.20.3",
     "typescript": "^5.9.2",
     "webpack": "^5.101.0",

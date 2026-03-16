@@ -346,6 +346,77 @@ parse_bin <- function(bin) {
   .Call("C_parse_bin", bin, PACKAGE = "msutils")
 }
 
+collect_scans <- function(bin, from, to, level = 1L, include_metadata = FALSE) {
+  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML handle)")
+  if (!is.numeric(from) || length(from) != 1) stop("from must be a single numeric")
+  if (!is.numeric(to)   || length(to)   != 1) stop("to must be a single numeric")
+  if (!is.numeric(level) || length(level) != 1) stop("level must be a single numeric")
+  if (!is.logical(include_metadata) || length(include_metadata) != 1 || is.na(include_metadata))
+    stop("include_metadata must be logical TRUE/FALSE")
+
+  out_json <- .Call("C_collect_scans",
+    bin,
+    as.numeric(from), as.numeric(to),
+    as.integer(level),
+    include_metadata,
+    PACKAGE = "msutils"
+  )
+  jsonlite::fromJSON(out_json, simplifyVector = TRUE)
+}
+
+get_features <- function(
+  dir_path, from = 0, to = 10,
+  eic_ppm_tol = 5.0, eic_mz_tol = 0.0025,
+  grid_start = 40, grid_end = 1000, grid_step = 0.005,
+  group_ppm_tol = 5.0, group_da_tol = 0.003, group_rt_tol = 0.05,
+  prevalence = 1L,
+  cores = 1L,
+  integral_threshold = NaN, intensity_threshold = 500, width_threshold = 0L,
+  noise = NaN, auto_noise = TRUE, auto_baseline = TRUE,
+  baseline_window = 0L, baseline_window_factor = 0L,
+  allow_overlap = FALSE, window_size = 0L, sn_ratio = 1
+) {
+  if (!is.character(dir_path) || length(dir_path) != 1) stop("dir_path must be a single string")
+  cores <- .validate_cores(cores)
+
+  if (!is.logical(auto_noise)    || length(auto_noise)    != 1 || is.na(auto_noise))    stop("auto_noise must be logical TRUE/FALSE")
+  if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
+  if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
+
+  opt <- .pack_opts(list(
+    integral_threshold = integral_threshold,
+    intensity_threshold = intensity_threshold,
+    width_threshold = width_threshold,
+    noise = noise,
+    auto_noise = auto_noise,
+    auto_baseline = auto_baseline,
+    baseline_window = baseline_window,
+    baseline_window_factor = baseline_window_factor,
+    allow_overlap = allow_overlap,
+    window_size = window_size,
+    sn_ratio = sn_ratio
+  ))
+
+  out_json <- .Call("C_get_features",
+    dir_path,
+    as.numeric(from), as.numeric(to),
+    as.numeric(eic_ppm_tol), as.numeric(eic_mz_tol),
+    as.numeric(grid_start), as.numeric(grid_end), as.numeric(grid_step),
+    as.numeric(group_ppm_tol), as.numeric(group_da_tol), as.numeric(group_rt_tol),
+    as.integer(prevalence),
+    opt, as.integer(cores),
+    PACKAGE = "msutils"
+  )
+
+  df <- jsonlite::fromJSON(out_json, simplifyVector = TRUE)
+  if (!is.data.frame(df)) df <- as.data.frame(df)
+  want <- c("mz", "rt", "from", "to", "intensity", "integral", "np", "frequency", "rmz")
+  present <- intersect(want, names(df))
+  df <- df[, c(present, setdiff(names(df), present)), drop = FALSE]
+  rownames(df) <- NULL
+  df
+}
+
 .validate_cores <- function(cores) {
   if (!is.numeric(cores) || length(cores) != 1L || is.na(cores)) stop("cores must be a single number")
 

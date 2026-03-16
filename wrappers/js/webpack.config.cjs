@@ -3,22 +3,39 @@ const path = require("node:path");
 const fs = require("node:fs");
 const webpack = require("webpack");
 
-const wasmPath = path.resolve(__dirname, "lib-esm/msutils.wasm");
+const wasmPath = path.resolve(__dirname, "native/msutils.wasm");
 
-let wasmDataUrl;
-try {
-  const bytes = fs.readFileSync(wasmPath);
-  wasmDataUrl = "data:application/wasm;base64," + bytes.toString("base64");
-} catch (e) {
-  throw new Error(
-    `Could not read ${wasmPath}. Run your TS build + copy step first. ` +
-      `Original error: ${e.message}`
-  );
-}
+const wasmDataUrl =
+  "data:application/wasm;base64," +
+  fs.readFileSync(wasmPath).toString("base64");
 
 module.exports = {
-  entry: "./lib-esm/index-wasm.js",
+  entry: "./src/index-wasm.ts",
   mode: "production",
+  module: {
+    rules: [
+      {
+        test: /\.ts$/,
+        use: {
+          loader: "ts-loader",
+          options: {
+            configFile: path.resolve(__dirname, "tsconfig.esm.json"),
+            transpileOnly: true,
+          },
+        },
+        exclude: /node_modules/,
+      },
+    ],
+  },
+  resolve: {
+    extensions: [".ts", ".js"],
+    fallback: {
+      fs: false,
+      path: false,
+      url: false,
+      util: false,
+    },
+  },
   output: {
     path: path.resolve(__dirname, "dist"),
     filename: "msutils.js",
@@ -31,7 +48,7 @@ module.exports = {
       __INLINE__: "true",
       __WASM_DATA_URL__: JSON.stringify(wasmDataUrl),
     }),
-    new webpack.IgnorePlugin({ resourceRegExp: /^node:fs\/promises$/ }),
+    new webpack.IgnorePlugin({ resourceRegExp: /^node:/ }),
   ],
   performance: { maxAssetSize: 2_000_000, maxEntrypointSize: 2_000_000 },
 };

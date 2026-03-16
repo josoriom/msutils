@@ -1,9 +1,10 @@
 use octo::MzML;
-use rayon::ThreadPoolBuilder;
-use rayon::prelude::*;
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::{ThreadPoolBuilder, prelude::*};
 
 use crate::utilities::calculate_eic::TimeUnit;
-use crate::utilities::calculate_eic::{EicOptions, collect_ms1_scans, compute_eic_for_mz};
+use crate::utilities::calculate_eic::{EicOptions, collect_scans, compute_eic_for_mz};
 use crate::utilities::find_noise_level;
 use crate::utilities::find_peaks::FilterPeaksOptions;
 use crate::utilities::find_peaks::FindPeaksOptions;
@@ -17,19 +18,31 @@ pub fn get_peaks_from_eic<'a>(
     options: Option<FindPeaksOptions>,
     cores: usize,
 ) -> Option<Vec<(&'a str, f64, f64, Peak)>> {
-    if cores <= 1 || rois.len() < 2 {
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    {
         let mut out: Vec<(&'a str, f64, f64, Peak)> = Vec::with_capacity(rois.len());
         for roi in rois {
-            out.push(compute_one(&mzml, from_to, roi, &options));
+            out.push(compute_one(mzml, from_to, roi, &options));
         }
         return Some(out);
     }
-    let pool = ThreadPoolBuilder::new().num_threads(cores).build().ok()?;
-    Some(pool.install(|| {
-        rois.par_iter()
-            .map(|roi| compute_one(&mzml, from_to, roi, &options))
-            .collect()
-    }))
+
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    {
+        if cores <= 1 || rois.len() < 2 {
+            let mut out: Vec<(&'a str, f64, f64, Peak)> = Vec::with_capacity(rois.len());
+            for roi in rois {
+                out.push(compute_one(mzml, from_to, roi, &options));
+            }
+            return Some(out);
+        }
+        let pool = ThreadPoolBuilder::new().num_threads(cores).build().ok()?;
+        Some(pool.install(|| {
+            rois.par_iter()
+                .map(|roi| compute_one(mzml, from_to, roi, &options))
+                .collect()
+        }))
+    }
 }
 
 #[inline]
@@ -47,8 +60,8 @@ fn compute_one<'a>(
     }
     let eic_opts = EicOptions::default();
 
-    let (rts, scans) = collect_ms1_scans(mzml, FromTo { from, to }, TimeUnit::Minutes);
-    let (rts_full, scans_full) = collect_ms1_scans(mzml, from_to, TimeUnit::Minutes);
+    let (rts, scans) = collect_scans(mzml, FromTo { from, to }, TimeUnit::Minutes, 1, false);
+    let (rts_full, scans_full) = collect_scans(mzml, from_to, TimeUnit::Minutes, 1, false);
     if rts.len() < 3 || scans.is_empty() {
         return (&roi.id, roi.rt, roi.mz, Peak::default());
     }

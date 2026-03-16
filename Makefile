@@ -45,6 +45,9 @@ linux-arm64:
 
 wasm:
 	rustup target add wasm32-unknown-unknown
+	CC_wasm32_unknown_unknown="/opt/homebrew/opt/llvm/bin/clang" \
+	AR_wasm32_unknown_unknown="/opt/homebrew/opt/llvm/bin/llvm-ar" \
+	CFLAGS_wasm32_unknown_unknown="--target=wasm32-unknown-unknown" \
 	cargo build --manifest-path $(CRATE_MANIFEST) --release --target wasm32-unknown-unknown
 	mkdir -p $(ARTIFACTS)/wasm
 	cp core/target/wasm32-unknown-unknown/release/$(CRATE).wasm $(ARTIFACTS)/wasm/

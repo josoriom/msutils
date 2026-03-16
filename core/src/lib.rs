@@ -1,4 +1,7 @@
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 use core::ffi::c_int;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use core::ffi::{CStr, c_char, c_int};
 
 use serde_json::json;
 use std::{
@@ -6,12 +9,19 @@ use std::{
     ptr, slice,
 };
 
-use octo::{MzML, bin_to_mzml as bin_to_mzml_rs, decode, encode, parse_mzml as parse_mzml_rs};
+use octo::{
+    MzML, bin_to_mzml as bin_to_mzml_rs,
+    decoder::decode,
+    encoder::{WritingMode, encode},
+    parse_mzml as parse_mzml_rs,
+};
 
 pub mod utilities;
 use utilities::{
     calculate_baseline::{BaselineOptions, calculate_baseline as calculate_baseline_rs},
-    calculate_eic::{EicOptions, calculate_eic as calculate_eic_rs},
+    calculate_eic::{
+        EicOptions, calculate_eic as calculate_eic_rs, collect_scans as collect_scans_rs,
+    },
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
     find_features::{FindFeaturesOptions, MzScanGrid, find_features as find_features_rs},
     find_noise_level::find_noise_level as find_noise_level_rs,
@@ -22,6 +32,15 @@ use utilities::{
     get_peaks_from_eic::get_peaks_from_eic as get_peaks_from_eic_rs,
     structs::{ChromRoi, EicRoi},
     structs::{DataXY, FromTo, Roi},
+};
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use utilities::get_features::get_features as get_features_rs;
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use crate::utilities::{
+    find_features::{FindFeaturesConfig, MzTolerance},
+    get_features::ConsensusAlignmentConfig,
 };
 
 const OK: c_int = 0;
@@ -100,6 +119,7 @@ pub unsafe extern "C" fn free_mzml(pointer: *mut MzML) {
     }
 }
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn parse_mzml(
     data_pointer: *const u8,
@@ -109,14 +129,12 @@ pub unsafe extern "C" fn parse_mzml(
     if data_pointer.is_null() || destination.is_null() {
         return ERR_INVALID_ARGS;
     }
-
     let safe_outcome = catch_unwind(AssertUnwindSafe(|| -> Result<*mut MzML, c_int> {
         let xml_byte_slice = unsafe { slice::from_raw_parts(data_pointer, data_length) };
-        let parsed_mzml_object = parse_mzml_rs(xml_byte_slice, false).map_err(|_| ERR_PARSE)?;
+        let parsed_mzml_object = parse_mzml_rs(xml_byte_slice).map_err(|_| ERR_PARSE)?;
         let allocated_pointer = Box::into_raw(Box::new(parsed_mzml_object));
         Ok(allocated_pointer)
     }));
-
     match safe_outcome {
         Ok(Ok(valid_pointer)) => {
             unsafe { *destination = valid_pointer };
@@ -127,6 +145,32 @@ pub unsafe extern "C" fn parse_mzml(
     }
 }
 
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn parse_mzml(
+    data_ptr: *const u8,
+    data_len: usize,
+    destination: *mut *mut MzML,
+) -> c_int {
+    if data_ptr.is_null() || destination.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| -> Result<*mut MzML, c_int> {
+        let xml_bytes = unsafe { slice::from_raw_parts(data_ptr, data_len) };
+        let parsed = parse_mzml_rs(xml_bytes).map_err(|_| ERR_PARSE)?;
+        Ok(Box::into_raw(Box::new(parsed)))
+    }));
+    match result {
+        Ok(Ok(ptr)) => {
+            unsafe { *destination = ptr };
+            OK
+        }
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn parse_bin(
     data_pointer: *const u8,
@@ -136,20 +180,43 @@ pub unsafe extern "C" fn parse_bin(
     if data_pointer.is_null() || destination.is_null() {
         return ERR_INVALID_ARGS;
     }
-
     let safe_outcome = catch_unwind(AssertUnwindSafe(|| -> Result<*mut MzML, c_int> {
         let binary_slice = unsafe { slice::from_raw_parts(data_pointer, data_length) };
         let mzml_object = decode(binary_slice).map_err(|_| ERR_PARSE)?;
         let allocated_pointer = Box::into_raw(Box::new(mzml_object));
         Ok(allocated_pointer)
     }));
-
     match safe_outcome {
         Ok(Ok(valid_memory_pointer)) => {
             unsafe { *destination = valid_memory_pointer };
             OK
         }
         Ok(Err(error_code)) => error_code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn parse_bin(
+    data_ptr: *const u8,
+    data_len: usize,
+    destination: *mut *mut MzML,
+) -> c_int {
+    if data_ptr.is_null() || destination.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+    let result = catch_unwind(AssertUnwindSafe(|| -> Result<*mut MzML, c_int> {
+        let binary_slice = unsafe { slice::from_raw_parts(data_ptr, data_len) };
+        let decoded = decode(binary_slice).map_err(|_| ERR_PARSE)?;
+        Ok(Box::into_raw(Box::new(decoded)))
+    }));
+    match result {
+        Ok(Ok(ptr)) => {
+            unsafe { *destination = ptr };
+            OK
+        }
+        Ok(Err(code)) => code,
         Err(_) => ERR_PANIC,
     }
 }
@@ -207,8 +274,16 @@ pub unsafe extern "C" fn mzml_to_bin(
 
     let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let mzml = unsafe { &*handle_ptr };
-        let bin = encode(mzml, level, f32_compress != 0);
-        write_buf(out_blob, bin.into_boxed_slice());
+        let mut buf: Vec<u8> = Vec::new();
+        encode(
+            mzml,
+            level,
+            f32_compress != 0,
+            WritingMode::Memory,
+            &mut buf,
+        )
+        .map_err(|_| ERR_ENCODE)?;
+        write_buf(out_blob, buf.into_boxed_slice());
         Ok(())
     }));
 
@@ -566,7 +641,7 @@ pub unsafe extern "C" fn calculate_eic(
         let mzml = unsafe { &*handle_ptr };
         let eic = calculate_eic_rs(
             mzml,
-            &target,
+            target,
             FromTo {
                 from: from_time,
                 to: to_time,
@@ -576,8 +651,7 @@ pub unsafe extern "C" fn calculate_eic(
                 mz_tolerance,
                 ..Default::default()
             },
-        )
-        .map_err(|_| ERR_PARSE)?;
+        );
 
         let x_bytes = f64_slice_to_u8_box(&eic.x);
         let y_bytes = f64_slice_to_u8_box(&eic.y);
@@ -586,6 +660,187 @@ pub unsafe extern "C" fn calculate_eic(
         Ok(())
     }));
     match res {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn collect_scans(
+    handle_ptr: *const MzML,
+    from_time: f64,
+    to_time: f64,
+    level: u8,
+    include_metadata: c_int,
+    out_json: *mut Buf,
+) -> c_int {
+    if handle_ptr.is_null() || out_json.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let mzml = unsafe { &*handle_ptr };
+
+        let include_metadata = include_metadata != 0;
+
+        let (_retention_times, scans) = collect_scans_rs(
+            mzml,
+            FromTo {
+                from: from_time,
+                to: to_time,
+            },
+            EicOptions::default().time_unit,
+            level,
+            include_metadata,
+        );
+
+        let arr: Vec<_> = scans
+            .iter()
+            .map(|scan| {
+                serde_json::json!({
+                    "rt": scan.rt,
+                    "mz": scan.mz.as_ref(),
+                    "intensity": scan.intensity.as_ref(),
+                    "metadata": scan.metadata
+                })
+            })
+            .collect();
+
+        let s = serde_json::to_string(&arr).map_err(|_| ERR_PARSE)?;
+        write_buf(out_json, s.into_bytes().into_boxed_slice());
+        Ok(())
+    }));
+
+    match res {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn get_features(
+    dir_path_ptr: *const c_char,
+    from_time: f64,
+    to_time: f64,
+    eic_ppm_tolerance: f64,
+    eic_mz_tolerance: f64,
+    grid_start: f64,
+    grid_end: f64,
+    grid_step: f64,
+    group_ppm_tol: f64,
+    group_da_tol: f64,
+    group_rt_tol: f64,
+    prevalence: c_int,
+    peak_opts: *const CPeakPOptions,
+    cores: c_int,
+    out_json: *mut Buf,
+) -> c_int {
+    if dir_path_ptr.is_null() || out_json.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    let run = || -> Result<(), c_int> {
+        let c_str = unsafe { CStr::from_ptr(dir_path_ptr) };
+        let dir_path = c_str.to_str().map_err(|_| ERR_INVALID_ARGS)?;
+
+        let mut eic_opts = EicOptions::default();
+        if eic_ppm_tolerance.is_finite() && eic_ppm_tolerance >= 0.0 {
+            eic_opts.ppm_tolerance = eic_ppm_tolerance;
+        }
+        if eic_mz_tolerance.is_finite() && eic_mz_tolerance >= 0.0 {
+            eic_opts.mz_tolerance = eic_mz_tolerance;
+        }
+
+        let mut mz_grid = MzScanGrid::default();
+        if grid_start.is_finite() {
+            mz_grid.mz_min = grid_start;
+        }
+        if grid_end.is_finite() {
+            mz_grid.mz_max = grid_end;
+        }
+        if grid_step > 0.0 {
+            mz_grid.step_size = grid_step;
+        }
+
+        let fp_opts = build_find_peaks_options(peak_opts);
+
+        let ppm_tol = if group_ppm_tol > 0.0 {
+            group_ppm_tol
+        } else {
+            5.0
+        };
+        let da_tol = if group_da_tol > 0.0 {
+            group_da_tol
+        } else {
+            0.003
+        };
+        let rt_tol = if group_rt_tol > 0.0 {
+            group_rt_tol
+        } else {
+            0.05
+        };
+
+        let feature_config = FindFeaturesConfig::from(FindFeaturesOptions {
+            eic_options: Some(eic_opts),
+            find_peaks: Some(fp_opts),
+            mz_scan_grid: Some(mz_grid),
+            ..Default::default()
+        });
+
+        let fp_opts = build_find_peaks_options(peak_opts);
+
+        let alignment_config = ConsensusAlignmentConfig {
+            tolerance: MzTolerance {
+                mz_abs: da_tol,
+                ppm: ppm_tol,
+            },
+            rt_tolerance: rt_tol,
+            prevalence_threshold: if prevalence > 0 {
+                prevalence as usize
+            } else {
+                1
+            },
+            eic_options: eic_opts,
+            peak_options: Some(fp_opts),
+        };
+
+        let consensus_feats = get_features_rs(
+            dir_path,
+            FromTo {
+                from: from_time,
+                to: to_time,
+            },
+            feature_config,
+            alignment_config,
+            if cores > 0 { cores as usize } else { 1 },
+        )
+        .unwrap_or_default();
+
+        let mut json_output = Vec::with_capacity(consensus_feats.len());
+        for f in consensus_feats {
+            json_output.push(serde_json::json!({
+                "mz": f64_ok(f.mz),
+                "rt": f64_ok(f.rt),
+                "intensity": f64_ok(f.intensity),
+                "rintensity": f64_ok(f.rintensity),
+                "from": f64_ok(f.from),
+                "to": f64_ok(f.to),
+                "integral": f64_ok(f.integral),
+                "np": f.np,
+                "frequency": f.frequency,
+                "rmz": f.rmz
+            }));
+        }
+
+        let serialized = serde_json::to_string(&json_output).map_err(|_| ERR_PARSE)?;
+        write_buf(out_json, serialized.into_bytes().into_boxed_slice());
+        Ok(())
+    };
+
+    match catch_unwind(AssertUnwindSafe(run)) {
         Ok(Ok(())) => OK,
         Ok(Err(code)) => code,
         Err(_) => ERR_PANIC,
@@ -651,7 +906,8 @@ pub unsafe extern "C" fn find_features(
                 ..Default::default()
             }),
             if cores > 0 { cores as usize } else { 1 },
-        );
+        )
+        .unwrap_or_default();
 
         let mut arr = Vec::with_capacity(feats.len());
         for f in feats {
@@ -661,6 +917,8 @@ pub unsafe extern "C" fn find_features(
                 "intensity": f64_ok(f.intensity),
                 "from": f64_ok(f.from),
                 "to": f64_ok(f.to),
+                "integral": f64_ok(f.integral),
+                "np": f64_ok(f.np as f64),
             }));
         }
         let s = serde_json::to_string(&arr).map_err(|_| ERR_PARSE)?;

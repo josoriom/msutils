@@ -141,6 +141,22 @@ export type ChromPeak = {
   integral: number;
 };
 
+export type CentroidScan = {
+  rt: number;
+  mz: number[];
+  intensity: number[];
+  metadata: ScanMetadataEntry[];
+};
+
+export type ScanMetadataEntry = {
+  section: string;
+  accession?: string;
+  name: string;
+  value: string;
+  unitAccession?: string;
+  unitName?: string;
+};
+
 export type FindFeaturesOptions = {
   eic?: { ppmTolerance?: number; mzTolerance?: number };
   grid?: { start?: number; end?: number; stepSize?: number };
@@ -577,6 +593,116 @@ export function mzmlToBin(
   return native.mzmlToBin(file._pointer, level, f32Compress ? 1 : 0) as Buffer;
 }
 
+export type ConsensusFeature = {
+  mz: number;
+  rt: number;
+  from: number;
+  to: number;
+  intensity: number;
+  integral: number;
+  np: number;
+  frequency: number;
+  mzs: number[];
+};
+
+export type GetFeaturesOptions = FindFeaturesOptions & {
+  grouping?: {
+    ppmTolerance?: number;
+    mzTolerance?: number;
+    rtTolerance?: number;
+    prevalence?: number;
+  };
+};
+
+export function getFeatures(
+  directoryPath: string,
+  fromTo: { from: number; to: number },
+  options: GetFeaturesOptions = {},
+): ConsensusFeature[] {
+  const {
+    eic = { mzTolerance: 0.0025, ppmTolerance: 5.0 },
+    grid = { start: 20, end: 700, stepSize: 0.005 },
+    grouping = { ppmTolerance: 5.0, mzTolerance: 0.003, prevalence: 1 },
+    findPeak = {},
+    cores = 1,
+  } = options;
+
+  const { from, to } = fromTo;
+
+  // Validate path
+  if (typeof directoryPath !== "string" || directoryPath.length === 0) {
+    throw new Error("getFeatures: Valid directory path is required");
+  }
+
+  const eicPpm = Number.isFinite(eic.ppmTolerance)
+    ? (eic.ppmTolerance as number)
+    : NaN;
+  const eicMz = Number.isFinite(eic.mzTolerance)
+    ? (eic.mzTolerance as number)
+    : NaN;
+  const gridStart = Number.isFinite(grid.start) ? (grid.start as number) : NaN;
+  const gridEnd = Number.isFinite(grid.end) ? (grid.end as number) : NaN;
+  const gridStep = Number.isFinite(grid.stepSize)
+    ? (grid.stepSize as number)
+    : NaN;
+
+  const groupPpm = grouping.ppmTolerance ?? 5.0;
+  const groupMz = grouping.mzTolerance ?? 0.003;
+  const groupRt = grouping.rtTolerance ?? 0.05;
+  const prevalence = grouping.prevalence ?? 1;
+
+  const s = native.getFeatures(
+    directoryPath,
+    +from,
+    +to,
+    +eicPpm,
+    +eicMz,
+    +gridStart,
+    +gridEnd,
+    +gridStep,
+    +groupPpm,
+    +groupMz,
+    +groupRt,
+    +prevalence,
+    packPeakOptions(findPeak) ?? null,
+    toCores(cores),
+  ) as string;
+
+  return parseJson<ConsensusFeature[]>(s);
+}
+
+export function collectScans(
+  file: MzMlFile,
+  from: number,
+  to: number,
+  level = 1,
+  includeMetadata = false,
+): CentroidScan[] {
+  if (!(file instanceof MzMlFile) || !file._pointer) {
+    throw new Error("collectScans: Invalid MzMlFile handle");
+  }
+
+  if (
+    typeof level !== "number" ||
+    !Number.isFinite(level) ||
+    (level | 0) !== level ||
+    level < 0 ||
+    level > 255
+  ) {
+    throw new RangeError("collectScans: level must be an integer in [0,255]");
+  }
+
+  const raw = native.collectScans(
+    file._pointer,
+    +from,
+    +to,
+    level,
+    includeMetadata ? 1 : 0,
+  ) as string;
+
+  return camelizeKeys(parseJson<CentroidScan[]>(raw));
+}
+
 module.exports = {
   parseMzML,
   binToJson,
@@ -592,6 +718,8 @@ module.exports = {
   findFeature,
   mzmlToBin,
   parseBin,
+  getFeatures,
+  collectScans,
 };
 
 function camelizeKeys(x: any): any {

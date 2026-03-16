@@ -33,3 +33,6 @@ pub use utilities::closest_index;
 
 pub mod find_feature;
 pub use find_feature::find_feature;
+
+pub mod get_features;
+pub mod tests;
