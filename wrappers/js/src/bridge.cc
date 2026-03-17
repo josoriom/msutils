@@ -890,7 +890,7 @@ static Napi::Value GetFeatures(const Napi::CallbackInfo &info)
   double group_ppm = info[8].As<Napi::Number>().DoubleValue();
   double group_da = info[9].As<Napi::Number>().DoubleValue();
   double group_rt = info[10].As<Napi::Number>().DoubleValue();
-  int32_t prevalence = info[11].As<Napi::Number>().Int32Value();
+  int32_t frequency = info[11].As<Napi::Number>().Int32Value();
 
   CPeakPOptions opts;
   const CPeakPOptions *p_opts = ReadOptionsBuf(info[12], &opts);
@@ -904,7 +904,7 @@ static Napi::Value GetFeatures(const Napi::CallbackInfo &info)
       eic_ppm, eic_mz,
       g_start, g_end, g_step,
       group_ppm, group_da, group_rt,
-      prevalence,
+      frequency,
       p_opts,
       cores,
       out.Out());

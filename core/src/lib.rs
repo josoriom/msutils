@@ -733,7 +733,7 @@ pub unsafe extern "C" fn get_features(
     group_ppm_tol: f64,
     group_da_tol: f64,
     group_rt_tol: f64,
-    prevalence: c_int,
+    frequency: c_int,
     peak_opts: *const CPeakPOptions,
     cores: c_int,
     out_json: *mut Buf,
@@ -798,11 +798,7 @@ pub unsafe extern "C" fn get_features(
                 ppm: ppm_tol,
             },
             rt_tolerance: rt_tol,
-            prevalence_threshold: if prevalence > 0 {
-                prevalence as usize
-            } else {
-                1
-            },
+            frequency: if frequency > 0 { frequency as usize } else { 1 },
             eic_options: eic_opts,
             peak_options: Some(fp_opts),
         };

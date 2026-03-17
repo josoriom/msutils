@@ -76,7 +76,7 @@ pub struct ConsensusFeature {
 pub struct ConsensusAlignmentConfig {
     pub tolerance: MzTolerance,
     pub rt_tolerance: f64,
-    pub prevalence_threshold: usize,
+    pub frequency: usize,
     pub eic_options: EicOptions,
     pub peak_options: Option<FindPeaksOptions>,
 }
@@ -89,7 +89,7 @@ impl Default for ConsensusAlignmentConfig {
                 ppm: 20.0,
             },
             rt_tolerance: 0.05,
-            prevalence_threshold: 1,
+            frequency: 1,
             eic_options: EicOptions {
                 ppm_tolerance: 20.0,
                 mz_tolerance: 0.005,
@@ -360,7 +360,7 @@ fn build_consensus_feature(
     let bounds = compute_search_bounds(&slots, config.rt_tolerance)?;
     fill_missing_slots(&mut slots, datasets, &bounds, config);
     let hits = collect_filled_slots(slots);
-    require_minimum_prevalence(hits, config.prevalence_threshold)
+    require_minimum_frequency(hits, config.frequency)
         .map(|hits| aggregate_into_consensus(hits, &bounds))
 }
 
@@ -431,7 +431,7 @@ pub(crate) fn collect_filled_slots(slots: Vec<Option<Feature>>) -> Vec<Feature> 
     slots.into_iter().flatten().collect()
 }
 
-pub(crate) fn require_minimum_prevalence(
+pub(crate) fn require_minimum_frequency(
     hits: Vec<Feature>,
     threshold: usize,
 ) -> Option<Vec<Feature>> {

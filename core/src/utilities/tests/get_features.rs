@@ -5,7 +5,7 @@ mod tests {
         get_features::{
             FeatureClusterer, GrowingCluster, SearchBounds, TaggedFeature,
             aggregate_into_consensus, assign_best_per_sample, collect_filled_slots,
-            compute_search_bounds, median, require_minimum_prevalence, rsd,
+            compute_search_bounds, median, require_minimum_frequency, rsd,
         },
     };
 
@@ -310,29 +310,29 @@ mod tests {
     }
 
     #[test]
-    fn test_require_minimum_prevalence_exact_threshold() {
+    fn test_require_minimum_frequency_exact_threshold() {
         let hits = vec![make_feature(100.0, 1.0, 500.0)];
-        assert!(require_minimum_prevalence(hits, 1).is_some());
+        assert!(require_minimum_frequency(hits, 1).is_some());
     }
 
     #[test]
-    fn test_require_minimum_prevalence_passes() {
+    fn test_require_minimum_frequency_passes() {
         let hits = vec![
             make_feature(100.0, 1.0, 500.0),
             make_feature(100.0, 1.0, 400.0),
         ];
-        assert!(require_minimum_prevalence(hits, 2).is_some());
+        assert!(require_minimum_frequency(hits, 2).is_some());
     }
 
     #[test]
-    fn test_require_minimum_prevalence_fails() {
+    fn test_require_minimum_frequency_fails() {
         let hits = vec![make_feature(100.0, 1.0, 500.0)];
-        assert!(require_minimum_prevalence(hits, 3).is_none());
+        assert!(require_minimum_frequency(hits, 3).is_none());
     }
 
     #[test]
-    fn test_require_minimum_prevalence_empty() {
-        assert!(require_minimum_prevalence(vec![], 1).is_none());
+    fn test_require_minimum_frequency_empty() {
+        assert!(require_minimum_frequency(vec![], 1).is_none());
     }
 
     #[test]

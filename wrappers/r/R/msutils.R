@@ -1,3 +1,20 @@
+.DEFAULTS <- list(
+  eic_ppm_tol         = 10.0,
+  eic_mz_tol          = 0.005,
+  grid_start          = 40,
+  grid_end            = 1000,
+  grid_step           = 0.005,
+  group_ppm_tol       = 5.0,
+  group_da_tol        = 0.0025,
+  group_rt_tol        = 0.05,
+  frequency           = 1L,
+  intensity_threshold = 1000,
+  width_threshold     = 5L,
+  auto_noise          = TRUE,
+  auto_baseline       = TRUE,
+  sn_ratio            = 1
+)
+
 .pack_opts <- function(options) {
   if (is.null(options)) return(NULL)
   if (is.raw(options)) {
@@ -78,10 +95,17 @@ bin_to_mzml <- function(bin) {
 
 get_peak <- function(
   x, y, rt, range,
-  integral_threshold=NaN, intensity_threshold=NaN, width_threshold=0L,
-  noise=NaN, auto_noise=FALSE, auto_baseline=FALSE,
-  baseline_window=0L, baseline_window_factor=0L,
-  allow_overlap=FALSE, window_size=0L, sn_ratio=NaN
+  integral_threshold   = NaN,
+  intensity_threshold  = .DEFAULTS$intensity_threshold,
+  width_threshold      = .DEFAULTS$width_threshold,
+  noise                = NaN,
+  auto_noise           = .DEFAULTS$auto_noise,
+  auto_baseline        = .DEFAULTS$auto_baseline,
+  baseline_window      = 0L,
+  baseline_window_factor = 0L,
+  allow_overlap        = FALSE,
+  window_size          = 0L,
+  sn_ratio             = .DEFAULTS$sn_ratio
 ) {
   stopifnot(is.numeric(x), is.numeric(y))
   if (length(x) != length(y) || length(x) < 3) stop("x and y must have the same length (>= 3)")
@@ -101,10 +125,17 @@ get_peak <- function(
 
 get_peaks_from_eic <- function(
   bin, df, from=0.5, to=5, cores=1L,
-  integral_threshold=NaN, intensity_threshold=NaN, width_threshold=0L,
-  noise=NaN, auto_noise=FALSE, auto_baseline=FALSE,
-  baseline_window=0L, baseline_window_factor=0L,
-  allow_overlap=FALSE, window_size=0L, sn_ratio=NaN
+  integral_threshold   = NaN,
+  intensity_threshold  = .DEFAULTS$intensity_threshold,
+  width_threshold      = .DEFAULTS$width_threshold,
+  noise                = NaN,
+  auto_noise           = .DEFAULTS$auto_noise,
+  auto_baseline        = .DEFAULTS$auto_baseline,
+  baseline_window      = 0L,
+  baseline_window_factor = 0L,
+  allow_overlap        = FALSE,
+  window_size          = 0L,
+  sn_ratio             = .DEFAULTS$sn_ratio
 ) {
   stopifnot(typeof(bin) == "externalptr") 
   if (!is.data.frame(df)) stop("`df` must be a data.frame")
@@ -144,10 +175,17 @@ get_peaks_from_eic <- function(
 
 get_peaks_from_chrom <- function(
   bin, items, cores=1L,
-  integral_threshold=NaN, intensity_threshold=NaN, width_threshold=0L,
-  noise=NaN, auto_noise=FALSE, auto_baseline=FALSE,
-  baseline_window=0L, baseline_window_factor=0L,
-  allow_overlap=FALSE, window_size=0L, sn_ratio=NaN
+  integral_threshold   = NaN,
+  intensity_threshold  = .DEFAULTS$intensity_threshold,
+  width_threshold      = .DEFAULTS$width_threshold,
+  noise                = NaN,
+  auto_noise           = FALSE,
+  auto_baseline        = FALSE,
+  baseline_window      = 0L,
+  baseline_window_factor = 0L,
+  allow_overlap        = FALSE,
+  window_size          = 0L,
+  sn_ratio             = .DEFAULTS$sn_ratio
 ) {
   stopifnot(typeof(bin) == "externalptr")
   if (is.null(items) || !(is.list(items) || is.data.frame(items))) stop("items must be a list/data.frame")
@@ -192,10 +230,17 @@ calculate_eic <- function(bin, targets, from, to, ppm_tolerance=20, mz_tolerance
 
 find_peaks <- function(
   x, y,
-  integral_threshold=NaN, intensity_threshold=NaN, width_threshold=0L,
-  noise=NaN, auto_noise=FALSE, auto_baseline=FALSE,
-  baseline_window=0L, baseline_window_factor=0L,
-  allow_overlap=FALSE, window_size=0L, sn_ratio=NaN
+  integral_threshold   = NaN,
+  intensity_threshold  = .DEFAULTS$intensity_threshold,
+  width_threshold      = .DEFAULTS$width_threshold,
+  noise                = NaN,
+  auto_noise           = .DEFAULTS$auto_noise,
+  auto_baseline        = .DEFAULTS$auto_baseline,
+  baseline_window      = 0L,
+  baseline_window_factor = 0L,
+  allow_overlap        = FALSE,
+  window_size          = 0L,
+  sn_ratio             = .DEFAULTS$sn_ratio
 ) {
   stopifnot(is.numeric(x), is.numeric(y))
   if (length(x) != length(y) || length(x) < 3) stop("x and y must have the same length >= 3")
@@ -226,11 +271,18 @@ find_feature <- function(
   bin,
   rt, mz, window, id = NULL,
   scan_ppm, scan_mz, eic_ppm, eic_mz,
-  cores = 1L,
-  integral_threshold = NaN, intensity_threshold = NaN, width_threshold = 0L,
-  noise = NaN, auto_noise = FALSE, auto_baseline = FALSE,
-  baseline_window = 0L, baseline_window_factor = 0L,
-  allow_overlap = FALSE, window_size = 0L, sn_ratio = NaN
+  cores                = 1L,
+  integral_threshold   = NaN,
+  intensity_threshold  = .DEFAULTS$intensity_threshold,
+  width_threshold      = .DEFAULTS$width_threshold,
+  noise                = NaN,
+  auto_noise           = .DEFAULTS$auto_noise,
+  auto_baseline        = .DEFAULTS$auto_baseline,
+  baseline_window      = 0L,
+  baseline_window_factor = 0L,
+  allow_overlap        = FALSE,
+  window_size          = 0L,
+  sn_ratio             = .DEFAULTS$sn_ratio
 ) {
   stopifnot(typeof(bin) == "externalptr")
   if (!is.numeric(rt)) stop("rt must be numeric")
@@ -246,7 +298,6 @@ find_feature <- function(
   if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
   if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
 
-  # FIX: Always pass a character vector so C GetHandle/R_alloc logic works
   if (is.null(id)) {
     id <- rep("", length(rt))
   } else {
@@ -289,17 +340,25 @@ find_feature <- function(
   res
 }
 
-
-
 find_features <- function(
   data, from = 0, to = 10,
-  ppm_tolerance = NaN, mz_tolerance = NaN,
-  grid_start = NaN, grid_end = NaN, grid_step_ppm = 0L,
-  cores = 1L,
-  integral_threshold = NaN, intensity_threshold = NaN, width_threshold = 0L,
-  noise = NaN, auto_noise = FALSE, auto_baseline = FALSE,
-  baseline_window = 0L, baseline_window_factor = 0L,
-  allow_overlap = FALSE, window_size = 0L, sn_ratio = NaN
+  ppm_tolerance        = .DEFAULTS$eic_ppm_tol,
+  mz_tolerance         = .DEFAULTS$eic_mz_tol,
+  grid_start           = .DEFAULTS$grid_start,
+  grid_end             = .DEFAULTS$grid_end,
+  grid_step_ppm        = .DEFAULTS$grid_step,
+  cores                = 1L,
+  integral_threshold   = NaN,
+  intensity_threshold  = .DEFAULTS$intensity_threshold,
+  width_threshold      = .DEFAULTS$width_threshold,
+  noise                = NaN,
+  auto_noise           = .DEFAULTS$auto_noise,
+  auto_baseline        = .DEFAULTS$auto_baseline,
+  baseline_window      = 0L,
+  baseline_window_factor = 0L,
+  allow_overlap        = FALSE,
+  window_size          = 0L,
+  sn_ratio             = .DEFAULTS$sn_ratio
 ) {
   stopifnot(typeof(data) == "externalptr")
   cores <- .validate_cores(cores)
@@ -366,15 +425,27 @@ collect_scans <- function(bin, from, to, level = 1L, include_metadata = FALSE) {
 
 get_features <- function(
   dir_path, from = 0, to = 10,
-  eic_ppm_tol = 5.0, eic_mz_tol = 0.0025,
-  grid_start = 40, grid_end = 1000, grid_step = 0.005,
-  group_ppm_tol = 5.0, group_da_tol = 0.003, group_rt_tol = 0.05,
-  prevalence = 1L,
-  cores = 1L,
-  integral_threshold = NaN, intensity_threshold = 500, width_threshold = 0L,
-  noise = NaN, auto_noise = TRUE, auto_baseline = TRUE,
-  baseline_window = 0L, baseline_window_factor = 0L,
-  allow_overlap = FALSE, window_size = 0L, sn_ratio = 1
+  eic_ppm_tol          = .DEFAULTS$eic_ppm_tol,
+  eic_mz_tol           = .DEFAULTS$eic_mz_tol,
+  grid_start           = .DEFAULTS$grid_start,
+  grid_end             = .DEFAULTS$grid_end,
+  grid_step            = .DEFAULTS$grid_step,
+  group_ppm_tol        = .DEFAULTS$group_ppm_tol,
+  group_da_tol         = .DEFAULTS$group_da_tol,
+  group_rt_tol         = .DEFAULTS$group_rt_tol,
+  frequency            = .DEFAULTS$frequency,
+  cores                = 1L,
+  integral_threshold   = NaN,
+  intensity_threshold  = .DEFAULTS$intensity_threshold,
+  width_threshold      = .DEFAULTS$width_threshold,
+  noise                = NaN,
+  auto_noise           = .DEFAULTS$auto_noise,
+  auto_baseline        = .DEFAULTS$auto_baseline,
+  baseline_window      = 0L,
+  baseline_window_factor = 0L,
+  allow_overlap        = FALSE,
+  window_size          = 0L,
+  sn_ratio             = .DEFAULTS$sn_ratio
 ) {
   if (!is.character(dir_path) || length(dir_path) != 1) stop("dir_path must be a single string")
   cores <- .validate_cores(cores)
@@ -403,7 +474,7 @@ get_features <- function(
     as.numeric(eic_ppm_tol), as.numeric(eic_mz_tol),
     as.numeric(grid_start), as.numeric(grid_end), as.numeric(grid_step),
     as.numeric(group_ppm_tol), as.numeric(group_da_tol), as.numeric(group_rt_tol),
-    as.integer(prevalence),
+    as.integer(frequency),
     opt, as.integer(cores),
     PACKAGE = "msutils"
   )

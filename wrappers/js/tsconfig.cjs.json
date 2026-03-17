@@ -22,6 +22,6 @@
   ],
   "exclude": [
     "src/index-wasm.ts",
-    "src/makeApi.ts"
+    "src/utilities/backendWasm.ts"
   ]
 }

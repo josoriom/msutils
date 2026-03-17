@@ -20,7 +20,7 @@ SEXP C_collect_scans(SEXP bin, SEXP from_time, SEXP to_time, SEXP level, SEXP in
 SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol,
                     SEXP grid_start, SEXP grid_end, SEXP grid_step,
                     SEXP group_ppm_tol, SEXP group_da_tol, SEXP group_rt_tol,
-                    SEXP prevalence, SEXP options, SEXP cores);
+                    SEXP frequency, SEXP options, SEXP cores);
 SEXP C_dispose_mzml(SEXP ptr);
 
 static const R_CallMethodDef CallEntries[] = {

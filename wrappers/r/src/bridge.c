@@ -762,7 +762,7 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
                     SEXP eic_ppm_tol, SEXP eic_mz_tol,
                     SEXP grid_start, SEXP grid_end, SEXP grid_step,
                     SEXP group_ppm_tol, SEXP group_da_tol, SEXP group_rt_tol,
-                    SEXP prevalence, SEXP options, SEXP cores)
+                    SEXP frequency, SEXP options, SEXP cores)
 {
   if (TYPEOF(dir_path) != STRSXP || LENGTH(dir_path) != 1)
     error("dir_path must be a length-1 character string");
@@ -786,7 +786,7 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
       asReal(eic_ppm_tol), asReal(eic_mz_tol),
       asReal(grid_start), asReal(grid_end), asReal(grid_step),
       asReal(group_ppm_tol), asReal(group_da_tol), asReal(group_rt_tol),
-      asInteger(prevalence),
+      asInteger(frequency),
       opt_ptr,
       (int32_t)ncores,
       &out);

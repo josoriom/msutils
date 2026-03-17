@@ -9,6 +9,6 @@
   },
   "include": [
     "src/index-wasm.ts",
-    "src/types/**/*.d.ts"
+    "src/types/**/*.ts"
   ]
 }
