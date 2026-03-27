@@ -117,7 +117,7 @@ pub fn find_one_feature(
 
     let picked = get_peak(
         &data,
-        Roi {
+        &Roi {
             rt: roi.rt,
             window: roi.window,
         },

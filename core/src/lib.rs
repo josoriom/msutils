@@ -317,7 +317,7 @@ pub unsafe extern "C" fn get_peak(
 
         let fp_opts = build_find_peaks_options(options);
         let roi = Roi { rt, window: range };
-        let peak = get_peak_rs(&data, roi, Some(fp_opts));
+        let peak = get_peak_rs(&data, &roi, Some(fp_opts));
 
         let s = match peak {
             Some(p) => serde_json::json!({
@@ -827,7 +827,8 @@ pub unsafe extern "C" fn get_features(
                 "integral": f64_ok(f.integral),
                 "np": f.np,
                 "frequency": f.frequency,
-                "rmz": f.rmz
+                "rmz": f.rmz,
+                "rint": f.rint
             }));
         }
 

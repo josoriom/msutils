@@ -99,16 +99,24 @@ fn compute_one<'a>(
         ..local_options.filter_peaks_options.unwrap_or_default()
     });
 
+    let roi_hint = Roi {
+        rt: roi.rt,
+        window: roi.window,
+    };
+
     let pk = match get_peak(
-        &DataXY { x: rts, y },
-        Roi {
-            rt: roi.rt,
-            window: roi.window,
+        &DataXY {
+            x: rts_full,
+            y: y_full,
         },
-        Some(local_options),
+        &roi_hint,
+        Some(local_options.clone()),
     ) {
         Some(p) => p,
-        None => Peak::default(),
+        None => match get_peak(&DataXY { x: rts, y }, &roi_hint, Some(local_options)) {
+            Some(p) => p,
+            None => Peak::default(),
+        },
     };
     (&roi.id, roi.rt, roi.mz, pk)
 }

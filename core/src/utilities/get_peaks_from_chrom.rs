@@ -179,7 +179,7 @@ fn compute_one(
 
         if let Some(p) = get_peak(
             &data,
-            Roi {
+            &Roi {
                 rt: roi.rt,
                 window: roi.window,
             },

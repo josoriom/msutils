@@ -62,6 +62,7 @@ impl From<FeatureError> for AlignmentError {
 pub struct ConsensusFeature {
     pub mz: f64,
     pub rmz: f64,
+    pub rint: f64,
     pub rt: f64,
     pub intensity: f64,
     pub rintensity: f64,
@@ -464,6 +465,7 @@ pub(crate) fn aggregate_into_consensus(
         to: bounds.rt_to,
         np: median(&mut np_values) as usize,
         integral: median(&mut integral_values),
+        rint: rsd(&mut integral_values),
         frequency: n,
     }
 }
@@ -508,7 +510,7 @@ fn fill_missing_feature(
             x: time_points,
             y: intensities,
         },
-        Roi {
+        &Roi {
             rt: seed_rt,
             window: rt_end - rt_start,
         },
