@@ -7,11 +7,11 @@ use serde_json::json;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     ptr, slice,
+    sync::Arc,
 };
 
-use octo::{
-    MzML, bin_to_mzml as bin_to_mzml_rs,
-    decoder::decode,
+use ionic::{
+    IonReader, MzML, ScanMeta, SpectrumSource, bin_to_mzml as bin_to_mzml_rs,
     encoder::{WritingMode, encode},
     parse_mzml as parse_mzml_rs,
 };
@@ -48,6 +48,7 @@ const ERR_INVALID_ARGS: c_int = 1;
 const ERR_PANIC: c_int = 2;
 const ERR_PARSE: c_int = 4;
 const ERR_ENCODE: c_int = 5;
+const ERR_NOT_SUPPORTED: c_int = 6;
 
 #[repr(C)]
 pub struct Buf {
@@ -109,13 +110,65 @@ pub unsafe extern "C" fn free_(ptr_raw: *mut u8, len: usize) {
     }
 }
 
+pub enum ParsedFile {
+    Full(Box<MzML>),
+    Lazy(OwnedIonReader),
+}
+
+impl ParsedFile {
+    fn as_mzml(&self) -> Result<&MzML, c_int> {
+        match self {
+            ParsedFile::Full(m) => Ok(m),
+            ParsedFile::Lazy(_) => Err(ERR_NOT_SUPPORTED),
+        }
+    }
+}
+
+impl SpectrumSource for ParsedFile {
+    fn for_each_scan_in_range(
+        &mut self,
+        rt_min: f64,
+        rt_max: f64,
+        ms_level: u8,
+        callback: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
+    ) {
+        match self {
+            ParsedFile::Full(mzml) => {
+                mzml.for_each_scan_in_range(rt_min, rt_max, ms_level, callback)
+            }
+            ParsedFile::Lazy(reader) => reader
+                .inner
+                .for_each_scan_in_range(rt_min, rt_max, ms_level, callback),
+        }
+    }
+}
+pub struct OwnedIonReader {
+    inner: IonReader<'static>,
+    _data: Arc<[u8]>,
+}
+
+impl OwnedIonReader {
+    pub fn new(data: Arc<[u8]>) -> Result<Self, String> {
+        let static_ref: &'static [u8] =
+            unsafe { std::slice::from_raw_parts(data.as_ptr(), data.len()) };
+        let inner = IonReader::open(static_ref)?;
+        Ok(Self { _data: data, inner })
+    }
+}
+
+fn handle_from_mzml(mzml: MzML) -> *mut ParsedFile {
+    Box::into_raw(Box::new(ParsedFile::Full(Box::new(mzml))))
+}
+
+fn handle_from_ion_bytes(data: Arc<[u8]>) -> Result<*mut ParsedFile, String> {
+    let reader = OwnedIonReader::new(data)?;
+    Ok(Box::into_raw(Box::new(ParsedFile::Lazy(reader))))
+}
+
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_mzml(pointer: *mut MzML) {
-    if !pointer.is_null() {
-        unsafe {
-            let memory_slice = Box::from_raw(pointer);
-            drop(memory_slice);
-        };
+pub unsafe extern "C" fn free_mzml(handle: *mut ParsedFile) {
+    if !handle.is_null() {
+        unsafe { drop(Box::from_raw(handle)) };
     }
 }
 
@@ -124,23 +177,20 @@ pub unsafe extern "C" fn free_mzml(pointer: *mut MzML) {
 pub unsafe extern "C" fn parse_mzml(
     data_pointer: *const u8,
     data_length: usize,
-    destination: *mut *mut MzML,
+    destination: *mut *mut ParsedFile,
 ) -> c_int {
     if data_pointer.is_null() || destination.is_null() {
         return ERR_INVALID_ARGS;
     }
-    let safe_outcome = catch_unwind(AssertUnwindSafe(|| -> Result<*mut MzML, c_int> {
+    let safe_outcome = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let xml_byte_slice = unsafe { slice::from_raw_parts(data_pointer, data_length) };
-        let parsed_mzml_object = parse_mzml_rs(xml_byte_slice).map_err(|_| ERR_PARSE)?;
-        let allocated_pointer = Box::into_raw(Box::new(parsed_mzml_object));
-        Ok(allocated_pointer)
+        let parsed = parse_mzml_rs(xml_byte_slice).map_err(|_| ERR_PARSE)?;
+        unsafe { *destination = handle_from_mzml(parsed) };
+        Ok(())
     }));
     match safe_outcome {
-        Ok(Ok(valid_pointer)) => {
-            unsafe { *destination = valid_pointer };
-            OK
-        }
-        Ok(Err(error_code)) => error_code,
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
         Err(_) => ERR_PANIC,
     }
 }
@@ -150,85 +200,54 @@ pub unsafe extern "C" fn parse_mzml(
 pub unsafe extern "C" fn parse_mzml(
     data_ptr: *const u8,
     data_len: usize,
-    destination: *mut *mut MzML,
+    destination: *mut *mut ParsedFile,
 ) -> c_int {
     if data_ptr.is_null() || destination.is_null() {
         return ERR_INVALID_ARGS;
     }
-    let result = catch_unwind(AssertUnwindSafe(|| -> Result<*mut MzML, c_int> {
+    let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let xml_bytes = unsafe { slice::from_raw_parts(data_ptr, data_len) };
         let parsed = parse_mzml_rs(xml_bytes).map_err(|_| ERR_PARSE)?;
-        Ok(Box::into_raw(Box::new(parsed)))
+        unsafe { *destination = handle_from_mzml(parsed) };
+        Ok(())
     }));
     match result {
-        Ok(Ok(ptr)) => {
-            unsafe { *destination = ptr };
-            OK
-        }
+        Ok(Ok(())) => OK,
         Ok(Err(code)) => code,
         Err(_) => ERR_PANIC,
     }
 }
 
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn parse_bin(
-    data_pointer: *const u8,
-    data_length: usize,
-    destination: *mut *mut MzML,
-) -> c_int {
-    if data_pointer.is_null() || destination.is_null() {
-        return ERR_INVALID_ARGS;
-    }
-    let safe_outcome = catch_unwind(AssertUnwindSafe(|| -> Result<*mut MzML, c_int> {
-        let binary_slice = unsafe { slice::from_raw_parts(data_pointer, data_length) };
-        let mzml_object = decode(binary_slice).map_err(|_| ERR_PARSE)?;
-        let allocated_pointer = Box::into_raw(Box::new(mzml_object));
-        Ok(allocated_pointer)
-    }));
-    match safe_outcome {
-        Ok(Ok(valid_memory_pointer)) => {
-            unsafe { *destination = valid_memory_pointer };
-            OK
-        }
-        Ok(Err(error_code)) => error_code,
-        Err(_) => ERR_PANIC,
-    }
-}
-
-#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn parse_bin(
     data_ptr: *const u8,
     data_len: usize,
-    destination: *mut *mut MzML,
+    destination: *mut *mut ParsedFile,
 ) -> c_int {
     if data_ptr.is_null() || destination.is_null() {
         return ERR_INVALID_ARGS;
     }
-    let result = catch_unwind(AssertUnwindSafe(|| -> Result<*mut MzML, c_int> {
-        let binary_slice = unsafe { slice::from_raw_parts(data_ptr, data_len) };
-        let decoded = decode(binary_slice).map_err(|_| ERR_PARSE)?;
-        Ok(Box::into_raw(Box::new(decoded)))
+    let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let slice = unsafe { std::slice::from_raw_parts(data_ptr, data_len) };
+        let arc: Arc<[u8]> = Arc::from(slice);
+        let ptr = handle_from_ion_bytes(arc).map_err(|_| ERR_PARSE)?;
+        unsafe { *destination = ptr };
+        Ok(())
     }));
-    match result {
-        Ok(Ok(ptr)) => {
-            unsafe { *destination = ptr };
-            OK
-        }
+    match res {
+        Ok(Ok(())) => OK,
         Ok(Err(code)) => code,
         Err(_) => ERR_PANIC,
     }
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn bin_to_json(handle_ptr: *const MzML, out_json: *mut Buf) -> c_int {
+pub unsafe extern "C" fn bin_to_json(handle_ptr: *const ParsedFile, out_json: *mut Buf) -> c_int {
     if handle_ptr.is_null() || out_json.is_null() {
         return ERR_INVALID_ARGS;
     }
-
     let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let mzml = unsafe { &*handle_ptr };
+        let mzml = unsafe { &*handle_ptr }.as_mzml()?;
         let s = serde_json::to_string(mzml).map_err(|_| ERR_PARSE)?;
         write_buf(out_json, s.into_bytes().into_boxed_slice());
         Ok(())
@@ -242,13 +261,12 @@ pub unsafe extern "C" fn bin_to_json(handle_ptr: *const MzML, out_json: *mut Buf
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn bin_to_mzml(handle_ptr: *const MzML, out_mzml: *mut Buf) -> c_int {
+pub unsafe extern "C" fn bin_to_mzml(handle_ptr: *const ParsedFile, out_mzml: *mut Buf) -> c_int {
     if handle_ptr.is_null() || out_mzml.is_null() {
         return ERR_INVALID_ARGS;
     }
-
     let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let mzml = unsafe { &*handle_ptr };
+        let mzml = unsafe { &*handle_ptr }.as_mzml()?;
         let xml_bytes = bin_to_mzml_rs(mzml).map_err(|_| ERR_ENCODE)?;
         write_buf(out_mzml, xml_bytes.into_bytes().into_boxed_slice());
         Ok(())
@@ -263,7 +281,7 @@ pub unsafe extern "C" fn bin_to_mzml(handle_ptr: *const MzML, out_mzml: *mut Buf
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mzml_to_bin(
-    handle_ptr: *const MzML,
+    handle_ptr: *const ParsedFile,
     out_blob: *mut Buf,
     level: u8,
     f32_compress: u8,
@@ -273,7 +291,7 @@ pub unsafe extern "C" fn mzml_to_bin(
     }
 
     let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let mzml = unsafe { &*handle_ptr };
+        let mzml = unsafe { &*handle_ptr }.as_mzml()?;
         let mut buf: Vec<u8> = Vec::new();
         encode(
             mzml,
@@ -345,7 +363,7 @@ pub unsafe extern "C" fn get_peak(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_peaks_from_eic(
-    handle_ptr: *const MzML,
+    handle_ptr: *const ParsedFile,
     rts_ptr: *const f64,
     mzs_ptr: *const f64,
     ranges_ptr: *const f64,
@@ -370,7 +388,7 @@ pub unsafe extern "C" fn get_peaks_from_eic(
         return ERR_INVALID_ARGS;
     }
     let run = || -> Result<(), i32> {
-        let mzml = unsafe { &*handle_ptr };
+        let file = unsafe { &mut *(handle_ptr as *mut ParsedFile) };
 
         let rts = unsafe { std::slice::from_raw_parts(rts_ptr, n_items) };
         let mzs = unsafe { std::slice::from_raw_parts(mzs_ptr, n_items) };
@@ -437,7 +455,7 @@ pub unsafe extern "C" fn get_peaks_from_eic(
             to: to_right,
         };
         let fp = build_find_peaks_options(options);
-        let peaks = get_peaks_from_eic_rs(mzml, window, items.as_slice(), Some(fp), cores)
+        let peaks = get_peaks_from_eic_rs(file, window, items.as_slice(), Some(fp), cores)
             .ok_or(ERR_PARSE)?;
 
         let mut arr = Vec::with_capacity(peaks.len());
@@ -467,7 +485,7 @@ pub unsafe extern "C" fn get_peaks_from_eic(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_peaks_from_chrom(
-    handle_ptr: *const MzML,
+    handle_ptr: *const ParsedFile,
     idxs_ptr: *const u32,
     rts_ptr: *const f64,
     ranges_ptr: *const f64,
@@ -486,7 +504,7 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
         return ERR_INVALID_ARGS;
     }
     let run = || -> Result<(), i32> {
-        let mzml = unsafe { &*handle_ptr };
+        let mzml = unsafe { &*handle_ptr }.as_mzml()?;
         let idxs = unsafe { std::slice::from_raw_parts(idxs_ptr, n_items) };
         let rts = unsafe { std::slice::from_raw_parts(rts_ptr, n_items) };
         let wins = unsafe { std::slice::from_raw_parts(ranges_ptr, n_items) };
@@ -625,7 +643,7 @@ pub extern "C" fn find_noise_level(y_ptr: *const f32, len: usize) -> f32 {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn calculate_eic(
-    handle_ptr: *const MzML,
+    handle_ptr: *mut ParsedFile,
     target: f64,
     from_time: f64,
     to_time: f64,
@@ -638,9 +656,9 @@ pub unsafe extern "C" fn calculate_eic(
         return ERR_INVALID_ARGS;
     }
     let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let mzml = unsafe { &*handle_ptr };
+        let file = unsafe { &mut *handle_ptr };
         let eic = calculate_eic_rs(
-            mzml,
+            file,
             target,
             FromTo {
                 from: from_time,
@@ -652,11 +670,8 @@ pub unsafe extern "C" fn calculate_eic(
                 ..Default::default()
             },
         );
-
-        let x_bytes = f64_slice_to_u8_box(&eic.x);
-        let y_bytes = f64_slice_to_u8_box(&eic.y);
-        write_buf(out_x, x_bytes);
-        write_buf(out_y, y_bytes);
+        write_buf(out_x, f64_slice_to_u8_box(&eic.x));
+        write_buf(out_y, f64_slice_to_u8_box(&eic.y));
         Ok(())
     }));
     match res {
@@ -668,33 +683,23 @@ pub unsafe extern "C" fn calculate_eic(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn collect_scans(
-    handle_ptr: *const MzML,
+    handle_ptr: *mut ParsedFile,
     from_time: f64,
     to_time: f64,
     level: u8,
-    include_metadata: c_int,
     out_json: *mut Buf,
 ) -> c_int {
     if handle_ptr.is_null() || out_json.is_null() {
         return ERR_INVALID_ARGS;
     }
-
     let res = catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let mzml = unsafe { &*handle_ptr };
-
-        let include_metadata = include_metadata != 0;
-
-        let (_retention_times, scans) = collect_scans_rs(
-            mzml,
-            FromTo {
-                from: from_time,
-                to: to_time,
-            },
-            EicOptions::default().time_unit,
-            level,
-            include_metadata,
-        );
-
+        let file = unsafe { &mut *handle_ptr };
+        let time_range = FromTo {
+            from: from_time,
+            to: to_time,
+        };
+        let time_unit = EicOptions::default().time_unit;
+        let (_rts, scans) = collect_scans_rs(file, time_range, time_unit, level);
         let arr: Vec<_> = scans
             .iter()
             .map(|scan| {
@@ -706,12 +711,10 @@ pub unsafe extern "C" fn collect_scans(
                 })
             })
             .collect();
-
         let s = serde_json::to_string(&arr).map_err(|_| ERR_PARSE)?;
         write_buf(out_json, s.into_bytes().into_boxed_slice());
         Ok(())
     }));
-
     match res {
         Ok(Ok(())) => OK,
         Ok(Err(code)) => code,
@@ -846,7 +849,7 @@ pub unsafe extern "C" fn get_features(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn find_features(
-    handle_ptr: *const MzML,
+    handle_ptr: *mut ParsedFile,
     from_time: f64,
     to_time: f64,
     eic_ppm_tolerance: f64,
@@ -867,7 +870,7 @@ pub unsafe extern "C" fn find_features(
     }
 
     let run = || -> Result<(), c_int> {
-        let mzml = unsafe { &*handle_ptr };
+        let file = unsafe { &mut *(handle_ptr as *mut ParsedFile) };
 
         let mut eic_opts = EicOptions::default();
         if eic_ppm_tolerance.is_finite() && eic_ppm_tolerance >= 0.0 {
@@ -885,13 +888,13 @@ pub unsafe extern "C" fn find_features(
             mzr.mz_max = grid_end;
         }
         if grid_step > 0.0 {
-            mzr.step_size = grid_step as f64;
+            mzr.step_size = grid_step;
         }
 
         let fp_opts = build_find_peaks_options(peak_opts);
 
         let feats = find_features_rs(
-            mzml,
+            file,
             FromTo {
                 from: from_time,
                 to: to_time,
@@ -912,10 +915,10 @@ pub unsafe extern "C" fn find_features(
                 "mz":        f64_ok(f.mz),
                 "rt":        f64_ok(f.rt),
                 "intensity": f64_ok(f.intensity),
-                "from": f64_ok(f.from),
-                "to": f64_ok(f.to),
-                "integral": f64_ok(f.integral),
-                "np": f64_ok(f.np as f64),
+                "from":      f64_ok(f.from),
+                "to":        f64_ok(f.to),
+                "integral":  f64_ok(f.integral),
+                "np":        f64_ok(f.np as f64),
             }));
         }
         let s = serde_json::to_string(&arr).map_err(|_| ERR_PARSE)?;
@@ -930,6 +933,7 @@ pub unsafe extern "C" fn find_features(
     }
 }
 
+#[inline]
 fn f64_ok(v: f64) -> f64 {
     if v.is_finite() { v } else { 0.0 }
 }
@@ -1055,7 +1059,7 @@ fn build_find_peaks_options(options: *const CPeakPOptions) -> FindPeaksOptions {
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn find_feature(
-    handle_ptr: *const MzML,
+    handle_ptr: *const ParsedFile,
     rts_ptr: *const f64,
     mzs_ptr: *const f64,
     windows_ptr: *const f64,
@@ -1083,7 +1087,7 @@ pub unsafe extern "C" fn find_feature(
     }
 
     let run = || -> Result<(), c_int> {
-        let mzml = unsafe { &*handle_ptr };
+        let file = unsafe { &mut *(handle_ptr as *mut ParsedFile) };
 
         let rts = unsafe { slice::from_raw_parts(rts_ptr, n_items) };
         let mzs = unsafe { slice::from_raw_parts(mzs_ptr, n_items) };
@@ -1176,7 +1180,7 @@ pub unsafe extern "C" fn find_feature(
             roi_refs.push(r);
         }
 
-        let results = find_feature_rs(mzml, roi_refs.as_slice(), cores, Some(opts));
+        let results = find_feature_rs(file, roi_refs.as_slice(), cores, Some(opts));
 
         let mut arr = Vec::with_capacity(results.len());
         for (i, out) in results.iter().enumerate() {

@@ -1,12 +1,11 @@
 use crate::utilities::calculate_eic::{
-    CentroidScan, EicOptions, collect_scans, compute_eic_for_mz,
+    EicOptions, collect_scans, compute_eic_for_mz, lower_bound, upper_bound,
 };
 use crate::utilities::find_features::max_intensity_centroid;
 use crate::utilities::find_peaks::FindPeaksOptions;
 use crate::utilities::get_peak::get_peak;
 use crate::utilities::structs::{DataXY, EicRoi, FromTo, Peak, Roi};
-use octo::MzML;
-
+use ionic::SpectrumSource;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::{ThreadPoolBuilder, prelude::*};
 
@@ -44,7 +43,7 @@ impl Default for FindFeatureOptions {
 }
 
 pub fn find_feature(
-    mzml: &MzML,
+    source: &mut impl SpectrumSource,
     rois: &[&EicRoi],
     cores: usize,
     options: Option<FindFeatureOptions>,
@@ -53,39 +52,6 @@ pub fn find_feature(
         return Vec::new();
     }
 
-    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-    {
-        return rois
-            .iter()
-            .map(|roi| find_one_feature(mzml, roi, options.clone()))
-            .collect();
-    }
-
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    {
-        if cores <= 1 {
-            return rois
-                .iter()
-                .map(|roi| find_one_feature(mzml, roi, options.clone()))
-                .collect();
-        }
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(cores)
-            .build()
-            .expect("thread pool");
-        pool.install(|| {
-            rois.par_iter()
-                .map(|roi| find_one_feature(mzml, roi, options.clone()))
-                .collect::<Vec<_>>()
-        })
-    }
-}
-
-pub fn find_one_feature(
-    mzml: &MzML,
-    roi: &EicRoi,
-    options: Option<FindFeatureOptions>,
-) -> Option<Feature> {
     let opts = options.unwrap_or_default();
     let scan_opts = opts.scan_eic_options.unwrap_or(EicOptions {
         ppm_tolerance: 10.0,
@@ -99,34 +65,87 @@ pub fn find_one_feature(
     });
     let fp_opts = opts.find_peaks.unwrap_or_default();
 
-    let time_window = FromTo {
-        from: roi.rt - roi.window,
-        to: roi.rt + roi.window,
-    };
-    let (rts, scans): (Vec<f64>, Vec<CentroidScan>) =
-        collect_scans(mzml, time_window, eic_opts.time_unit, 1, false);
-    if scans.is_empty() || rts.is_empty() {
-        return None;
+    let mut rt_min = f64::MAX;
+    let mut rt_max = f64::MIN;
+    for roi in rois {
+        if roi.rt.is_finite() && roi.window.is_finite() && roi.window > 0.0 {
+            rt_min = rt_min.min(roi.rt - roi.window);
+            rt_max = rt_max.max(roi.rt + roi.window);
+        }
     }
 
-    let refined_mz =
-        max_intensity_centroid(&scans, &rts, time_window.from, time_window.to, scan_opts).unwrap();
+    if !rt_min.is_finite() || !rt_max.is_finite() || rt_max <= rt_min {
+        return vec![None; rois.len()];
+    }
 
-    let y = compute_eic_for_mz(&scans, rts.len(), refined_mz, eic_opts);
-    let data = DataXY { x: rts, y };
-
-    let picked = get_peak(
-        &data,
-        &Roi {
-            rt: roi.rt,
-            window: roi.window,
+    let (rts, scans) = collect_scans(
+        source,
+        FromTo {
+            from: rt_min,
+            to: rt_max,
         },
-        Some(fp_opts),
-    )?;
-    Some(Feature {
-        id: roi.id.clone(),
-        mz: refined_mz,
-        rt: picked.rt,
-        peak: picked,
-    })
+        eic_opts.time_unit,
+        1,
+    );
+
+    if scans.is_empty() || rts.is_empty() {
+        return vec![None; rois.len()];
+    }
+
+    let process = |roi: &&EicRoi| -> Option<Feature> {
+        if !roi.rt.is_finite() || !roi.mz.is_finite() || roi.window <= 0.0 {
+            return None;
+        }
+
+        let local_from = roi.rt - roi.window;
+        let local_to = roi.rt + roi.window;
+        let start = lower_bound(&rts, local_from);
+        let end = upper_bound(&rts, local_to).min(rts.len());
+        if end <= start {
+            return None;
+        }
+
+        let local_rts = &rts[start..end];
+        let local_scans = &scans[start..end];
+
+        let refined_mz = max_intensity_centroid(local_scans, local_rts, roi.rt, roi.mz, scan_opts)?;
+        let y = compute_eic_for_mz(local_scans, local_rts.len(), refined_mz, eic_opts);
+        let data = DataXY {
+            x: local_rts.to_vec(),
+            y,
+        };
+
+        let picked = get_peak(
+            &data,
+            &Roi {
+                rt: roi.rt,
+                window: roi.window,
+            },
+            Some(fp_opts.clone()),
+        )?;
+
+        Some(Feature {
+            id: roi.id.clone(),
+            mz: refined_mz,
+            rt: picked.rt,
+            peak: picked,
+        })
+    };
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    {
+        return rois.iter().map(process).collect();
+    }
+
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    {
+        if cores <= 1 {
+            return rois.iter().map(process).collect();
+        }
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(cores)
+            .build()
+            .expect("thread pool");
+        pool.install(|| rois.par_iter().map(process).collect::<Vec<_>>())
+    }
 }

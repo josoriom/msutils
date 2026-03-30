@@ -1,4 +1,4 @@
-use octo::{BinaryData, BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML};
+use ionic::{BinaryData, BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML};
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::{ThreadPoolBuilder, prelude::*};

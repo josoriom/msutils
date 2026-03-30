@@ -2,10 +2,10 @@ import { WasmBackend } from "./utilities/backendWasm";
 import { setBackend } from "./utilities/api";
 
 const backend = new WasmBackend();
+const _ready = backend.init().then(() => setBackend(backend));
 
 export async function init(): Promise<void> {
-  await backend.init();
-  setBackend(backend);
+  await _ready;
 }
 
 export * from "./utilities/api";

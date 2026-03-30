@@ -16,10 +16,10 @@ use crate::utilities::{
     get_peak::get_peak,
     structs::{DataXY, Roi},
 };
-use octo::MzML;
+use ionic::{MzML, SpectrumSource};
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use octo::{decoder::decode, parse_mzml};
+use ionic::{decoder::decode, parse_mzml};
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use std::{fs, time::Instant};
 
@@ -234,7 +234,7 @@ pub fn get_features(
     cores: usize,
 ) -> Result<Vec<ConsensusFeature>, AlignmentError> {
     let datasets = load_mzml_files(directory_path)?;
-    let datasets = detect_features_per_sample(datasets, time_window, &feature_config, cores);
+    let mut datasets = detect_features_per_sample(datasets, time_window, &feature_config, cores);
 
     let clusterer = FeatureClusterer {
         tolerance: alignment_config.tolerance.clone(),
@@ -256,7 +256,7 @@ pub fn get_features(
 
     let results: Vec<ConsensusFeature> = clusters
         .into_iter()
-        .filter_map(|cluster| build_consensus_feature(cluster, &datasets, &alignment_config))
+        .filter_map(|cluster| build_consensus_feature(cluster, &mut datasets, &alignment_config))
         .collect();
 
     let points: Vec<(f64, f64, f64)> = results.iter().map(|f| (f.rt, f.mz, f.intensity)).collect();
@@ -325,10 +325,10 @@ fn detect_features_per_sample(
     samples
         .into_iter()
         .enumerate()
-        .map(|(idx, (name, mzml))| {
+        .map(|(idx, (name, mut mzml))| {
             let start = Instant::now();
             let features = find_features(
-                &mzml,
+                &mut mzml,
                 time_window,
                 Some(FindFeaturesOptions {
                     scan_eic_options: Some(config.scan_eic_options),
@@ -354,7 +354,7 @@ fn detect_features_per_sample(
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 fn build_consensus_feature(
     cluster: Cluster,
-    datasets: &[SampleDataset],
+    datasets: &mut [SampleDataset],
     config: &ConsensusAlignmentConfig,
 ) -> Option<ConsensusFeature> {
     let mut slots = assign_best_per_sample(cluster, datasets.len());
@@ -404,7 +404,7 @@ pub(crate) fn compute_search_bounds(
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 fn fill_missing_slots(
     slots: &mut [Option<Feature>],
-    datasets: &[SampleDataset],
+    datasets: &mut [SampleDataset],
     bounds: &SearchBounds,
     config: &ConsensusAlignmentConfig,
 ) {
@@ -413,7 +413,7 @@ fn fill_missing_slots(
             continue;
         }
         if let Some(filled) = fill_missing_feature(
-            &datasets[idx].1,
+            &mut datasets[idx].1,
             bounds.target_mz,
             bounds.rt_from,
             bounds.rt_to,
@@ -481,7 +481,7 @@ pub(crate) fn median(values: &mut [f64]) -> f64 {
 }
 
 fn fill_missing_feature(
-    mzml: &MzML,
+    source: &mut impl SpectrumSource,
     target_mz: f64,
     rt_start: f64,
     rt_end: f64,
@@ -490,14 +490,13 @@ fn fill_missing_feature(
     peak_options: Option<FindPeaksOptions>,
 ) -> Option<Feature> {
     let (time_points, ms1_scans) = collect_scans(
-        mzml,
+        source,
         FromTo {
             from: rt_start,
             to: rt_end,
         },
         TimeUnit::Minutes,
         1,
-        false,
     );
 
     if ms1_scans.is_empty() {

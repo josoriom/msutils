@@ -31,7 +31,6 @@ export interface Backend {
     from: number,
     to: number,
     level: number,
-    includeMetadata: boolean,
   ): any;
 
   findPeaks(

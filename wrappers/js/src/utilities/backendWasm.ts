@@ -247,7 +247,6 @@ class WasmExports {
     from: number,
     to: number,
     level: number,
-    includeMetadata: number,
     outBuf: number,
   ) => number;
 
@@ -396,19 +395,12 @@ class WasmApi {
     return { x, y };
   }
 
-  collectScans(
-    handle: number,
-    from: number,
-    to: number,
-    level: number,
-    includeMetadata: boolean,
-  ): any {
+  collectScans(handle: number, from: number, to: number, level: number): any {
     const rc = this.fn.collectScans(
       handle,
       from,
       to,
       level,
-      includeMetadata ? 1 : 0,
       this.jsonOutputSlot,
     );
     if (rc !== 0) throw new Error("collect_scans failed with code " + rc);
@@ -747,15 +739,8 @@ export class WasmBackend implements Backend {
     from: number,
     to: number,
     level: number,
-    includeMetadata: boolean,
   ): any {
-    return this.getApi().collectScans(
-      handle as number,
-      from,
-      to,
-      level,
-      includeMetadata,
-    );
+    return this.getApi().collectScans(handle as number, from, to, level);
   }
 
   findPeaks(

@@ -74,7 +74,7 @@ typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakPOptions *, int32_t, Buf *);
-typedef int32_t (*fn_collect_scans)(const MzML *, double, double, uint8_t, int32_t, Buf *);
+typedef int32_t (*fn_collect_scans)(const MzML *, double, double, uint8_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 
 typedef struct
@@ -872,7 +872,7 @@ static Napi::Value GetFeatures(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
 
-  if (info.Length() < 14 || !info[0].IsString()) // was 13, now 14
+  if (info.Length() < 14 || !info[0].IsString())
   {
     Napi::TypeError::New(env, "Invalid arguments for getFeatures").ThrowAsJavaScriptException();
     return env.Undefined();
@@ -936,23 +936,8 @@ static Napi::Value CollectScans(const Napi::CallbackInfo &info)
   double to_rt = info[2].As<Napi::Number>().DoubleValue();
   uint8_t level = (uint8_t)info[3].As<Napi::Number>().Uint32Value();
 
-  int32_t include_metadata = 0;
-  if (info.Length() > 4 && !info[4].IsUndefined() && !info[4].IsNull())
-  {
-    if (info[4].IsBoolean())
-      include_metadata = info[4].As<Napi::Boolean>().Value() ? 1 : 0;
-    else if (info[4].IsNumber())
-      include_metadata = info[4].As<Napi::Number>().Int32Value() != 0 ? 1 : 0;
-    else
-    {
-      Napi::TypeError::New(env, "includeMetadata must be a boolean or number")
-          .ThrowAsJavaScriptException();
-      return env.Undefined();
-    }
-  }
-
   OwnedBuf out;
-  int32_t rc = ABI.collect_scans(handle, from_rt, to_rt, level, include_metadata, out.Out());
+  int32_t rc = ABI.collect_scans(handle, from_rt, to_rt, level, out.Out());
   if (rc != 0)
     return ThrowRc(env, "collect_scans", rc);
 

@@ -17,6 +17,7 @@ import type {
   ConsensusFeature,
   FromTo,
   CentroidScan,
+  SpectrumSummary,
 } from "../types/types";
 
 export type {
@@ -34,6 +35,7 @@ export type {
   ConsensusFeature,
   FromTo,
   CentroidScan,
+  SpectrumSummary,
 };
 
 const DEFAULTS = {
@@ -55,9 +57,14 @@ const DEFAULTS = {
 } as const;
 
 let _backend: Backend | null = null;
+let _initPromise: Promise<void> | null = null;
 
 export function setBackend(b: Backend): void {
   _backend = b;
+}
+
+export function setInitPromise(p: Promise<void>): void {
+  _initPromise = p;
 }
 
 function backend(): Backend {
@@ -69,20 +76,27 @@ function backend(): Backend {
   return _backend;
 }
 
+async function backendAsync(): Promise<Backend> {
+  if (_initPromise) await _initPromise;
+  return backend();
+}
+
 function assertFile(file: MzMlFile, caller: string): void {
   if (!(file instanceof MzMlFile) || !file._handle) {
     throw new Error(`${caller}: expects a valid MzMlFile object`);
   }
 }
 
-export function parseMzML(data: BinaryInput): MzMlFile {
-  const handle = backend().parseMzML(toUint8(data));
-  return new MzMlFile(handle, backend());
+export async function parseMzML(data: BinaryInput): Promise<MzMlFile> {
+  const b = await backendAsync();
+  const handle = b.parseMzML(toUint8(data));
+  return new MzMlFile(handle, b);
 }
 
-export function parseBin(data: BinaryInput): MzMlFile {
-  const handle = backend().parseBin(toUint8(data));
-  return new MzMlFile(handle, backend());
+export async function parseBin(data: BinaryInput): Promise<MzMlFile> {
+  const b = await backendAsync();
+  const handle = b.parseBin(toUint8(data));
+  return new MzMlFile(handle, b);
 }
 
 export function binToJson(file: MzMlFile): string {
@@ -174,7 +188,6 @@ export function collectScans(
   file: MzMlFile,
   fromTo: FromTo,
   level = 1,
-  includeMetadata = false,
 ): CentroidScan[] {
   assertFile(file, "collectScans");
   if (
@@ -187,9 +200,8 @@ export function collectScans(
     throw new RangeError("collectScans: level must be an integer in [0,255]");
   }
   const { from, to } = fromTo;
-  return camelizeKeys(
-    backend().collectScans(file._handle!, from, to, level, includeMetadata),
-  );
+  const result = backend().collectScans(file._handle!, from, to, level);
+  return camelizeKeys(result);
 }
 
 export function getPeaksFromEic(

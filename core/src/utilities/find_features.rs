@@ -1,4 +1,4 @@
-use octo::MzML;
+use ionic::SpectrumSource;
 use serde::Serialize;
 use std::{
     cmp::Ordering,
@@ -167,7 +167,7 @@ impl From<FindFeaturesOptions> for FindFeaturesConfig {
 }
 
 pub fn find_features(
-    mzml: &MzML,
+    source: &mut impl SpectrumSource,
     time_window: FromTo,
     options: Option<FindFeaturesOptions>,
     cores: usize,
@@ -190,7 +190,7 @@ pub fn find_features(
         return Err(FeatureError::GridTooLarge(grid.len()));
     }
 
-    let (time, scans) = collect_scans(mzml, time_window, TimeUnit::Minutes, 1, false);
+    let (time, scans) = collect_scans(source, time_window, TimeUnit::Minutes, 1);
     if scans.is_empty() {
         return Err(FeatureError::NoScans);
     }

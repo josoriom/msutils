@@ -1,7 +1,7 @@
 import type { BinaryInput } from "../types/types";
 
-export function snakeToCamel(s: string): string {
-  return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+function snakeToCamel(key: string): string {
+  return key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
 }
 
 export function camelizeKeys<T>(value: T): T {
