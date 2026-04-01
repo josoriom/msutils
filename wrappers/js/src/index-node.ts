@@ -2,7 +2,9 @@ import { NodeBackend } from "./utilities/backendNode";
 import { setBackend, setInitPromise } from "./utilities/api";
 
 const backend = new NodeBackend(process);
-const _ready = Promise.resolve().then(() => setBackend(backend));
+setBackend(backend);
+
+const _ready = Promise.resolve();
 setInitPromise(_ready);
 
 export async function init(): Promise<void> {

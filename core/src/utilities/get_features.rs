@@ -284,7 +284,7 @@ fn load_mzml_files(directory: &str) -> Result<Vec<(String, MzML)>, AlignmentErro
     let entries: Vec<_> = fs::read_dir(directory)?
         .filter_map(|entry| {
             let path = entry.ok()?.path();
-            matches!(path.extension()?.to_str()?, "mzML" | "b64").then_some(path)
+            matches!(path.extension()?.to_str()?, "mzML" | "ion").then_some(path)
         })
         .collect();
 
@@ -307,7 +307,7 @@ fn load_mzml_files(directory: &str) -> Result<Vec<(String, MzML)>, AlignmentErro
                     path: file_name.clone(),
                     source: e.to_string(),
                 })?,
-                "b64" => {
+                "ion" => {
                     let mut decoder =
                         decoder::Decoder::open(&bytes).map_err(|e| AlignmentError::Parse {
                             path: file_name.clone(),
