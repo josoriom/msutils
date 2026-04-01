@@ -12,7 +12,7 @@ pub struct FromTo {
     pub to: f64,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize)]
 pub struct Peak {
     pub from: f64,
     pub to: f64,

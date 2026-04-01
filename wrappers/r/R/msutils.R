@@ -400,9 +400,11 @@ find_features <- function(
   df
 }
 
-parse_bin <- function(bin) {
+parse_bin <- function(bin, max_cache_size = 0) {
   if (!is.raw(bin)) stop("`bin` must be a raw vector (BINZ bytes)")
-  .Call("C_parse_bin", bin, PACKAGE = "msutils")
+  if (!is.numeric(max_cache_size) || length(max_cache_size) != 1 || is.na(max_cache_size) || max_cache_size < 0)
+    stop("`max_cache_size` must be a single non-negative number")
+  .Call("C_parse_bin", bin, as.numeric(max_cache_size), PACKAGE = "msutils")
 }
 
 collect_scans <- function(bin, from, to, level = 1L, include_metadata = FALSE) {

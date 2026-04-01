@@ -13,5 +13,4 @@ Cargo.lock
 **/target-windows-amd64
 **/target-windows-arm64
 **/.vscode
-artifacts
 debug/*

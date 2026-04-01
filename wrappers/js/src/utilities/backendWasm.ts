@@ -153,6 +153,7 @@ class WasmExports {
   readonly parseBin: (
     dataPtr: number,
     dataLen: number,
+    maxCacheSize: number,
     outPtr: number,
   ) => number;
   readonly freeMzml: (handle: number) => void;
@@ -247,7 +248,6 @@ class WasmExports {
     from: number,
     to: number,
     level: number,
-    includeMetadata: number,
     outBuf: number,
   ) => number;
 
@@ -322,10 +322,15 @@ class WasmApi {
     }
   }
 
-  parseBinRaw(data: Uint8Array): number {
+  parseBinRaw(data: Uint8Array, maxCacheSize = 0): number {
     const [ptr, len] = this.heap.allocAndWrite(data);
     try {
-      const rc = this.fn.parseBin(ptr, len, this.handleScratchSlot);
+      const rc = this.fn.parseBin(
+        ptr,
+        len,
+        maxCacheSize,
+        this.handleScratchSlot,
+      );
       if (rc !== 0) throw new Error("parse_bin failed with code " + rc);
       return this.heap.readU32(this.handleScratchSlot);
     } finally {
@@ -396,19 +401,12 @@ class WasmApi {
     return { x, y };
   }
 
-  collectScans(
-    handle: number,
-    from: number,
-    to: number,
-    level: number,
-    includeMetadata: boolean,
-  ): any {
+  collectScans(handle: number, from: number, to: number, level: number): any {
     const rc = this.fn.collectScans(
       handle,
       from,
       to,
       level,
-      includeMetadata ? 1 : 0,
       this.jsonOutputSlot,
     );
     if (rc !== 0) throw new Error("collect_scans failed with code " + rc);
@@ -696,8 +694,8 @@ export class WasmBackend implements Backend {
     return this.getApi().parseMzMLRaw(data);
   }
 
-  parseBin(data: Uint8Array): FileHandle {
-    return this.getApi().parseBinRaw(data);
+  parseBin(data: Uint8Array, maxCacheSize = 0): FileHandle {
+    return this.getApi().parseBinRaw(data, maxCacheSize);
   }
 
   freeFile(handle: FileHandle): void {
@@ -747,15 +745,8 @@ export class WasmBackend implements Backend {
     from: number,
     to: number,
     level: number,
-    includeMetadata: boolean,
   ): any {
-    return this.getApi().collectScans(
-      handle as number,
-      from,
-      to,
-      level,
-      includeMetadata,
-    );
+    return this.getApi().collectScans(handle as number, from, to, level);
   }
 
   findPeaks(

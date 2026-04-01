@@ -104,8 +104,8 @@ export class NodeBackend implements Backend {
     return this.native.parseMzML(toNodeBuffer(data));
   }
 
-  parseBin(data: Uint8Array): FileHandle {
-    return this.native.parseBin(toNodeBuffer(data));
+  parseBin(data: Uint8Array, maxCacheSize = 0): FileHandle {
+    return this.native.parseBin(toNodeBuffer(data), maxCacheSize);
   }
 
   freeFile(handle: FileHandle): void {
@@ -143,10 +143,7 @@ export class NodeBackend implements Backend {
       to,
       ppmTol,
       mzTol,
-    ) as {
-      x: Float64Array;
-      y: Float64Array;
-    };
+    ) as { x: Float64Array; y: Float64Array };
   }
 
   collectScans(
@@ -154,16 +151,9 @@ export class NodeBackend implements Backend {
     from: number,
     to: number,
     level: number,
-    includeMetadata: boolean,
   ): any {
     return JSON.parse(
-      this.native.collectScans(
-        handle,
-        from,
-        to,
-        level,
-        includeMetadata ? 1 : 0,
-      ) as string,
+      this.native.collectScans(handle, from, to, level) as string,
     );
   }
 

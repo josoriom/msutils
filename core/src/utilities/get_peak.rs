@@ -1,7 +1,7 @@
 use crate::utilities::find_peaks::{FindPeaksOptions, find_peaks};
 use crate::utilities::structs::{DataXY, Peak, Roi};
 
-pub fn get_peak(data: &DataXY, roi: Roi, options: Option<FindPeaksOptions>) -> Option<Peak> {
+pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> Option<Peak> {
     let peaks = find_peaks(data, options);
 
     if peaks.is_empty() {

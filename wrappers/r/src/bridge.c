@@ -58,7 +58,7 @@ typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_
 typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, Buf *);
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
-typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, MzML **);
+typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, size_t, MzML **);
 typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakPOptions *, int32_t, Buf *);
 typedef int32_t (*fn_collect_scans)(const MzML *, double, double, uint8_t, int32_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
@@ -717,14 +717,20 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
   return res;
 }
 
-SEXP C_parse_bin(SEXP bin)
+SEXP C_parse_bin(SEXP bin, SEXP max_cache_size)
 {
   if (TYPEOF(bin) != RAWSXP)
     error("msutils: data must be a raw vector");
   REQUIRE_BOUND(ABI.parse_bin, "parse_bin");
 
+  size_t cache = (max_cache_size == R_NilValue) ? 0 : (size_t)asReal(max_cache_size);
+
   MzML *handle = NULL;
-  int code = ABI.parse_bin((const unsigned char *)RAW(bin), (size_t)XLENGTH(bin), &handle);
+  int code = ABI.parse_bin(
+      (const unsigned char *)RAW(bin),
+      (size_t)XLENGTH(bin),
+      cache,
+      &handle);
   die_code("parse_bin", code);
 
   SEXP ptr = PROTECT(R_MakeExternalPtr(handle, R_NilValue, R_NilValue));

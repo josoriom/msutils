@@ -6,7 +6,7 @@ export interface Backend {
   init(): Promise<void>;
 
   parseMzML(data: Uint8Array): FileHandle;
-  parseBin(data: Uint8Array): FileHandle;
+  parseBin(data: Uint8Array, maxCacheSize?: number): FileHandle;
   freeFile(handle: FileHandle): void;
 
   fileToJson(handle: FileHandle): any;
@@ -31,7 +31,6 @@ export interface Backend {
     from: number,
     to: number,
     level: number,
-    includeMetadata: boolean,
   ): any;
 
   findPeaks(

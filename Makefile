@@ -1,13 +1,16 @@
 CRATE          := msutils
 CRATE_MANIFEST := core/Cargo.toml
 ARTIFACTS      := artifacts
-DOCKER_BULLSEYE_IMAGE   := rust:1-bullseye
-WINDOWS_ARM64_IMAGE := dockcross/windows-arm64:latest
+DOCKER_BULLSEYE_IMAGE := rust:1-bullseye
+WINDOWS_ARM64_IMAGE   := dockcross/windows-arm64:latest
+WINDOWS_ARM64_TARGET  := aarch64-pc-windows-gnullvm
 
+ROOT_ARTIFACTS := $(abspath $(ARTIFACTS))
 
-.PHONY: all macos-arm64 macos-x86_64 linux-amd64 linux-arm64 wasm rstage windows-amd64 windows-arm64
+.PHONY: all mac linux windows wasm clean release
+.PHONY: macos-arm64 macos-x86_64 linux-amd64 linux-arm64 windows-amd64 windows-arm64
 
-all: mac linux windows wasm rstage
+all: mac linux windows wasm
 
 mac: macos-arm64 macos-x86_64
 linux: linux-amd64 linux-arm64
@@ -51,24 +54,6 @@ wasm:
 	cargo build --manifest-path $(CRATE_MANIFEST) --release --target wasm32-unknown-unknown
 	mkdir -p $(ARTIFACTS)/wasm
 	cp core/target/wasm32-unknown-unknown/release/$(CRATE).wasm $(ARTIFACTS)/wasm/
-	cp core/target/wasm32-unknown-unknown/release/$(CRATE).wasm wrappers/js/src/ 2>/dev/null || true
-
-rstage:
-	mkdir -p wrappers/r/inst/libs
-	@set -e; \
-	for d in $(ARTIFACTS)/macos-* $(ARTIFACTS)/linux-* $(ARTIFACTS)/windows-* ; do \
-	  [ -d "$$d" ] || continue; \
-	  base=$$(basename "$$d"); \
-	  mkdir -p "wrappers/r/inst/libs/$$base"; \
-	  cp -f "$$d"/* "wrappers/r/inst/libs/$$base/"; \
-	done
-
-clean:
-	cargo clean --manifest-path $(CRATE_MANIFEST)
-	rm -rf $(ARTIFACTS) wrappers/r/inst/libs core/target-linux-amd64 core/target-linux-arm64
-
-cross-check:
-	@command -v cross >/dev/null || (echo "Please install cross: cargo install cross" && false)
 
 windows-amd64:
 	docker run --rm --platform=linux/amd64 \
@@ -87,9 +72,6 @@ windows-amd64:
 	mkdir -p $(ARTIFACTS)/windows-x86_64
 	cp core/target-windows-amd64/x86_64-pc-windows-gnu/release/$(CRATE).dll $(ARTIFACTS)/windows-x86_64/lib$(CRATE).dll
 
-WINDOWS_ARM64_IMAGE := dockcross/windows-arm64:latest
-WINDOWS_ARM64_TARGET := aarch64-pc-windows-gnullvm
-
 windows-arm64:
 	docker run --rm --platform=linux/amd64 \
 	  -e CARGO_TARGET_DIR=/work/core/target-windows-arm64 \
@@ -101,3 +83,22 @@ windows-arm64:
 	    cargo build --manifest-path $(CRATE_MANIFEST) --release --target $(WINDOWS_ARM64_TARGET)'
 	mkdir -p $(ARTIFACTS)/windows-arm64
 	cp core/target-windows-arm64/$(WINDOWS_ARM64_TARGET)/release/$(CRATE).dll $(ARTIFACTS)/windows-arm64/
+
+# Upload all artifacts to a GitHub Release (requires `gh` CLI + VERSION env var)
+# Usage: VERSION=0.1.0 make release
+release:
+	@test -n "$(VERSION)" || (echo "❌  Set VERSION=x.y.z" && exit 1)
+	@command -v gh >/dev/null || (echo "❌  Install gh: https://cli.github.com" && exit 1)
+	gh release create v$(VERSION) --title "v$(VERSION)" --notes "" || true
+	@for d in $(ARTIFACTS)/macos-* $(ARTIFACTS)/linux-* $(ARTIFACTS)/windows-* $(ARTIFACTS)/wasm; do \
+	  [ -d "$$d" ] || continue; \
+	  base=$$(basename "$$d"); \
+	  tar -czf /tmp/$(CRATE)-$$base.tar.gz -C $(ARTIFACTS) $$base; \
+	  gh release upload v$(VERSION) /tmp/$(CRATE)-$$base.tar.gz --clobber; \
+	  echo "✓  uploaded $(CRATE)-$$base.tar.gz"; \
+	done
+
+clean:
+	cargo clean --manifest-path $(CRATE_MANIFEST)
+	rm -rf $(ARTIFACTS) core/target-linux-amd64 core/target-linux-arm64 \
+	       core/target-windows-amd64 core/target-windows-arm64

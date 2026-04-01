@@ -113,18 +113,19 @@ export type FromTo = {
   to: number;
 };
 
-export type ScanMetadataEntry = {
-  section: string;
-  accession?: string;
-  name: string;
-  value: string;
-  unitAccession?: string;
-  unitName?: string;
+export type SpectrumSummary = {
+  rtSeconds: number;
+  basePeakMz: number;
+  selectedIonMz: number;
+  basePeakInt: number;
+  totalIonCurrent: number;
+  msLevel: number;
+  polarity: number;
 };
 
 export type CentroidScan = {
   rt: number;
   mz: number[];
   intensity: number[];
-  metadata: ScanMetadataEntry[];
+  metadata: SpectrumSummary;
 };
