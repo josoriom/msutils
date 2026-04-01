@@ -6,19 +6,6 @@ use serde::Serialize;
 use crate::utilities::structs::{FromTo, Peak};
 
 const MS1_LEVEL: u8 = 1;
-// const ACC_MZ_ARRAY: &str = "MS:1000514";
-// const ACC_INTENSITY_ARRAY: &str = "MS:1000515";
-// const ACC_SCAN_START_TIME: &str = "MS:1000016";
-// const ACC_MS_LEVEL: &str = "MS:1000511";
-// const ACC_BASE_PEAK_MZ: &str = "MS:1000504";
-// const ACC_BASE_PEAK_INT: &str = "MS:1000505";
-// const ACC_TOTAL_ION_CURRENT: &str = "MS:1000285";
-// const ACC_SELECTED_ION_MZ: &str = "MS:1000744";
-// const ACC_POSITIVE_SCAN: &str = "MS:1000130";
-// const ACC_NEGATIVE_SCAN: &str = "MS:1000129";
-// const UO_MIN: &str = "UO:0000031";
-// const UO_SEC: &str = "UO:0000010";
-// const UO_MS: &str = "UO:0000028";
 
 #[derive(Clone, Copy, Debug)]
 pub struct EicOptions {
