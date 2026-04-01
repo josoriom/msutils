@@ -104,8 +104,8 @@ export class NodeBackend implements Backend {
     return this.native.parseMzML(toNodeBuffer(data));
   }
 
-  parseBin(data: Uint8Array): FileHandle {
-    return this.native.parseBin(toNodeBuffer(data));
+  parseBin(data: Uint8Array, maxCacheSize = 0): FileHandle {
+    return this.native.parseBin(toNodeBuffer(data), maxCacheSize);
   }
 
   freeFile(handle: FileHandle): void {

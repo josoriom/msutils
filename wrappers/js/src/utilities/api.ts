@@ -93,9 +93,18 @@ export async function parseMzML(data: BinaryInput): Promise<MzMlFile> {
   return new MzMlFile(handle, b);
 }
 
-export async function parseBin(data: BinaryInput): Promise<MzMlFile> {
+export async function parseBin(
+  data: BinaryInput,
+  options: { maxCacheSize?: number } = {},
+): Promise<MzMlFile> {
+  const { maxCacheSize = 0 } = options;
+  if (maxCacheSize < 0 || !Number.isFinite(maxCacheSize)) {
+    throw new TypeError(
+      "parseBin: maxCacheSize must be a non-negative integer",
+    );
+  }
   const b = await backendAsync();
-  const handle = b.parseBin(toUint8(data));
+  const handle = b.parseBin(toUint8(data), maxCacheSize);
   return new MzMlFile(handle, b);
 }
 

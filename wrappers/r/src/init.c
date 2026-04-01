@@ -15,7 +15,7 @@ SEXP C_calculate_baseline(SEXP y, SEXP baseline_window, SEXP baseline_window_fac
 SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol, SEXP grid_start, SEXP grid_end, SEXP grid_step_ppm, SEXP options, SEXP cores);
 SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan_ppm, SEXP scan_mz, SEXP eic_ppm, SEXP eic_mz, SEXP options, SEXP cores);
 SEXP C_mzml_to_bin(SEXP bin, SEXP level, SEXP f32_compress);
-SEXP C_parse_bin(SEXP bin);
+SEXP C_parse_bin(SEXP bin, SEXP max_cache_size);
 SEXP C_collect_scans(SEXP bin, SEXP from_time, SEXP to_time, SEXP level, SEXP include_metadata);
 SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol,
                     SEXP grid_start, SEXP grid_end, SEXP grid_step,
@@ -37,7 +37,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"C_find_features", (DL_FUNC)&C_find_features, 10},
     {"C_find_feature", (DL_FUNC)&C_find_feature, 11},
     {"C_mzml_to_bin", (DL_FUNC)&C_mzml_to_bin, 3},
-    {"C_parse_bin", (DL_FUNC)&C_parse_bin, 1},
+    {"C_parse_bin", (DL_FUNC)&C_parse_bin, 2},
     {"C_collect_scans", (DL_FUNC)&C_collect_scans, 5},
     {"C_get_features", (DL_FUNC)&C_get_features, 14},
     {"C_dispose_mzml", (DL_FUNC)&C_dispose_mzml, 1},

@@ -1,27 +1,24 @@
 use std::{cmp::Ordering, sync::Arc};
 
-use ionic::{
-    BinaryData, BinaryDataArray, BinaryDataArrayList, MzML, PrecursorList, ScanList, ScanMeta,
-    Spectrum, SpectrumSource,
-};
+use ionic::{ScanMeta, SpectrumSource};
 use serde::Serialize;
 
 use crate::utilities::structs::{FromTo, Peak};
 
 const MS1_LEVEL: u8 = 1;
-const ACC_MZ_ARRAY: &str = "MS:1000514";
-const ACC_INTENSITY_ARRAY: &str = "MS:1000515";
-const ACC_SCAN_START_TIME: &str = "MS:1000016";
-const ACC_MS_LEVEL: &str = "MS:1000511";
-const ACC_BASE_PEAK_MZ: &str = "MS:1000504";
-const ACC_BASE_PEAK_INT: &str = "MS:1000505";
-const ACC_TOTAL_ION_CURRENT: &str = "MS:1000285";
-const ACC_SELECTED_ION_MZ: &str = "MS:1000744";
-const ACC_POSITIVE_SCAN: &str = "MS:1000130";
-const ACC_NEGATIVE_SCAN: &str = "MS:1000129";
-const UO_MIN: &str = "UO:0000031";
-const UO_SEC: &str = "UO:0000010";
-const UO_MS: &str = "UO:0000028";
+// const ACC_MZ_ARRAY: &str = "MS:1000514";
+// const ACC_INTENSITY_ARRAY: &str = "MS:1000515";
+// const ACC_SCAN_START_TIME: &str = "MS:1000016";
+// const ACC_MS_LEVEL: &str = "MS:1000511";
+// const ACC_BASE_PEAK_MZ: &str = "MS:1000504";
+// const ACC_BASE_PEAK_INT: &str = "MS:1000505";
+// const ACC_TOTAL_ION_CURRENT: &str = "MS:1000285";
+// const ACC_SELECTED_ION_MZ: &str = "MS:1000744";
+// const ACC_POSITIVE_SCAN: &str = "MS:1000130";
+// const ACC_NEGATIVE_SCAN: &str = "MS:1000129";
+// const UO_MIN: &str = "UO:0000031";
+// const UO_SEC: &str = "UO:0000010";
+// const UO_MS: &str = "UO:0000028";
 
 #[derive(Clone, Copy, Debug)]
 pub struct EicOptions {
@@ -218,120 +215,6 @@ pub fn collect_scans(
     (retention_times, scans)
 }
 
-pub fn collect_scans_with_metadata(
-    mzml: &MzML,
-    time_range: FromTo,
-    time_unit: TimeUnit,
-    ms_level: u8,
-) -> (Vec<f64>, Vec<CentroidScan>) {
-    let spectra = all_spectra(mzml);
-    let is_single_point = (time_range.from - time_range.to).abs() < f64::EPSILON;
-    let window = time_window_in_minutes(time_range, time_unit);
-    let target_rt = time_unit.to_minutes(time_range.from);
-    let mut scans: Vec<CentroidScan> = Vec::with_capacity(spectra.len() / 2);
-
-    let has_filter = mzml.filter_record.len() == spectra.len();
-
-    for (i, spectrum) in spectra.iter().enumerate() {
-        if !is_ms_level(spectrum, ms_level) {
-            continue;
-        }
-        let Some(rt) = spectrum_retention_time_minutes(spectrum) else {
-            continue;
-        };
-        if !is_single_point && !window.contains(rt) {
-            continue;
-        }
-        let Some((masses, intensities)) = extract_mz_and_intensity(spectrum) else {
-            continue;
-        };
-
-        let summary = if has_filter {
-            let r = &mzml.filter_record[i];
-            SpectrumSummary {
-                rt_seconds: r.rt_seconds,
-                base_peak_mz: r.base_peak_mz,
-                selected_ion_mz: r.selected_ion_mz,
-                base_peak_int: r.base_peak_int,
-                total_ion_current: r.total_ion_current,
-                ms_level: r.ms_level,
-                polarity: r.polarity,
-            }
-        } else {
-            extract_spectrum_summary(rt * 60.0, spectrum)
-        };
-
-        scans.push(CentroidScan {
-            rt,
-            mz: Arc::from(masses.into_boxed_slice()),
-            intensity: Arc::from(intensities.into_boxed_slice()),
-            metadata: summary,
-        });
-    }
-
-    scans.sort_unstable_by(|a, b| a.rt.partial_cmp(&b.rt).unwrap_or(Ordering::Equal));
-    if is_single_point {
-        return closest_scan_to(scans, target_rt);
-    }
-    let retention_times = scans.iter().map(|s| s.rt).collect();
-    (retention_times, scans)
-}
-
-fn extract_spectrum_summary(rt_seconds: f64, spectrum: &Spectrum) -> SpectrumSummary {
-    let mut s = SpectrumSummary::unknown();
-    s.rt_seconds = rt_seconds;
-    s.ms_level = ms_level_of(spectrum).unwrap_or(0);
-
-    for cv in &spectrum.cv_params {
-        match cv.accession.as_deref() {
-            Some(ACC_BASE_PEAK_MZ) => {
-                s.base_peak_mz = cv
-                    .value
-                    .as_deref()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(f64::NAN);
-            }
-            Some(ACC_BASE_PEAK_INT) => {
-                s.base_peak_int = cv
-                    .value
-                    .as_deref()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(f64::NAN);
-            }
-            Some(ACC_TOTAL_ION_CURRENT) => {
-                s.total_ion_current = cv
-                    .value
-                    .as_deref()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(f64::NAN);
-            }
-            Some(ACC_POSITIVE_SCAN) => s.polarity = 1,
-            Some(ACC_NEGATIVE_SCAN) => s.polarity = 2,
-            _ => {}
-        }
-    }
-
-    if let Some(pl) = spectrum_precursor_list(spectrum) {
-        if let Some(precursor) = pl.precursors.first() {
-            if let Some(sil) = &precursor.selected_ion_list {
-                if let Some(si) = sil.selected_ions.first() {
-                    for cv in &si.cv_params {
-                        if cv.accession.as_deref() == Some(ACC_SELECTED_ION_MZ) {
-                            s.selected_ion_mz = cv
-                                .value
-                                .as_deref()
-                                .and_then(|v| v.parse().ok())
-                                .unwrap_or(f64::NAN);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    s
-}
-
 pub fn with_eic_apex_intensity(rt: &[f64], y: &[f64], mut p: Peak) -> Peak {
     let apex_intensity = max_in_range(rt, y, p.from, p.to);
     if apex_intensity.is_finite() && apex_intensity > 0.0 {
@@ -370,47 +253,6 @@ pub fn upper_bound(values: &[f64], target: f64) -> usize {
     low
 }
 
-struct TimeWindow {
-    start: f64,
-    end: f64,
-}
-
-impl TimeWindow {
-    fn contains(&self, rt: f64) -> bool {
-        rt >= self.start && rt <= self.end
-    }
-}
-
-fn time_window_in_minutes(time_range: FromTo, time_unit: TimeUnit) -> TimeWindow {
-    TimeWindow {
-        start: time_unit.to_minutes(time_range.from.min(time_range.to)),
-        end: time_unit.to_minutes(time_range.from.max(time_range.to)),
-    }
-}
-
-fn all_spectra(mzml: &MzML) -> &[Spectrum] {
-    mzml.run
-        .spectrum_list
-        .as_ref()
-        .map(|l| l.spectra.as_slice())
-        .unwrap_or(&[])
-}
-
-fn is_ms_level(spectrum: &Spectrum, level: u8) -> bool {
-    ms_level_of(spectrum) == Some(level)
-}
-
-fn ms_level_of(spectrum: &Spectrum) -> Option<u8> {
-    if let Some(level) = spectrum.ms_level {
-        return u8::try_from(level).ok();
-    }
-    spectrum
-        .cv_params
-        .iter()
-        .find(|p| p.accession.as_deref() == Some(ACC_MS_LEVEL))
-        .and_then(|p| p.value.as_deref()?.parse::<u8>().ok())
-}
-
 fn closest_scan_to(mut scans: Vec<CentroidScan>, target_rt: f64) -> (Vec<f64>, Vec<CentroidScan>) {
     let closest_index = scans
         .iter()
@@ -428,239 +270,6 @@ fn closest_scan_to(mut scans: Vec<CentroidScan>, target_rt: f64) -> (Vec<f64>, V
             (vec![s.rt], vec![s])
         }
         None => (Vec::new(), Vec::new()),
-    }
-}
-
-#[inline]
-fn spectrum_retention_time_minutes(spectrum: &Spectrum) -> Option<f64> {
-    spectrum_scan_list(spectrum).and_then(retention_time_from_scan_list)
-}
-
-fn retention_time_from_scan_list(scan_list: &ScanList) -> Option<f64> {
-    for scan in &scan_list.scans {
-        for param in &scan.cv_params {
-            if param.accession.as_deref() == Some(ACC_SCAN_START_TIME) {
-                let raw = param.value.as_deref()?.parse::<f64>().ok()?;
-                return convert_rt_to_minutes(
-                    raw,
-                    param.unit_accession.as_deref(),
-                    param.unit_name.as_deref(),
-                );
-            }
-        }
-    }
-    for param in &scan_list.cv_params {
-        if param.accession.as_deref() == Some(ACC_SCAN_START_TIME) {
-            let raw = param.value.as_deref()?.parse::<f64>().ok()?;
-            return convert_rt_to_minutes(
-                raw,
-                param.unit_accession.as_deref(),
-                param.unit_name.as_deref(),
-            );
-        }
-    }
-    None
-}
-
-#[inline]
-fn convert_rt_to_minutes(
-    raw: f64,
-    unit_accession: Option<&str>,
-    unit_name: Option<&str>,
-) -> Option<f64> {
-    if !raw.is_finite() {
-        return None;
-    }
-    match unit_accession {
-        Some(UO_MIN) => Some(raw),
-        Some(UO_SEC) => Some(raw / 60.0),
-        Some(UO_MS) => Some(raw / 60_000.0),
-        _ => match unit_name {
-            Some("minute") | Some("minutes") => Some(raw),
-            Some("second") | Some("seconds") => Some(raw / 60.0),
-            Some("millisecond") | Some("milliseconds") => Some(raw / 60_000.0),
-            _ => None,
-        },
-    }
-}
-
-#[inline]
-fn spectrum_scan_list(spectrum: &Spectrum) -> Option<&ScanList> {
-    spectrum.scan_list.as_ref().or_else(|| {
-        spectrum
-            .spectrum_description
-            .as_ref()
-            .and_then(|d| d.scan_list.as_ref())
-    })
-}
-
-#[inline]
-fn spectrum_precursor_list(spectrum: &Spectrum) -> Option<&PrecursorList> {
-    spectrum.precursor_list.as_ref().or_else(|| {
-        spectrum
-            .spectrum_description
-            .as_ref()
-            .and_then(|d| d.precursor_list.as_ref())
-    })
-}
-
-fn extract_mz_and_intensity(spectrum: &Spectrum) -> Option<(Vec<f64>, Vec<f64>)> {
-    let (mz_array, intensity_array) = spectrum_xy(spectrum)?;
-    let mz_binary = mz_array.binary.as_ref()?;
-    let intensity_binary = intensity_array.binary.as_ref()?;
-    let count = bin_len(mz_binary).min(bin_len(intensity_binary));
-    if count == 0 {
-        return None;
-    }
-    let mut masses: Vec<f64> = Vec::with_capacity(count);
-    let mut intensities: Vec<f64> = Vec::with_capacity(count);
-    let mut last_mass = f64::NEG_INFINITY;
-    let mut is_sorted = true;
-    match (mz_binary, intensity_binary) {
-        (BinaryData::F64(mz), BinaryData::F64(int)) => {
-            for (&mass, &intensity) in mz.iter().zip(int.iter()).take(count) {
-                record_scan_point(
-                    &mut masses,
-                    &mut intensities,
-                    mass,
-                    intensity,
-                    &mut last_mass,
-                    &mut is_sorted,
-                );
-            }
-        }
-        (BinaryData::F64(mz), BinaryData::F32(int)) => {
-            for (&mass, &intensity) in mz.iter().zip(int.iter()).take(count) {
-                record_scan_point(
-                    &mut masses,
-                    &mut intensities,
-                    mass,
-                    intensity as f64,
-                    &mut last_mass,
-                    &mut is_sorted,
-                );
-            }
-        }
-        (BinaryData::F32(mz), BinaryData::F64(int)) => {
-            for (&mass, &intensity) in mz.iter().zip(int.iter()).take(count) {
-                record_scan_point(
-                    &mut masses,
-                    &mut intensities,
-                    mass as f64,
-                    intensity,
-                    &mut last_mass,
-                    &mut is_sorted,
-                );
-            }
-        }
-        (BinaryData::F32(mz), BinaryData::F32(int)) => {
-            for (&mass, &intensity) in mz.iter().zip(int.iter()).take(count) {
-                record_scan_point(
-                    &mut masses,
-                    &mut intensities,
-                    mass as f64,
-                    intensity as f64,
-                    &mut last_mass,
-                    &mut is_sorted,
-                );
-            }
-        }
-        _ => {
-            for index in 0..count {
-                let mass = bin_get_f64(mz_binary, index);
-                let intensity = bin_get_f64(intensity_binary, index);
-                record_scan_point(
-                    &mut masses,
-                    &mut intensities,
-                    mass,
-                    intensity,
-                    &mut last_mass,
-                    &mut is_sorted,
-                );
-            }
-        }
-    }
-    if masses.is_empty() {
-        return None;
-    }
-    if !is_sorted {
-        let (sm, si) = sort_masses_and_intensities(&masses, &intensities);
-        return Some((sm, si));
-    }
-    Some((masses, intensities))
-}
-
-#[inline]
-fn record_scan_point(
-    masses: &mut Vec<f64>,
-    intensities: &mut Vec<f64>,
-    mass: f64,
-    intensity: f64,
-    last_mass: &mut f64,
-    is_sorted: &mut bool,
-) {
-    if !mass.is_finite() || !intensity.is_finite() {
-        return;
-    }
-    if mass < *last_mass {
-        *is_sorted = false;
-    }
-    *last_mass = mass;
-    masses.push(mass);
-    intensities.push(intensity);
-}
-
-fn sort_masses_and_intensities(masses: &[f64], intensities: &[f64]) -> (Vec<f64>, Vec<f64>) {
-    let mut indices: Vec<usize> = (0..masses.len()).collect();
-    indices.sort_unstable_by(|&a, &b| masses[a].partial_cmp(&masses[b]).unwrap_or(Ordering::Equal));
-    (
-        indices.iter().map(|&i| masses[i]).collect(),
-        indices.iter().map(|&i| intensities[i]).collect(),
-    )
-}
-
-#[inline]
-fn spectrum_xy(spectrum: &Spectrum) -> Option<(&BinaryDataArray, &BinaryDataArray)> {
-    let array_list = spectrum.binary_data_array_list.as_ref()?;
-    Some((
-        find_array_by_accession(array_list, ACC_MZ_ARRAY)?,
-        find_array_by_accession(array_list, ACC_INTENSITY_ARRAY)?,
-    ))
-}
-
-#[inline]
-fn find_array_by_accession<'a>(
-    array_list: &'a BinaryDataArrayList,
-    accession: &str,
-) -> Option<&'a BinaryDataArray> {
-    array_list.binary_data_arrays.iter().find(|a| {
-        a.cv_params
-            .iter()
-            .any(|p| p.accession.as_deref() == Some(accession))
-    })
-}
-
-#[inline]
-fn bin_len(binary: &BinaryData) -> usize {
-    match binary {
-        BinaryData::F64(v) => v.len(),
-        BinaryData::F32(v) => v.len(),
-        BinaryData::F16(v) => v.len(),
-        BinaryData::I64(v) => v.len(),
-        BinaryData::I32(v) => v.len(),
-        BinaryData::I16(v) => v.len(),
-    }
-}
-
-#[inline]
-fn bin_get_f64(binary: &BinaryData, index: usize) -> f64 {
-    match binary {
-        BinaryData::F64(v) => v[index],
-        BinaryData::F32(v) => v[index] as f64,
-        BinaryData::F16(v) => v[index] as f64,
-        BinaryData::I64(v) => v[index] as f64,
-        BinaryData::I32(v) => v[index] as f64,
-        BinaryData::I16(v) => v[index] as f64,
     }
 }
 
@@ -704,7 +313,7 @@ fn max_in_range(retention_times: &[f64], intensities: &[f64], from_rt: f64, to_r
 
 #[cfg(test)]
 mod tests {
-    use crate::OwnedIonReader;
+    use crate::OwnedIon;
     use crate::utilities::calculate_eic::{EicOptions, calculate_eic as calculate_eic_rs};
     use crate::utilities::structs::FromTo;
     use ionic::parse_mzml;
@@ -734,8 +343,8 @@ mod tests {
         let mut mzml = parse_mzml(MZML_BYTES).unwrap();
         let eic_full = calculate_eic_rs(&mut mzml, target_mz, time_range(), eic_options());
         let arc: Arc<[u8]> = Arc::from(ION_BYTES);
-        let mut reader = OwnedIonReader::new(arc).unwrap();
-        let eic_lazy = calculate_eic_rs(&mut reader.inner, target_mz, time_range(), eic_options());
+        let mut decoder = OwnedIon::from_ion_bytes(arc, 0).unwrap();
+        let eic_lazy = calculate_eic_rs(&mut decoder, target_mz, time_range(), eic_options());
         assert_eq!(eic_full.x.len(), eic_lazy.x.len(), "x length mismatch");
         assert_eq!(eic_full.y.len(), eic_lazy.y.len(), "y length mismatch");
 

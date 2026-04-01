@@ -65,64 +65,47 @@ class _ABI:
     _REQUIRED: dict[str, tuple[list, object]] = {
         "parse_mzml": (
             [POINTER(c_uint8), c_size_t, POINTER(c_void_p)], c_int32),
-        "parse_bin": (
-            [POINTER(c_uint8), c_size_t, POINTER(c_void_p)], c_int32),
-        "free_mzml": (
-            [c_void_p], None),
-        "free_": (
-            [POINTER(c_uint8), c_size_t], None),
-        "bin_to_json": (
-            [c_void_p, POINTER(_Buf)], c_int32),
-        "bin_to_mzml": (
-            [c_void_p, POINTER(_Buf)], c_int32),
-        "mzml_to_bin": (
-            [c_void_p, POINTER(_Buf), c_uint8, c_uint8], c_int32),
-        "get_peak": (
-            [POINTER(c_double), POINTER(c_double), c_size_t,
+        "parse_bin": ([POINTER(c_uint8), c_size_t, c_size_t, POINTER(c_void_p)], c_int32),
+        "free_mzml": ([c_void_p], None),
+        "free_": ([POINTER(c_uint8), c_size_t], None),
+        "bin_to_json": ([c_void_p, POINTER(_Buf)], c_int32),
+        "bin_to_mzml": ([c_void_p, POINTER(_Buf)], c_int32),
+        "mzml_to_bin": ([c_void_p, POINTER(_Buf), c_uint8, c_uint8], c_int32),
+        "get_peak": ([POINTER(c_double), POINTER(c_double), c_size_t,
              c_double, c_double, POINTER(PeakOptions), POINTER(_Buf)], c_int32),
-        "calculate_eic": (
-            [c_void_p, c_double, c_double, c_double,
+        "calculate_eic": ([c_void_p, c_double, c_double, c_double,
              c_double, c_double, POINTER(_Buf), POINTER(_Buf)], c_int32),
-        "get_peaks_from_eic": (
-            [c_void_p,
+        "get_peaks_from_eic": ([c_void_p,
              POINTER(c_double), POINTER(c_double), POINTER(c_double),
              POINTER(c_uint32), POINTER(c_uint32),
              POINTER(c_uint8), c_size_t,
              c_size_t, c_double, c_double,
              POINTER(PeakOptions), c_size_t, POINTER(_Buf)], c_int32),
-        "get_peaks_from_chrom": (
-            [c_void_p,
+        "get_peaks_from_chrom": ([c_void_p,
              POINTER(c_uint32), POINTER(c_double), POINTER(c_double),
              c_size_t, POINTER(PeakOptions), c_size_t, POINTER(_Buf)], c_int32),
-        "find_peaks": (
-            [POINTER(c_double), POINTER(c_double), c_size_t,
+        "find_peaks": ([POINTER(c_double), POINTER(c_double), c_size_t,
              POINTER(PeakOptions), POINTER(_Buf)], c_int32),
-        "calculate_baseline": (
-            [POINTER(c_double), c_size_t, c_int32, c_int32,
+        "calculate_baseline": ([POINTER(c_double), c_size_t, c_int32, c_int32,
              POINTER(_Buf)], c_int32),
-        "find_features": (
-            [c_void_p,
+        "find_features": ([c_void_p,
              c_double, c_double, c_double, c_double,
              c_double, c_double, c_double,
              POINTER(PeakOptions), c_int32, POINTER(_Buf)], c_int32),
-        "find_feature": (
-            [c_void_p,
+        "find_feature": ([c_void_p,
              POINTER(c_double), POINTER(c_double), POINTER(c_double),
              POINTER(c_uint32), POINTER(c_uint32),
              POINTER(c_uint8), c_size_t,
              c_size_t, c_size_t,
              c_double, c_double, c_double, c_double,
              POINTER(PeakOptions), POINTER(_Buf)], c_int32),
-        "collect_scans": (
-            [c_void_p, c_double, c_double, c_uint8, POINTER(_Buf)], c_int32),
-        "get_features": (
-            [ctypes.c_char_p,
+        "collect_scans": ([c_void_p, c_double, c_double, c_uint8, POINTER(_Buf)], c_int32),
+        "get_features": ([ctypes.c_char_p,
              c_double, c_double, c_double, c_double,
              c_double, c_double, c_double,
              c_double, c_double, c_double,
              c_int32, POINTER(PeakOptions), c_int32, POINTER(_Buf)], c_int32),
-        "find_noise_level": (
-            [POINTER(c_float), c_size_t], c_float),
+        "find_noise_level": ([POINTER(c_float), c_size_t], c_float),
     }
 
     def __init__(self, lib: ctypes.CDLL) -> None:

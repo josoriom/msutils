@@ -59,7 +59,7 @@ struct MzMLWrapper
 static_assert(sizeof(CPeakPOptions) == 64, "CPeakPOptions must be 64 bytes");
 
 typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
-typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, MzML **);
+typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, size_t, MzML **);
 typedef void (*fn_free_mzml)(MzML *);
 typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *);
 typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *);
@@ -855,16 +855,18 @@ static Napi::Value ParseBin(const Napi::CallbackInfo &info)
 
   Napi::Buffer<uint8_t> input = info[0].As<Napi::Buffer<uint8_t>>();
   size_t input_len = input.Length();
+  size_t max_cache = info.Length() > 1 && info[1].IsNumber()
+                         ? (size_t)info[1].As<Napi::Number>().Int64Value()
+                         : 0;
 
   MzML *handle = nullptr;
-  int32_t rc = ABI.parse_bin(input.Data(), input_len, &handle);
+  int32_t rc = ABI.parse_bin(input.Data(), input_len, max_cache, &handle);
 
   if (rc != 0)
     return ThrowRc(env, "parse_bin", rc);
 
   MzMLWrapper *w = new MzMLWrapper{handle, input_len};
   Napi::MemoryManagement::AdjustExternalMemory(env, (int64_t)input_len);
-
   return Napi::External<MzMLWrapper>::New(env, w, FinalizeMzML);
 }
 

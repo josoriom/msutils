@@ -149,12 +149,16 @@ def parse_mzml(data: bytes) -> MzMlFile:
     return MzMlFile(ptr, abi)
 
 
-def parse_bin(data: bytes) -> MzMlFile:
+def parse_bin(data: bytes, max_cache_size: int = 0) -> MzMlFile:
     abi = _get_abi()
+    if not isinstance(max_cache_size, int) or max_cache_size < 0:
+        raise ValueError("parse_bin: max_cache_size must be a non-negative integer")
     arr = (c_uint8 * len(data)).from_buffer_copy(data)
     ptr = ctypes.c_void_p()
     _check("parse_bin", abi.parse_bin(
-        ctypes.cast(arr, POINTER(c_uint8)), len(data),
+        ctypes.cast(arr, POINTER(c_uint8)),
+        c_size_t(len(data)),
+        c_size_t(max_cache_size),
         ctypes.byref(ptr),
     ))
     return MzMlFile(ptr, abi)

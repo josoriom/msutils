@@ -153,6 +153,7 @@ class WasmExports {
   readonly parseBin: (
     dataPtr: number,
     dataLen: number,
+    maxCacheSize: number,
     outPtr: number,
   ) => number;
   readonly freeMzml: (handle: number) => void;
@@ -321,10 +322,15 @@ class WasmApi {
     }
   }
 
-  parseBinRaw(data: Uint8Array): number {
+  parseBinRaw(data: Uint8Array, maxCacheSize = 0): number {
     const [ptr, len] = this.heap.allocAndWrite(data);
     try {
-      const rc = this.fn.parseBin(ptr, len, this.handleScratchSlot);
+      const rc = this.fn.parseBin(
+        ptr,
+        len,
+        maxCacheSize,
+        this.handleScratchSlot,
+      );
       if (rc !== 0) throw new Error("parse_bin failed with code " + rc);
       return this.heap.readU32(this.handleScratchSlot);
     } finally {
@@ -688,8 +694,8 @@ export class WasmBackend implements Backend {
     return this.getApi().parseMzMLRaw(data);
   }
 
-  parseBin(data: Uint8Array): FileHandle {
-    return this.getApi().parseBinRaw(data);
+  parseBin(data: Uint8Array, maxCacheSize = 0): FileHandle {
+    return this.getApi().parseBinRaw(data, maxCacheSize);
   }
 
   freeFile(handle: FileHandle): void {

@@ -19,7 +19,10 @@ use crate::utilities::{
 use ionic::{MzML, SpectrumSource};
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use ionic::{decoder::decode, parse_mzml};
+use ionic::{
+    decoder::{self},
+    parse_mzml,
+};
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use std::{fs, time::Instant};
 
@@ -304,10 +307,17 @@ fn load_mzml_files(directory: &str) -> Result<Vec<(String, MzML)>, AlignmentErro
                     path: file_name.clone(),
                     source: e.to_string(),
                 })?,
-                "b64" => decode(&bytes).map_err(|e| AlignmentError::Parse {
-                    path: file_name.clone(),
-                    source: e.to_string(),
-                })?,
+                "b64" => {
+                    let mut decoder =
+                        decoder::Decoder::open(&bytes).map_err(|e| AlignmentError::Parse {
+                            path: file_name.clone(),
+                            source: e.to_string(),
+                        })?;
+                    decoder.to_mzml().map_err(|e| AlignmentError::Parse {
+                        path: file_name.clone(),
+                        source: e.to_string(),
+                    })?
+                }
                 other => return Err(AlignmentError::UnsupportedFormat(other.to_string())),
             };
             Ok((file_name, mzml))
