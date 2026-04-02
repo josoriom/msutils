@@ -55,11 +55,11 @@ typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const dou
 typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakPOptions *, size_t, Buf *);
 typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, Buf *);
+typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, size_t, MzML **);
-typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakPOptions *, int32_t, Buf *);
+typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakPOptions *, int32_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_collect_scans)(const MzML *, double, double, uint8_t, int32_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 typedef void (*fn_free_mzml)(MzML *);
@@ -618,7 +618,7 @@ SEXP C_calculate_baseline(SEXP y, SEXP baseline_window, SEXP baseline_window_fac
   return Ry;
 }
 
-SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol, SEXP grid_start, SEXP grid_end, SEXP grid_step_ppm, SEXP options, SEXP cores)
+SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol, SEXP grid_start, SEXP grid_end, SEXP grid_step_ppm, SEXP options, SEXP cores, SEXP use_gpu, SEXP batch_size)
 {
   MzML *handle = GetHandle(data);
   REQUIRE_BOUND(ABI.find_features, "find_features");
@@ -627,6 +627,9 @@ SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, 
   int ncores = asInteger(cores);
   if (ncores < 1)
     ncores = 1;
+
+  int32_t gpu = (use_gpu == R_NilValue) ? 0 : (asLogical(use_gpu) == TRUE ? 1 : 0);
+  int32_t bsz = (batch_size == R_NilValue) ? 0 : asInteger(batch_size);
 
   CPeakPOptions opts;
   const CPeakPOptions *opt_ptr = NULL;
@@ -639,7 +642,7 @@ SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, 
       asReal(eic_ppm_tol), asReal(eic_mz_tol),
       asReal(grid_start), asReal(grid_end),
       asReal(grid_step_ppm),
-      opt_ptr, (int32_t)ncores, &out);
+      opt_ptr, (int32_t)ncores, gpu, bsz, &out);
 
   die_code("find_features", code);
   SEXP res = mk_string_len(out.ptr, out.len);
@@ -768,7 +771,8 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
                     SEXP eic_ppm_tol, SEXP eic_mz_tol,
                     SEXP grid_start, SEXP grid_end, SEXP grid_step,
                     SEXP group_ppm_tol, SEXP group_da_tol, SEXP group_rt_tol,
-                    SEXP frequency, SEXP options, SEXP cores)
+                    SEXP frequency, SEXP options, SEXP cores,
+                    SEXP use_gpu, SEXP batch_size)
 {
   if (TYPEOF(dir_path) != STRSXP || LENGTH(dir_path) != 1)
     error("dir_path must be a length-1 character string");
@@ -780,6 +784,9 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
   int ncores = asInteger(cores);
   if (ncores < 1)
     ncores = 1;
+
+  int32_t gpu = (use_gpu == R_NilValue) ? 0 : (asLogical(use_gpu) == TRUE ? 1 : 0);
+  int32_t bsz = (batch_size == R_NilValue) ? 0 : asInteger(batch_size);
 
   CPeakPOptions opts;
   const CPeakPOptions *opt_ptr = NULL;
@@ -793,8 +800,7 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
       asReal(grid_start), asReal(grid_end), asReal(grid_step),
       asReal(group_ppm_tol), asReal(group_da_tol), asReal(group_rt_tol),
       asInteger(frequency),
-      opt_ptr,
-      (int32_t)ncores,
+      opt_ptr, (int32_t)ncores, gpu, bsz,
       &out);
 
   die_code("get_features", code);

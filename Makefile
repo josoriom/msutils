@@ -32,8 +32,11 @@ linux-amd64:
 	docker run --rm --platform=linux/amd64 \
 	  -e CARGO_TARGET_DIR=/work/core/target-linux-amd64 \
 	  -v $$PWD:/work -w /work \
-	  --entrypoint /usr/local/cargo/bin/cargo $(DOCKER_BULLSEYE_IMAGE) \
-	  build --manifest-path $(CRATE_MANIFEST) --release
+	  --entrypoint /bin/bash $(DOCKER_BULLSEYE_IMAGE) -lc '\
+	    set -e; \
+	    export PATH=/usr/local/cargo/bin:$$PATH; \
+	    cargo build --manifest-path $(CRATE_MANIFEST) --release; \
+	    strip /work/core/target-linux-amd64/release/lib$(CRATE).so'
 	mkdir -p $(ARTIFACTS)/linux-x86_64
 	cp core/target-linux-amd64/release/lib$(CRATE).so $(ARTIFACTS)/linux-x86_64/
 
@@ -41,8 +44,11 @@ linux-arm64:
 	docker run --rm --platform=linux/arm64 \
 	  -e CARGO_TARGET_DIR=/work/core/target-linux-arm64 \
 	  -v $$PWD:/work -w /work \
-	  --entrypoint /usr/local/cargo/bin/cargo $(DOCKER_BULLSEYE_IMAGE) \
-	  build --manifest-path $(CRATE_MANIFEST) --release
+	  --entrypoint /bin/bash $(DOCKER_BULLSEYE_IMAGE) -lc '\
+	    set -e; \
+	    export PATH=/usr/local/cargo/bin:$$PATH; \
+	    cargo build --manifest-path $(CRATE_MANIFEST) --release; \
+	    strip /work/core/target-linux-arm64/release/lib$(CRATE).so'
 	mkdir -p $(ARTIFACTS)/linux-arm64
 	cp core/target-linux-arm64/release/lib$(CRATE).so $(ARTIFACTS)/linux-arm64/
 

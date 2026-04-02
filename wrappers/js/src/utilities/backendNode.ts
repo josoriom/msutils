@@ -269,6 +269,8 @@ export class NodeBackend implements Backend {
     gridStep: number,
     packedOpts: Uint8Array | undefined,
     cores: number,
+    useGpu: number,
+    batchSize: number,
   ): any {
     return JSON.parse(
       this.native.findFeatures(
@@ -282,6 +284,8 @@ export class NodeBackend implements Backend {
         gridStep,
         packedOpts ? toNodeBuffer(packedOpts) : null,
         cores,
+        useGpu,
+        batchSize,
       ) as string,
     );
   }
@@ -336,6 +340,8 @@ export class NodeBackend implements Backend {
     prevalence: number,
     packedOpts: Uint8Array | undefined,
     cores: number,
+    useGpu: number,
+    batchSize: number,
   ): any {
     return JSON.parse(
       this.native.getFeatures(
@@ -353,6 +359,8 @@ export class NodeBackend implements Backend {
         prevalence,
         packedOpts ? toNodeBuffer(packedOpts) : null,
         cores,
+        useGpu,
+        batchSize,
       ) as string,
     );
   }

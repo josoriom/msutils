@@ -92,6 +92,8 @@ export interface Backend {
     gridStep: number,
     packedOpts: Uint8Array | undefined,
     cores: number,
+    useGpu: number,
+    batchSize: number,
   ): any;
 
   findFeature(
@@ -127,5 +129,7 @@ export interface Backend {
     prevalence: number,
     packedOpts: Uint8Array | undefined,
     cores: number,
+    useGpu: number,
+    batchSize: number,
   ): any;
 }

@@ -348,6 +348,8 @@ find_features <- function(
   grid_end             = .DEFAULTS$grid_end,
   grid_step_ppm        = .DEFAULTS$grid_step,
   cores                = 1L,
+  use_gpu              = FALSE,
+  batch_size           = 0L,
   integral_threshold   = NaN,
   intensity_threshold  = .DEFAULTS$intensity_threshold,
   width_threshold      = .DEFAULTS$width_threshold,
@@ -361,33 +363,23 @@ find_features <- function(
   sn_ratio             = .DEFAULTS$sn_ratio
 ) {
   stopifnot(typeof(data) == "externalptr")
+  if (!is.logical(use_gpu) || length(use_gpu) != 1 || is.na(use_gpu)) stop("use_gpu must be logical TRUE/FALSE")
   cores <- .validate_cores(cores)
 
-  if (!is.logical(auto_noise) || length(auto_noise) != 1 || is.na(auto_noise)) stop("auto_noise must be logical TRUE/FALSE")
-  if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
-  if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
-
   opt <- .pack_opts(list(
-    integral_threshold = integral_threshold,
-    intensity_threshold = intensity_threshold,
-    width_threshold = width_threshold,
-    noise = noise,
-    auto_noise = auto_noise,
-    auto_baseline = auto_baseline,
-    baseline_window = baseline_window,
-    baseline_window_factor = baseline_window_factor,
-    allow_overlap = allow_overlap,
-    window_size = window_size,
-    sn_ratio = sn_ratio
+    integral_threshold = integral_threshold, intensity_threshold = intensity_threshold,
+    width_threshold = width_threshold, noise = noise,
+    auto_noise = auto_noise, auto_baseline = auto_baseline,
+    baseline_window = baseline_window, baseline_window_factor = baseline_window_factor,
+    allow_overlap = allow_overlap, window_size = window_size, sn_ratio = sn_ratio
   ))
 
   out_json <- .Call(
-    "C_find_features",
-    data,
+    "C_find_features", data,
     as.numeric(from), as.numeric(to),
     as.numeric(ppm_tolerance), as.numeric(mz_tolerance),
     as.numeric(grid_start), as.numeric(grid_end), as.numeric(grid_step_ppm),
-    opt, as.integer(cores),
+    opt, as.integer(cores), as.logical(use_gpu), as.integer(batch_size),
     PACKAGE = "msutils"
   )
 
@@ -437,6 +429,8 @@ get_features <- function(
   group_rt_tol         = .DEFAULTS$group_rt_tol,
   frequency            = .DEFAULTS$frequency,
   cores                = 1L,
+  use_gpu              = FALSE,
+  batch_size           = 0L,
   integral_threshold   = NaN,
   intensity_threshold  = .DEFAULTS$intensity_threshold,
   width_threshold      = .DEFAULTS$width_threshold,
@@ -450,24 +444,15 @@ get_features <- function(
   sn_ratio             = .DEFAULTS$sn_ratio
 ) {
   if (!is.character(dir_path) || length(dir_path) != 1) stop("dir_path must be a single string")
+  if (!is.logical(use_gpu) || length(use_gpu) != 1 || is.na(use_gpu)) stop("use_gpu must be logical TRUE/FALSE")
   cores <- .validate_cores(cores)
 
-  if (!is.logical(auto_noise)    || length(auto_noise)    != 1 || is.na(auto_noise))    stop("auto_noise must be logical TRUE/FALSE")
-  if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
-  if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
-
   opt <- .pack_opts(list(
-    integral_threshold = integral_threshold,
-    intensity_threshold = intensity_threshold,
-    width_threshold = width_threshold,
-    noise = noise,
-    auto_noise = auto_noise,
-    auto_baseline = auto_baseline,
-    baseline_window = baseline_window,
-    baseline_window_factor = baseline_window_factor,
-    allow_overlap = allow_overlap,
-    window_size = window_size,
-    sn_ratio = sn_ratio
+    integral_threshold = integral_threshold, intensity_threshold = intensity_threshold,
+    width_threshold = width_threshold, noise = noise,
+    auto_noise = auto_noise, auto_baseline = auto_baseline,
+    baseline_window = baseline_window, baseline_window_factor = baseline_window_factor,
+    allow_overlap = allow_overlap, window_size = window_size, sn_ratio = sn_ratio
   ))
 
   out_json <- .Call("C_get_features",
@@ -477,7 +462,7 @@ get_features <- function(
     as.numeric(grid_start), as.numeric(grid_end), as.numeric(grid_step),
     as.numeric(group_ppm_tol), as.numeric(group_da_tol), as.numeric(group_rt_tol),
     as.integer(frequency),
-    opt, as.integer(cores),
+    opt, as.integer(cores), as.logical(use_gpu), as.integer(batch_size),
     PACKAGE = "msutils"
   )
 

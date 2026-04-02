@@ -6,12 +6,12 @@ use std::{
 };
 
 use crate::utilities::find_peaks::FindPeaksOptions;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::structs::FromTo;
 use crate::utilities::{
     calculate_eic::{EicOptions, TimeUnit, collect_scans, compute_eic_for_mz},
     find_features::{
-        Feature, FeatureError, FindFeaturesConfig, FindFeaturesOptions, MzTolerance, dedup_points,
-        find_features,
+        Feature, FeatureError, FindFeaturesOptions, MzTolerance, dedup_points, find_features,
     },
     get_peak::get_peak,
     structs::{DataXY, Roi},
@@ -232,7 +232,7 @@ impl FeatureClusterer {
 pub fn get_features(
     directory_path: &str,
     time_window: FromTo,
-    feature_config: FindFeaturesConfig,
+    feature_config: FindFeaturesOptions,
     alignment_config: ConsensusAlignmentConfig,
     cores: usize,
 ) -> Result<Vec<ConsensusFeature>, AlignmentError> {
@@ -329,7 +329,7 @@ fn load_mzml_files(directory: &str) -> Result<Vec<(String, MzML)>, AlignmentErro
 fn detect_features_per_sample(
     samples: Vec<(String, MzML)>,
     time_window: FromTo,
-    config: &FindFeaturesConfig,
+    config: &FindFeaturesOptions,
     cores: usize,
 ) -> Vec<SampleDataset> {
     samples
@@ -337,19 +337,8 @@ fn detect_features_per_sample(
         .enumerate()
         .map(|(idx, (name, mut mzml))| {
             let start = Instant::now();
-            let features = find_features(
-                &mut mzml,
-                time_window,
-                Some(FindFeaturesOptions {
-                    scan_eic_options: Some(config.scan_eic_options),
-                    eic_options: Some(config.eic_options),
-                    find_peaks: Some(config.find_peaks.clone()),
-                    mz_scan_grid: Some(config.mz_scan_grid.clone()),
-                    scan_width_threshold: Some(config.scan_width_threshold),
-                }),
-                cores,
-            )
-            .unwrap_or_default();
+            let features = find_features(&mut mzml, time_window, Some(config.clone()), cores)
+                .unwrap_or_default();
             eprintln!(
                 "[Sample {}] {} processed in {:.3}s",
                 idx,

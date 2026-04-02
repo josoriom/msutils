@@ -17,6 +17,7 @@ from ctypes import (
 )
 from pathlib import Path
 from typing import Optional
+import threading
 
 import numpy as np
 
@@ -75,6 +76,7 @@ class _ABI:
              c_double, c_double, POINTER(PeakOptions), POINTER(_Buf)], c_int32),
         "calculate_eic": ([c_void_p, c_double, c_double, c_double,
              c_double, c_double, POINTER(_Buf), POINTER(_Buf)], c_int32),
+        "collect_scans": ([c_void_p, c_double, c_double, c_uint8, POINTER(_Buf)], c_int32),
         "get_peaks_from_eic": ([c_void_p,
              POINTER(c_double), POINTER(c_double), POINTER(c_double),
              POINTER(c_uint32), POINTER(c_uint32),
@@ -88,10 +90,6 @@ class _ABI:
              POINTER(PeakOptions), POINTER(_Buf)], c_int32),
         "calculate_baseline": ([POINTER(c_double), c_size_t, c_int32, c_int32,
              POINTER(_Buf)], c_int32),
-        "find_features": ([c_void_p,
-             c_double, c_double, c_double, c_double,
-             c_double, c_double, c_double,
-             POINTER(PeakOptions), c_int32, POINTER(_Buf)], c_int32),
         "find_feature": ([c_void_p,
              POINTER(c_double), POINTER(c_double), POINTER(c_double),
              POINTER(c_uint32), POINTER(c_uint32),
@@ -99,12 +97,15 @@ class _ABI:
              c_size_t, c_size_t,
              c_double, c_double, c_double, c_double,
              POINTER(PeakOptions), POINTER(_Buf)], c_int32),
-        "collect_scans": ([c_void_p, c_double, c_double, c_uint8, POINTER(_Buf)], c_int32),
+        "find_features": ([c_void_p,
+            c_double, c_double, c_double, c_double,
+            c_double, c_double, c_double,
+            POINTER(PeakOptions), c_int32, c_int32, c_int32, POINTER(_Buf)], c_int32),
         "get_features": ([ctypes.c_char_p,
-             c_double, c_double, c_double, c_double,
-             c_double, c_double, c_double,
-             c_double, c_double, c_double,
-             c_int32, POINTER(PeakOptions), c_int32, POINTER(_Buf)], c_int32),
+            c_double, c_double, c_double, c_double,
+            c_double, c_double, c_double,
+            c_double, c_double, c_double,
+            c_int32, POINTER(PeakOptions), c_int32, c_int32, c_int32, POINTER(_Buf)], c_int32),
         "find_noise_level": ([POINTER(c_float), c_size_t], c_float),
     }
 
@@ -180,7 +181,18 @@ def _bundled_lib_path() -> Optional[Path]:
     return None
 
 
+def _start_stderr_capture():
+    r_fd, w_fd = os.pipe()
+    os.dup2(w_fd, 2)
+    os.close(w_fd)
+    def reader():
+        with os.fdopen(r_fd, 'r', errors='replace') as f:
+            for line in f:
+                print(line, end='', file=sys.stdout, flush=True)
+    threading.Thread(target=reader, daemon=True).start()
+
 def load_library(path: Optional[str] = None) -> tuple[ctypes.CDLL, _ABI]:
+    _start_stderr_capture()
     if path is None:
         path = os.environ.get("MSUTILS_LIB")
     if path is None:

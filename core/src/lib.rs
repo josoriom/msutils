@@ -25,7 +25,7 @@ use utilities::{
         EicOptions, calculate_eic as calculate_eic_rs, collect_scans as collect_scans_rs,
     },
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
-    find_features::{FindFeaturesOptions, MzScanGrid, find_features as find_features_rs},
+    find_features::{FindFeaturesOptions, find_features as find_features_rs},
     find_noise_level::find_noise_level as find_noise_level_rs,
     find_peaks::{FilterPeaksOptions, FindPeaksOptions, find_peaks as find_peaks_rs},
     get_peak::get_peak as get_peak_rs,
@@ -36,13 +36,10 @@ use utilities::{
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use utilities::get_features::get_features as get_features_rs;
+use utilities::get_features::{ConsensusAlignmentConfig, get_features as get_features_rs};
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::{
-    find_features::{FindFeaturesConfig, MzTolerance},
-    get_features::ConsensusAlignmentConfig,
-};
+use crate::utilities::find_features::MzTolerance;
 
 const OK: c_int = 0;
 const ERR_INVALID_ARGS: c_int = 1;
@@ -652,6 +649,8 @@ pub unsafe extern "C" fn get_features(
     freq: c_int,
     popts: *const CPeakPOptions,
     cores: c_int,
+    use_gpu: c_int,
+    batch_size: c_int,
     out: *mut Buf,
 ) -> c_int {
     if dir.is_null() || out.is_null() {
@@ -661,30 +660,31 @@ pub unsafe extern "C" fn get_features(
         let path = unsafe { CStr::from_ptr(dir) }
             .to_str()
             .map_err(|_| ERR_INVALID_ARGS)?;
-        let mut eo = EicOptions::default();
+
+        let mut fc = FindFeaturesOptions::default();
         if eic_ppm.is_finite() && eic_ppm >= 0.0 {
-            eo.ppm_tolerance = eic_ppm;
+            fc.eic_options.ppm_tolerance = eic_ppm;
         }
         if eic_mz.is_finite() && eic_mz >= 0.0 {
-            eo.mz_tolerance = eic_mz;
+            fc.eic_options.mz_tolerance = eic_mz;
         }
-        let mut mg = MzScanGrid::default();
         if gs.is_finite() {
-            mg.mz_min = gs;
+            fc.mz_scan_grid.mz_min = gs;
         }
         if ge.is_finite() {
-            mg.mz_max = ge;
+            fc.mz_scan_grid.mz_max = ge;
         }
         if gstep > 0.0 {
-            mg.step_size = gstep;
+            fc.mz_scan_grid.step_size = gstep;
         }
-        let fp = build_fp(popts);
-        let fc = FindFeaturesConfig::from(FindFeaturesOptions {
-            eic_options: Some(eo),
-            find_peaks: Some(fp),
-            mz_scan_grid: Some(mg),
-            ..Default::default()
-        });
+        fc.find_peaks = build_fp(popts);
+        fc.use_gpu = use_gpu != 0;
+        fc.batch_size = if batch_size > 0 {
+            Some(batch_size as usize)
+        } else {
+            None
+        };
+
         let fp2 = build_fp(popts);
         let ac = ConsensusAlignmentConfig {
             tolerance: MzTolerance {
@@ -693,9 +693,10 @@ pub unsafe extern "C" fn get_features(
             },
             rt_tolerance: if grt > 0.0 { grt } else { 0.05 },
             frequency: if freq > 0 { freq as usize } else { 1 },
-            eic_options: eo,
+            eic_options: fc.eic_options,
             peak_options: Some(fp2),
         };
+
         let feats = get_features_rs(
             path,
             FromTo { from, to },
@@ -704,6 +705,7 @@ pub unsafe extern "C" fn get_features(
             if cores > 0 { cores as usize } else { 1 },
         )
         .unwrap_or_default();
+
         let arr: Vec<_> = feats.iter().map(|f| json!({"mz":f64ok(f.mz),"rt":f64ok(f.rt),"intensity":f64ok(f.intensity),"rintensity":f64ok(f.rintensity),"from":f64ok(f.from),"to":f64ok(f.to),"integral":f64ok(f.integral),"np":f.np,"frequency":f.frequency,"rmz":f.rmz,"rint":f.rint})).collect();
         write_buf(
             out,
@@ -732,6 +734,8 @@ pub unsafe extern "C" fn find_features(
     gstep: f64,
     popts: *const CPeakPOptions,
     cores: c_int,
+    use_gpu: c_int,
+    batch_size: c_int,
     out: *mut Buf,
 ) -> c_int {
     if h.is_null() || out.is_null() || !from.is_finite() || !to.is_finite() || !(to > from) {
@@ -739,35 +743,42 @@ pub unsafe extern "C" fn find_features(
     }
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
-        let mut eo = EicOptions::default();
+
+        let mut opts = FindFeaturesOptions::default();
         if eic_ppm.is_finite() && eic_ppm >= 0.0 {
-            eo.ppm_tolerance = eic_ppm;
+            opts.eic_options.ppm_tolerance = eic_ppm;
         }
         if eic_mz.is_finite() && eic_mz >= 0.0 {
-            eo.mz_tolerance = eic_mz;
+            opts.eic_options.mz_tolerance = eic_mz;
         }
-        let mut mg = MzScanGrid::default();
         if gs.is_finite() {
-            mg.mz_min = gs;
+            opts.mz_scan_grid.mz_min = gs;
         }
         if ge.is_finite() {
-            mg.mz_max = ge;
+            opts.mz_scan_grid.mz_max = ge;
         }
         if gstep > 0.0 {
-            mg.step_size = gstep;
+            opts.mz_scan_grid.step_size = gstep;
         }
+        opts.find_peaks = build_fp(popts);
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+        {
+            opts.use_gpu = use_gpu != 0;
+            opts.batch_size = if batch_size > 0 {
+                Some(batch_size as usize)
+            } else {
+                None
+            };
+        }
+
         let feats = find_features_rs(
             file,
             FromTo { from, to },
-            Some(FindFeaturesOptions {
-                eic_options: Some(eo),
-                find_peaks: Some(build_fp(popts)),
-                mz_scan_grid: Some(mg),
-                ..Default::default()
-            }),
+            Some(opts),
             if cores > 0 { cores as usize } else { 1 },
         )
         .unwrap_or_default();
+
         let arr: Vec<_> = feats.iter().map(|f| json!({"mz":f64ok(f.mz),"rt":f64ok(f.rt),"intensity":f64ok(f.intensity),"from":f64ok(f.from),"to":f64ok(f.to),"integral":f64ok(f.integral),"np":f64ok(f.np as f64)})).collect();
         write_buf(
             out,
