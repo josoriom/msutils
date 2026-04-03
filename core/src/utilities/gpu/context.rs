@@ -1,7 +1,8 @@
 use std::panic::catch_unwind;
+use std::sync::OnceLock;
 use wgpu;
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct GpuContext {
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
@@ -10,12 +11,18 @@ pub struct GpuContext {
 
 impl GpuContext {
     pub fn try_init() -> Option<Self> {
-        catch_unwind(|| pollster::block_on(Self::init_async())).unwrap_or_else(|_| {
-            eprintln!(
-                "[gpu][WARN] GPU init panicked (no compatible async executor), falling back to CPU"
-            );
-            None
-        })
+        static GPU_CONTEXT: OnceLock<Option<GpuContext>> = OnceLock::new();
+
+        GPU_CONTEXT
+            .get_or_init(|| {
+                catch_unwind(|| pollster::block_on(Self::init_async())).unwrap_or_else(|_| {
+                    eprintln!(
+                        "[gpu][WARN] GPU init panicked (no compatible async executor), falling back to CPU"
+                    );
+                    None
+                })
+            })
+            .clone()
     }
 
     async fn init_async() -> Option<Self> {

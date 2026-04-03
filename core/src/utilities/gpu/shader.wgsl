@@ -13,10 +13,11 @@ struct Params {
 @group(0) @binding(5) var<storage, read>       targets: array<f32>;
 @group(0) @binding(6) var<storage, read_write> eic_out: array<f32>;
 
-@compute @workgroup_size(64)
+@compute @workgroup_size(64, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let tidx = gid.x;
-    if tidx >= params.num_targets {
+    let sid  = gid.y;
+    if tidx >= params.num_targets || sid >= params.num_scans {
         return;
     }
 
@@ -25,30 +26,28 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let lo  = mz - tol;
     let hi  = mz + tol;
 
-    for (var s = 0u; s < params.num_scans; s++) {
-        let base = offsets[s];
-        let len  = lengths[s];
-        var acc  = 0.0f;
+    let base = offsets[sid];
+    let len  = lengths[sid];
+    var acc  = 0.0f;
 
-        var left  = 0u;
-        var right = len;
-        while left < right {
-            let mid = left + (right - left) / 2u;
-            if scan_mz[base + mid] < lo {
-                left = mid + 1u;
-            } else {
-                right = mid;
-            }
+    var left  = 0u;
+    var right = len;
+    while left < right {
+        let mid = left + (right - left) / 2u;
+        if scan_mz[base + mid] < lo {
+            left = mid + 1u;
+        } else {
+            right = mid;
         }
-
-        var j = left;
-        while j < len {
-            let m = scan_mz[base + j];
-            if m > hi { break; }
-            acc += scan_it[base + j];
-            j++;
-        }
-
-        eic_out[tidx * params.num_scans + s] = acc;
     }
+
+    var j = left;
+    while j < len {
+        let m = scan_mz[base + j];
+        if m > hi { break; }
+        acc += scan_it[base + j];
+        j++;
+    }
+
+    eic_out[tidx * params.num_scans + sid] = acc;
 }

@@ -9,10 +9,7 @@ use std::{
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::gpu::{
-    GpuContext,
-    processor::{GpuBatchOptions, safe_batch_options},
-};
+use crate::utilities::gpu::{GpuContext, processor::GpuBatchOptions};
 use crate::utilities::{
     calculate_eic::{
         CentroidScan, EicOptions, TimeUnit, collect_scans, compute_eic_for_mz, lower_bound,
@@ -191,30 +188,20 @@ pub fn find_features(
         return Err(FeatureError::GridTooLarge(grid.len()));
     }
 
-    eprintln!(
-        "[find_features] mz grid: {} points ({:.3} — {:.3} Da, step {:.4})",
-        grid.len(),
-        opts.mz_scan_grid.mz_min,
-        opts.mz_scan_grid.mz_max,
-        opts.mz_scan_grid.step_size
-    );
-
     let (time, scans) = collect_scans(source, time_window, TimeUnit::Minutes, 1);
     if scans.is_empty() {
         return Err(FeatureError::NoScans);
     }
 
-    eprintln!(
-        "[find_features] collected {} scans over {:.3}—{:.3} min",
-        scans.len(),
-        time_window.from,
-        time_window.to
-    );
-
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    let gpu_batch = gpu_ctx
-        .as_ref()
-        .map(|ctx| safe_batch_options(ctx, time.len(), opts.batch_size));
+    let gpu_batch = gpu_ctx.as_ref().map(|ctx| {
+        safe_batch_options(
+            ctx,
+            time.len(),
+            flatten_scans_size_estimate(&scans),
+            opts.batch_size,
+        )
+    });
 
     run_with_cores(cores, || {
         #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
@@ -226,14 +213,8 @@ pub fn find_features(
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         let gpu_args: GpuArgs<'_> = None;
 
-        let t0 = std::time::Instant::now();
         let masses = collect_candidate_masses(&scans, &time, &grid, &opts, gpu_args)?;
-        eprintln!(
-            "[find_features] {} candidate masses found via {} in {:.3}s",
-            masses.len(),
-            if gpu_args.is_some() { "GPU" } else { "CPU" },
-            t0.elapsed().as_secs_f64()
-        );
+
         let masses = deduplicate_masses(masses, opts.eic_options);
 
         let features = extract_features_from_masses(&masses, &scans, &time, &opts);
@@ -250,6 +231,10 @@ where
     F: FnOnce() -> T + Send,
     T: Send,
 {
+    if cores <= 1 {
+        return f();
+    }
+
     ThreadPoolBuilder::new()
         .num_threads(cores.max(1))
         .thread_name(|i| format!("ff-{}", i))
@@ -305,16 +290,36 @@ fn collect_candidates_gpu(
 ) -> Result<Vec<f64>, FeatureError> {
     use crate::utilities::gpu::GpuGridProcessor;
 
-    eprintln!("[gpu] starting batch EIC over {} grid points", grid.len());
+    let coarse_opts = build_coarse_opts(config);
+    let intensity_threshold = config
+        .find_peaks
+        .filter_peaks_options
+        .as_ref()
+        .and_then(|o| o.intensity_threshold)
+        .unwrap_or(0.0);
 
-    let processor = GpuGridProcessor::new(ctx, batch_opts.clone());
-    match processor.process(scans, time, grid, config) {
-        Ok(masses) if !masses.is_empty() => {
-            eprintln!("[gpu] returned {} candidates", masses.len());
+    let mut processor = GpuGridProcessor::new(ctx, batch_opts.clone());
+    match processor.process(scans, grid, config) {
+        Ok(survivors) if !survivors.is_empty() => {
+            let masses: Vec<f64> = survivors
+                .par_iter()
+                .filter_map(|&mz| {
+                    let eic = compute_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
+                    evaluate_eic_row(
+                        &eic,
+                        time,
+                        scans,
+                        mz,
+                        intensity_threshold,
+                        &coarse_opts,
+                        config.scan_eic_options,
+                    )
+                })
+                .collect();
             Ok(masses)
         }
         Ok(_) => {
-            eprintln!("[gpu] returned 0 candidates, falling back to CPU");
+            eprintln!("[gpu] falling back to CPU");
             collect_candidates_cpu(scans, time, grid, config)
         }
         Err(e) => {
@@ -330,10 +335,8 @@ fn collect_candidates_cpu(
     grid: &[f64],
     config: &FindFeaturesOptions,
 ) -> Result<Vec<f64>, FeatureError> {
-    eprintln!("[cpu] processing {} grid points", grid.len());
-
     let coarse_opts = build_coarse_opts(config);
-    let threshold = config
+    let intensity_threshold = config
         .find_peaks
         .filter_peaks_options
         .as_ref()
@@ -350,7 +353,7 @@ fn collect_candidates_cpu(
                 time,
                 scans,
                 mz,
-                threshold,
+                intensity_threshold,
                 &coarse_opts,
                 config.scan_eic_options,
             )
@@ -367,14 +370,12 @@ fn collect_candidates_cpu(
                 time,
                 scans,
                 mz,
-                threshold,
+                intensity_threshold,
                 &coarse_opts,
                 config.scan_eic_options,
             )
         })
         .collect();
-
-    eprintln!("[cpu] returned {} candidates", masses.len());
 
     if masses.is_empty() {
         return Err(FeatureError::NoCandidateMasses);
@@ -730,16 +731,17 @@ pub(crate) fn evaluate_eic_row(
     time: &[f64],
     scans: &[CentroidScan],
     mz_target: f64,
-    threshold: f64,
+    intensity_threshold: f64,
     coarse_opts: &FindPeaksOptions,
     scan_eic_options: EicOptions,
 ) -> Option<f64> {
-    if eic.iter().copied().fold(f64::NEG_INFINITY, f64::max) <= threshold {
+    let eic_f32: Vec<f64> = eic.iter().map(|&v| v as f32 as f64).collect();
+    if eic_f32.iter().copied().fold(f64::NEG_INFINITY, f64::max) <= intensity_threshold {
         return None;
     }
     let data = DataXY {
         x: time.to_vec(),
-        y: eic.to_vec(),
+        y: eic_f32,
     };
     let apex_rt = find_peaks(&data, Some(coarse_opts.clone()))
         .into_iter()
@@ -750,4 +752,42 @@ pub(crate) fn evaluate_eic_row(
         })
         .map(|p| p.rt)?;
     max_intensity_centroid(scans, time, apex_rt, mz_target, scan_eic_options)
+}
+
+fn flatten_scans_size_estimate(scans: &[CentroidScan]) -> u64 {
+    let total: usize = scans.iter().map(|s| s.mz.len()).sum();
+    ((total * 2 * size_of::<f32>()) + (scans.len() * 2 * size_of::<u32>())) as u64
+}
+
+pub fn safe_batch_options(
+    ctx: &GpuContext,
+    scan_count: usize,
+    scan_vram_bytes: u64,
+    requested: Option<usize>,
+) -> GpuBatchOptions {
+    let vram = ctx.vram_bytes.saturating_sub(scan_vram_bytes);
+    let bytes_per_row = scan_count * size_of::<f32>();
+    let max_from_vram = ((vram as f64 * 0.8) as usize / bytes_per_row).max(1);
+    let max_from_buf = (ctx.device.limits().max_buffer_size as usize / bytes_per_row).max(1);
+    let max_from_bind =
+        (ctx.device.limits().max_storage_buffer_binding_size as usize / bytes_per_row).max(1);
+    let max_safe = max_from_vram.min(max_from_buf).min(max_from_bind);
+    let batch_size = requested.unwrap_or(max_safe);
+    let clamped = batch_size.min(max_safe).max(1);
+
+    if clamped < batch_size {
+        eprintln!(
+            "[gpu] batch_size clamped {} → {} (buf limit {} MB, bind limit {} MB, vram limit {} MB)",
+            batch_size,
+            clamped,
+            ctx.device.limits().max_buffer_size / (1024 * 1024),
+            ctx.device.limits().max_storage_buffer_binding_size / (1024 * 1024),
+            vram / (1024 * 1024),
+        );
+    }
+
+    GpuBatchOptions {
+        batch_size: clamped,
+        vram_override: None,
+    }
 }
