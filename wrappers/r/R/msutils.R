@@ -490,7 +490,9 @@ get_features <- function(
       maxc <- suppressWarnings(tryCatch(parallel::detectCores(logical = TRUE), error = function(e) NA_integer_))
     }
   }
-  if (!is.na(maxc) && cores > maxc) stop("cores must be a single number")
+  if (!is.na(maxc) && cores > maxc) {
+    warning(sprintf("cores (%d) exceeds detected cores (%d)", cores, maxc))
+  }
 
   cores
 }

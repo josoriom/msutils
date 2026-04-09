@@ -31,16 +31,16 @@ pub struct MzTolerance {
 }
 
 impl MzTolerance {
-    pub fn window_at(&self, mz: f64) -> (f64, f64) {
+    pub(crate) fn window_at(&self, mz: f64) -> (f64, f64) {
         let tol = self.tol_at(mz.abs());
         (mz - tol, mz + tol)
     }
 
-    pub fn are_close(&self, a: f64, b: f64) -> bool {
+    pub(crate) fn are_close(&self, a: f64, b: f64) -> bool {
         (a - b).abs() <= self.tol_at(0.5 * (a + b).abs())
     }
 
-    pub fn are_close_to_ref(&self, a: f64, ref_mz: f64) -> bool {
+    pub(crate) fn are_close_to_ref(&self, a: f64, ref_mz: f64) -> bool {
         (a - ref_mz).abs() <= self.tol_at(ref_mz.abs())
     }
 
@@ -517,7 +517,7 @@ pub(crate) fn sort_features(mut features: Vec<Feature>) -> Vec<Feature> {
     features
 }
 
-pub fn max_intensity_centroid(
+pub(crate) fn max_intensity_centroid(
     scans: &[CentroidScan],
     rt: &[f64],
     apex_rt: f64,
@@ -764,7 +764,8 @@ fn flatten_scans_size_estimate(scans: &[CentroidScan]) -> u64 {
     ((total * 2 * size_of::<f32>()) + (scans.len() * 2 * size_of::<u32>())) as u64
 }
 
-pub fn safe_batch_options(
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub(crate) fn safe_batch_options(
     ctx: &GpuContext,
     scan_count: usize,
     scan_vram_bytes: u64,

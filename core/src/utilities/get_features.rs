@@ -127,7 +127,7 @@ type Cluster = Vec<TaggedFeature>;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub enum SampleSourceKind {
-    Mzml(Box<MzML>),
+    Mzml(PathBuf),
     Ion(PathBuf),
 }
 
@@ -181,7 +181,7 @@ impl GrowingCluster {
 }
 
 impl FeatureClusterer {
-    pub fn cluster(&self, mut tagged: Vec<TaggedFeature>) -> Vec<Cluster> {
+    pub(crate) fn cluster(&self, mut tagged: Vec<TaggedFeature>) -> Vec<Cluster> {
         tagged.sort_unstable_by(|a, b| {
             a.feature
                 .mz
@@ -326,15 +326,20 @@ fn fill_all_missing(
 ) {
     for (sample_idx, (name, source, _)) in datasets.iter_mut().enumerate() {
         match source {
-            SampleSourceKind::Mzml(mzml) => {
-                fill_sample(
-                    slots,
-                    sample_idx,
-                    mzml.as_mut(),
-                    eic_options,
-                    peak_options.clone(),
-                );
-            }
+            SampleSourceKind::Mzml(path) => match open_mzml(path) {
+                Ok(mut mzml) => {
+                    fill_sample(
+                        slots,
+                        sample_idx,
+                        &mut mzml,
+                        eic_options,
+                        peak_options.clone(),
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[Sample {}] {} failed to reopen: {}", sample_idx, name, e);
+                }
+            },
             SampleSourceKind::Ion(path) => match OwnedIon::from_ion_path(path, ION_CACHE_BYTES) {
                 Ok(mut owned) => {
                     fill_sample(
@@ -499,14 +504,7 @@ fn load_sample_files(directory: &str) -> Result<Vec<(String, SampleSourceKind)>,
                 .to_string();
             let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
             let source = match ext {
-                "mzML" => {
-                    let bytes = fs::read(&path)?;
-                    let mzml = parse_mzml(&bytes).map_err(|e| AlignmentError::Parse {
-                        path: file_name.clone(),
-                        source: e.to_string(),
-                    })?;
-                    SampleSourceKind::Mzml(Box::new(mzml))
-                }
+                "mzML" => SampleSourceKind::Mzml(path),
                 "ion" => SampleSourceKind::Ion(path),
                 other => return Err(AlignmentError::UnsupportedFormat(other.to_string())),
             };
@@ -525,13 +523,19 @@ fn detect_features_per_sample(
     samples
         .into_iter()
         .enumerate()
-        .map(|(idx, (name, mut source))| {
+        .map(|(idx, (name, source))| {
             let start = Instant::now();
-            let features = match &mut source {
-                SampleSourceKind::Mzml(mzml) => {
-                    find_features(mzml.as_mut(), time_window, Some(config.clone()), cores)
-                        .unwrap_or_default()
-                }
+            let features = match &source {
+                SampleSourceKind::Mzml(path) => match open_mzml(path) {
+                    Ok(mut mzml) => {
+                        find_features(&mut mzml, time_window, Some(config.clone()), cores)
+                            .unwrap_or_default()
+                    }
+                    Err(e) => {
+                        eprintln!("[Sample {}] {} failed to open: {}", idx, name, e);
+                        Vec::new()
+                    }
+                },
                 SampleSourceKind::Ion(path) => {
                     match OwnedIon::from_ion_path(path, ION_CACHE_BYTES) {
                         Ok(mut owned) => {
@@ -655,6 +659,12 @@ pub(crate) fn rsd(values: &[f64]) -> f64 {
     }
     let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1.0);
     variance.sqrt() / mean
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+fn open_mzml(path: &PathBuf) -> Result<MzML, String> {
+    let bytes = fs::read(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
+    parse_mzml(&bytes).map_err(|e| format!("parse {}: {}", path.display(), e))
 }
 
 // fn fill_missing_feature(
