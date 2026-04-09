@@ -3,9 +3,12 @@ use core::ffi::c_int;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use core::ffi::{CStr, c_char, c_int};
 
+use memmap2::Mmap;
 use serde_json::json;
 use std::{
+    fs::File,
     panic::{AssertUnwindSafe, catch_unwind},
+    path::Path,
     ptr, slice,
     sync::Arc,
 };
@@ -105,9 +108,17 @@ pub unsafe extern "C" fn free_(ptr_raw: *mut u8, len: usize) {
     }
 }
 
+struct BytesBacking(Arc<[u8]>);
+
+impl AsRef<[u8]> for BytesBacking {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 pub struct OwnedIon {
     inner: Ion<'static>,
-    _data: Arc<[u8]>,
+    _backing: Arc<dyn AsRef<[u8]> + Send + Sync>,
 }
 
 impl OwnedIon {
@@ -120,15 +131,38 @@ impl OwnedIon {
                 max_cached_bytes: max_cache_size,
             },
         )?;
-        Ok(Self { _data: data, inner })
+        let backing: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(BytesBacking(data));
+        Ok(Self {
+            _backing: backing,
+            inner,
+        })
+    }
+
+    pub fn from_ion_path(path: &Path, max_cache_size: usize) -> Result<Self, String> {
+        let file = File::open(path).map_err(|e| format!("open {}: {}", path.display(), e))?;
+        let mmap =
+            unsafe { Mmap::map(&file) }.map_err(|e| format!("mmap {}: {}", path.display(), e))?;
+        let backing: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(mmap);
+        let bytes: &[u8] = backing.as_ref().as_ref();
+        let static_ref: &'static [u8] =
+            unsafe { std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) };
+        let inner = Ion::open_with_config(
+            static_ref,
+            DecoderConfig {
+                max_cached_bytes: max_cache_size,
+            },
+        )?;
+        Ok(Self {
+            _backing: backing,
+            inner,
+        })
     }
 
     pub fn from_mzml(mzml: &MzML) -> Result<Self, String> {
         let mut buf = Vec::new();
         encode(mzml, 0, false, WritingMode::Memory, &mut buf)
             .map_err(|e| format!("encode: {e}"))?;
-        let data: Arc<[u8]> = Arc::from(buf);
-        Self::from_ion_bytes(data, 0)
+        Self::from_ion_bytes(Arc::from(buf), 0)
     }
 
     fn ensure_mzml(&mut self) -> Result<MzML, c_int> {

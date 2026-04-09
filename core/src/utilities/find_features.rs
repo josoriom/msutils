@@ -1,5 +1,7 @@
 use ionic::SpectrumSource;
 use serde::Serialize;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use std::sync::Arc;
 use std::{
     cmp::Ordering,
     collections::HashSet,
@@ -119,6 +121,8 @@ pub struct FindFeaturesOptions {
     pub mz_scan_grid: MzScanGrid,
     pub scan_width_threshold: usize,
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    pub gpu_context: Option<Arc<GpuContext>>,
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     pub use_gpu: bool,
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     pub batch_size: Option<usize>,
@@ -141,6 +145,8 @@ impl Default for FindFeaturesOptions {
             mz_scan_grid: MzScanGrid::default(),
             scan_width_threshold: 5,
             #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+            gpu_context: None,
+            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
             use_gpu: false,
             #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
             batch_size: None,
@@ -158,17 +164,16 @@ pub fn find_features(
 
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     let gpu_ctx = if opts.use_gpu {
-        let ctx = GpuContext::try_init();
-        if ctx.is_none() {
-            eprintln!(
-                "[find_features] GPU requested but initialization failed, falling back to CPU"
-            );
-        } else {
-            eprintln!("[find_features] GPU initialized successfully");
-        }
-        ctx
+        opts.gpu_context.clone().or_else(|| {
+            let c = GpuContext::try_init().map(Arc::new);
+            if c.is_none() {
+                eprintln!(
+                    "[find_features] GPU requested but initialization failed, falling back to CPU"
+                );
+            }
+            c
+        })
     } else {
-        eprintln!("[find_features] GPU disabled, using CPU");
         None
     };
 
@@ -208,7 +213,7 @@ pub fn find_features(
         let gpu_args: GpuArgs<'_> = gpu_ctx
             .as_ref()
             .zip(gpu_batch.as_ref())
-            .map(|(ctx, batch)| (ctx, batch));
+            .map(|(ctx, batch)| (ctx.as_ref(), batch));
 
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         let gpu_args: GpuArgs<'_> = None;
@@ -428,9 +433,9 @@ fn extract_peaks_for_mass(
     if peaks.is_empty() {
         return Vec::new();
     }
-    for i in 0..peaks.len() {
-        let p = mem::take(&mut peaks[i]);
-        peaks[i] = with_eic_apex_intensity(&data.x, &data.y, p);
+    for peak in peaks.iter_mut() {
+        let p = mem::take(peak);
+        *peak = with_eic_apex_intensity(&data.x, &data.y, p);
     }
     sort_peaks_desc(&mut peaks);
     peaks
@@ -713,7 +718,7 @@ pub(crate) fn build_mz_grid(start: f64, end: f64, step_da: f64) -> Vec<f64> {
     xs
 }
 
-fn sort_peaks_desc(xs: &mut Vec<Peak>) {
+fn sort_peaks_desc(xs: &mut [Peak]) {
     xs.sort_unstable_by(|a, b| {
         b.intensity
             .partial_cmp(&a.intensity)

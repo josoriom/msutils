@@ -3,28 +3,36 @@ use std::{
     collections::HashSet,
     fmt::{Display, Formatter},
     io::Error,
+    sync::Arc,
 };
+
+use rayon::prelude::*;
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use crate::{OwnedIon, utilities::gpu::GpuContext};
 
 use crate::utilities::find_peaks::FindPeaksOptions;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::structs::FromTo;
 use crate::utilities::{
-    calculate_eic::{EicOptions, TimeUnit, collect_scans, compute_eic_for_mz},
+    calculate_eic::{
+        EicOptions, TimeUnit, collect_scans, compute_eic_for_mz, lower_bound, upper_bound,
+    },
     find_features::{
         Feature, FeatureError, FindFeaturesOptions, MzTolerance, dedup_points, find_features,
     },
     get_peak::get_peak,
     structs::{DataXY, Roi},
 };
-use ionic::{MzML, SpectrumSource};
+use ionic::SpectrumSource;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use ionic::{
-    decoder::{self},
-    parse_mzml,
-};
+const ION_CACHE_BYTES: usize = 128 * 1024 * 1024;
+
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use std::{fs, time::Instant};
+use ionic::{MzML, parse_mzml};
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use std::{fs, path::PathBuf, time::Instant};
 
 #[derive(Debug)]
 pub enum AlignmentError {
@@ -116,7 +124,15 @@ pub struct FeatureClusterer {
 }
 
 type Cluster = Vec<TaggedFeature>;
-type SampleDataset = (String, MzML, Vec<Feature>);
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub enum SampleSourceKind {
+    Mzml(Box<MzML>),
+    Ion(PathBuf),
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+type SampleDataset = (String, SampleSourceKind, Vec<Feature>);
 
 pub(crate) struct SearchBounds {
     pub(crate) target_mz: f64,
@@ -128,6 +144,8 @@ pub(crate) struct SearchBounds {
 #[derive(Debug)]
 pub(crate) struct GrowingCluster {
     items: Vec<TaggedFeature>,
+    sorted_mzs: Vec<f64>,
+    sorted_rts: Vec<f64>,
     pub(crate) cached_median_mz: f64,
     pub(crate) cached_median_rt: f64,
 }
@@ -137,6 +155,8 @@ impl GrowingCluster {
         let mz = item.feature.mz;
         let rt = item.feature.rt;
         Self {
+            sorted_mzs: vec![mz],
+            sorted_rts: vec![rt],
             items: vec![item],
             cached_median_mz: mz,
             cached_median_rt: rt,
@@ -144,13 +164,15 @@ impl GrowingCluster {
     }
 
     pub(crate) fn push(&mut self, item: TaggedFeature) {
+        let mz = item.feature.mz;
+        let rt = item.feature.rt;
+        let mz_pos = self.sorted_mzs.partition_point(|&v| v < mz);
+        let rt_pos = self.sorted_rts.partition_point(|&v| v < rt);
+        self.sorted_mzs.insert(mz_pos, mz);
+        self.sorted_rts.insert(rt_pos, rt);
         self.items.push(item);
-        let mut mzs: Vec<f64> = self.items.iter().map(|t| t.feature.mz).collect();
-        let mut rts: Vec<f64> = self.items.iter().map(|t| t.feature.rt).collect();
-        mzs.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-        rts.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-        self.cached_median_mz = mzs[mzs.len() / 2];
-        self.cached_median_rt = rts[rts.len() / 2];
+        self.cached_median_mz = self.sorted_mzs[self.sorted_mzs.len() / 2];
+        self.cached_median_rt = self.sorted_rts[self.sorted_rts.len() / 2];
     }
 
     fn into_items(self) -> Vec<TaggedFeature> {
@@ -169,15 +191,12 @@ impl FeatureClusterer {
         let mz_groups = self.group_by_mz(tagged);
         mz_groups
             .into_iter()
-            .flat_map(|group| self.subdivide_by_rt(group))
-            .filter_map(|cluster| {
-                let mut mzs: Vec<f64> = cluster.iter().map(|t| t.feature.mz).collect();
-                let mut rts: Vec<f64> = cluster.iter().map(|t| t.feature.rt).collect();
-                mzs.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-                rts.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-                let med_mz = mzs[mzs.len() / 2];
-                let med_rt = rts[rts.len() / 2];
-                let kept: Vec<TaggedFeature> = cluster
+            .flat_map(|group| self.subdivide_by_rt(group.into_items()))
+            .filter_map(|growing| {
+                let med_mz = growing.cached_median_mz;
+                let med_rt = growing.cached_median_rt;
+                let kept: Vec<TaggedFeature> = growing
+                    .into_items()
                     .into_iter()
                     .filter(|t| {
                         self.tolerance.are_close_to_ref(t.feature.mz, med_mz)
@@ -189,10 +208,10 @@ impl FeatureClusterer {
             .collect()
     }
 
-    fn group_by_mz(&self, items: Vec<TaggedFeature>) -> Vec<Vec<TaggedFeature>> {
+    fn group_by_mz(&self, items: Vec<TaggedFeature>) -> Vec<GrowingCluster> {
         let mut groups: Vec<GrowingCluster> = Vec::new();
         for item in items {
-            let belongs = groups.last().map_or(false, |g| {
+            let belongs = groups.last().is_some_and(|g| {
                 self.tolerance
                     .are_close_to_ref(item.feature.mz, g.cached_median_mz)
             });
@@ -202,10 +221,10 @@ impl FeatureClusterer {
                 groups.push(GrowingCluster::new(item));
             }
         }
-        groups.into_iter().map(|g| g.into_items()).collect()
+        groups
     }
 
-    fn subdivide_by_rt(&self, group: Vec<TaggedFeature>) -> Vec<Vec<TaggedFeature>> {
+    fn subdivide_by_rt(&self, group: Vec<TaggedFeature>) -> Vec<GrowingCluster> {
         let mut rt_sorted = group;
         rt_sorted.sort_unstable_by(|a, b| {
             a.feature
@@ -215,18 +234,20 @@ impl FeatureClusterer {
         });
         let mut clusters: Vec<GrowingCluster> = Vec::new();
         for item in rt_sorted {
-            let belongs = clusters.last().map_or(false, |g| {
-                (item.feature.rt - g.cached_median_rt).abs() <= self.rt_tolerance
-            });
+            let belongs = clusters
+                .last()
+                .is_some_and(|g| (item.feature.rt - g.cached_median_rt).abs() <= self.rt_tolerance);
             if belongs {
                 clusters.last_mut().unwrap().push(item);
             } else {
                 clusters.push(GrowingCluster::new(item));
             }
         }
-        clusters.into_iter().map(|g| g.into_items()).collect()
+        clusters
     }
 }
+
+type ClusterSlot = (Vec<Option<Feature>>, SearchBounds);
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub fn get_features(
@@ -236,7 +257,13 @@ pub fn get_features(
     alignment_config: ConsensusAlignmentConfig,
     cores: usize,
 ) -> Result<Vec<ConsensusFeature>, AlignmentError> {
-    let datasets = load_mzml_files(directory_path)?;
+    let datasets = load_sample_files(directory_path)?;
+
+    let mut feature_config = feature_config;
+    if feature_config.use_gpu && feature_config.gpu_context.is_none() {
+        feature_config.gpu_context = GpuContext::try_init().map(Arc::new);
+    }
+
     let mut datasets = detect_features_per_sample(datasets, time_window, &feature_config, cores);
 
     let clusterer = FeatureClusterer {
@@ -244,43 +271,213 @@ pub fn get_features(
         rt_tolerance: alignment_config.rt_tolerance,
     };
 
-    let tagged: Vec<TaggedFeature> = datasets
-        .iter()
+    let mut slots = prepare_slots(
+        clusterer.cluster(collect_tagged(&mut datasets)),
+        datasets.len(),
+        alignment_config.rt_tolerance,
+    );
+
+    fill_all_missing(
+        &mut slots,
+        &mut datasets,
+        alignment_config.eic_options,
+        alignment_config.peak_options,
+    );
+
+    Ok(dedup(
+        build_results(slots, alignment_config.frequency),
+        &alignment_config.tolerance,
+        alignment_config.rt_tolerance,
+    ))
+}
+
+fn collect_tagged(datasets: &mut [SampleDataset]) -> Vec<TaggedFeature> {
+    datasets
+        .iter_mut()
         .enumerate()
         .flat_map(|(idx, (_, _, features))| {
-            features.iter().map(move |f| TaggedFeature {
-                sample_index: idx,
-                feature: f.clone(),
-            })
+            std::mem::take(features)
+                .into_iter()
+                .map(move |feature| TaggedFeature {
+                    sample_index: idx,
+                    feature,
+                })
         })
-        .collect();
+        .collect()
+}
 
-    let clusters = clusterer.cluster(tagged);
-
-    let results: Vec<ConsensusFeature> = clusters
+fn prepare_slots(clusters: Vec<Cluster>, n_samples: usize, rt_tol: f64) -> Vec<ClusterSlot> {
+    clusters
         .into_iter()
-        .filter_map(|cluster| build_consensus_feature(cluster, &mut datasets, &alignment_config))
-        .collect();
-
-    let points: Vec<(f64, f64, f64)> = results.iter().map(|f| (f.rt, f.mz, f.intensity)).collect();
-    let survivors: HashSet<(u64, u64, u64)> = dedup_points(
-        points.clone(),
-        alignment_config.tolerance.mz_abs,
-        alignment_config.tolerance.ppm,
-        alignment_config.rt_tolerance,
-    )
-    .into_iter()
-    .map(|(rt, mz, intensity)| (rt.to_bits(), mz.to_bits(), intensity.to_bits()))
-    .collect();
-
-    Ok(results
-        .into_iter()
-        .filter(|f| survivors.contains(&(f.rt.to_bits(), f.mz.to_bits(), f.intensity.to_bits())))
-        .collect())
+        .filter_map(|cluster| {
+            let slots = assign_best_per_sample(cluster, n_samples);
+            let bounds = compute_search_bounds(&slots, rt_tol)?;
+            Some((slots, bounds))
+        })
+        .collect()
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-fn load_mzml_files(directory: &str) -> Result<Vec<(String, MzML)>, AlignmentError> {
+fn fill_all_missing(
+    slots: &mut [ClusterSlot],
+    datasets: &mut [SampleDataset],
+    eic_options: EicOptions,
+    peak_options: Option<FindPeaksOptions>,
+) {
+    for (sample_idx, (name, source, _)) in datasets.iter_mut().enumerate() {
+        match source {
+            SampleSourceKind::Mzml(mzml) => {
+                fill_sample(
+                    slots,
+                    sample_idx,
+                    mzml.as_mut(),
+                    eic_options,
+                    peak_options.clone(),
+                );
+            }
+            SampleSourceKind::Ion(path) => match OwnedIon::from_ion_path(path, ION_CACHE_BYTES) {
+                Ok(mut owned) => {
+                    fill_sample(
+                        slots,
+                        sample_idx,
+                        &mut owned,
+                        eic_options,
+                        peak_options.clone(),
+                    );
+                }
+                Err(e) => {
+                    eprintln!("[Sample {}] {} failed to reopen: {}", sample_idx, name, e);
+                }
+            },
+        }
+    }
+}
+
+fn fill_sample(
+    slots: &mut [ClusterSlot],
+    sample_idx: usize,
+    source: &mut impl SpectrumSource,
+    eic_options: EicOptions,
+    peak_options: Option<FindPeaksOptions>,
+) {
+    let missing: Vec<usize> = slots
+        .iter()
+        .enumerate()
+        .filter_map(|(ci, (s, _))| {
+            if s[sample_idx].is_none() {
+                Some(ci)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if missing.is_empty() {
+        return;
+    }
+
+    let rt_min = missing
+        .iter()
+        .map(|&ci| slots[ci].1.rt_from)
+        .fold(f64::INFINITY, f64::min);
+    let rt_max = missing
+        .iter()
+        .map(|&ci| slots[ci].1.rt_to)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    let (all_times, all_scans) = collect_scans(
+        source,
+        FromTo {
+            from: rt_min,
+            to: rt_max,
+        },
+        TimeUnit::Minutes,
+        1,
+    );
+
+    if all_scans.is_empty() {
+        return;
+    }
+
+    let filled: Vec<(usize, Option<Feature>)> = missing
+        .par_iter()
+        .map(|&ci| {
+            let bounds = &slots[ci].1;
+            let start = lower_bound(&all_times, bounds.rt_from);
+            let end = upper_bound(&all_times, bounds.rt_to);
+            if start >= end {
+                return (ci, None);
+            }
+            let time_slice = all_times[start..end].to_vec();
+            let intensities = compute_eic_for_mz(
+                &all_scans[start..end],
+                time_slice.len(),
+                bounds.target_mz,
+                eic_options,
+            );
+            let feature = get_peak(
+                &DataXY {
+                    x: time_slice,
+                    y: intensities,
+                },
+                &Roi {
+                    rt: bounds.seed_rt,
+                    window: bounds.rt_to - bounds.rt_from,
+                },
+                peak_options.clone(),
+            )
+            .filter(|p| p.intensity > 0.0)
+            .map(|p| Feature {
+                mz: bounds.target_mz,
+                rt: p.rt,
+                intensity: p.intensity,
+                from: p.from,
+                to: p.to,
+                np: p.np,
+                integral: p.integral,
+                noise: p.noise,
+            });
+            (ci, feature)
+        })
+        .collect();
+
+    for (ci, f) in filled {
+        if let Some(f) = f {
+            slots[ci].0[sample_idx] = Some(f);
+        }
+    }
+}
+
+fn build_results(slots: Vec<ClusterSlot>, frequency: usize) -> Vec<ConsensusFeature> {
+    slots
+        .into_iter()
+        .filter_map(|(s, bounds)| {
+            let hits = collect_filled_slots(s);
+            require_minimum_frequency(hits, frequency)
+                .map(|hits| aggregate_into_consensus(hits, &bounds))
+        })
+        .collect()
+}
+
+fn dedup(
+    results: Vec<ConsensusFeature>,
+    tolerance: &MzTolerance,
+    rt_tol: f64,
+) -> Vec<ConsensusFeature> {
+    let points: Vec<(f64, f64, f64)> = results.iter().map(|f| (f.rt, f.mz, f.intensity)).collect();
+    let survivors: HashSet<(u64, u64, u64)> =
+        dedup_points(points, tolerance.mz_abs, tolerance.ppm, rt_tol)
+            .into_iter()
+            .map(|(rt, mz, i)| (rt.to_bits(), mz.to_bits(), i.to_bits()))
+            .collect();
+    results
+        .into_iter()
+        .filter(|f| survivors.contains(&(f.rt.to_bits(), f.mz.to_bits(), f.intensity.to_bits())))
+        .collect()
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+fn load_sample_files(directory: &str) -> Result<Vec<(String, SampleSourceKind)>, AlignmentError> {
     let entries: Vec<_> = fs::read_dir(directory)?
         .filter_map(|entry| {
             let path = entry.ok()?.path();
@@ -293,41 +490,34 @@ fn load_mzml_files(directory: &str) -> Result<Vec<(String, MzML)>, AlignmentErro
     }
 
     entries
-        .iter()
+        .into_iter()
         .map(|path| {
             let file_name = path
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or("unknown")
                 .to_string();
-            let bytes = fs::read(path)?;
             let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
-            let mzml = match ext {
-                "mzML" => parse_mzml(&bytes).map_err(|e| AlignmentError::Parse {
-                    path: file_name.clone(),
-                    source: e.to_string(),
-                })?,
-                "ion" => {
-                    let mut decoder =
-                        decoder::Decoder::open(&bytes).map_err(|e| AlignmentError::Parse {
-                            path: file_name.clone(),
-                            source: e.to_string(),
-                        })?;
-                    decoder.to_mzml().map_err(|e| AlignmentError::Parse {
+            let source = match ext {
+                "mzML" => {
+                    let bytes = fs::read(&path)?;
+                    let mzml = parse_mzml(&bytes).map_err(|e| AlignmentError::Parse {
                         path: file_name.clone(),
                         source: e.to_string(),
-                    })?
+                    })?;
+                    SampleSourceKind::Mzml(Box::new(mzml))
                 }
+                "ion" => SampleSourceKind::Ion(path),
                 other => return Err(AlignmentError::UnsupportedFormat(other.to_string())),
             };
-            Ok((file_name, mzml))
+            Ok((file_name, source))
         })
         .collect()
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 fn detect_features_per_sample(
-    samples: Vec<(String, MzML)>,
+    samples: Vec<(String, SampleSourceKind)>,
     time_window: FromTo,
     config: &FindFeaturesOptions,
     cores: usize,
@@ -335,33 +525,35 @@ fn detect_features_per_sample(
     samples
         .into_iter()
         .enumerate()
-        .map(|(idx, (name, mut mzml))| {
+        .map(|(idx, (name, mut source))| {
             let start = Instant::now();
-            let features = find_features(&mut mzml, time_window, Some(config.clone()), cores)
-                .unwrap_or_default();
+            let features = match &mut source {
+                SampleSourceKind::Mzml(mzml) => {
+                    find_features(mzml.as_mut(), time_window, Some(config.clone()), cores)
+                        .unwrap_or_default()
+                }
+                SampleSourceKind::Ion(path) => {
+                    match OwnedIon::from_ion_path(path, ION_CACHE_BYTES) {
+                        Ok(mut owned) => {
+                            find_features(&mut owned, time_window, Some(config.clone()), cores)
+                                .unwrap_or_default()
+                        }
+                        Err(e) => {
+                            eprintln!("[Sample {}] {} failed to open: {}", idx, name, e);
+                            Vec::new()
+                        }
+                    }
+                }
+            };
             eprintln!(
                 "[Sample {}] {} processed in {:.3}s",
                 idx,
                 name,
                 start.elapsed().as_secs_f64()
             );
-            (name, mzml, features)
+            (name, source, features)
         })
         .collect()
-}
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-fn build_consensus_feature(
-    cluster: Cluster,
-    datasets: &mut [SampleDataset],
-    config: &ConsensusAlignmentConfig,
-) -> Option<ConsensusFeature> {
-    let mut slots = assign_best_per_sample(cluster, datasets.len());
-    let bounds = compute_search_bounds(&slots, config.rt_tolerance)?;
-    fill_missing_slots(&mut slots, datasets, &bounds, config);
-    let hits = collect_filled_slots(slots);
-    require_minimum_frequency(hits, config.frequency)
-        .map(|hits| aggregate_into_consensus(hits, &bounds))
 }
 
 pub(crate) fn assign_best_per_sample(cluster: Cluster, n_samples: usize) -> Vec<Option<Feature>> {
@@ -370,7 +562,7 @@ pub(crate) fn assign_best_per_sample(cluster: Cluster, n_samples: usize) -> Vec<
         let idx = tagged.sample_index;
         if slots[idx]
             .as_ref()
-            .map_or(true, |f| tagged.feature.intensity > f.intensity)
+            .is_none_or(|f| tagged.feature.intensity > f.intensity)
         {
             slots[idx] = Some(tagged.feature);
         }
@@ -398,33 +590,6 @@ pub(crate) fn compute_search_bounds(
         rt_from: med_rt - rt_tol,
         rt_to: med_rt + rt_tol,
     })
-}
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-fn fill_missing_slots(
-    slots: &mut [Option<Feature>],
-    datasets: &mut [SampleDataset],
-    bounds: &SearchBounds,
-    config: &ConsensusAlignmentConfig,
-) {
-    for (idx, slot) in slots.iter_mut().enumerate() {
-        if slot.is_some() {
-            continue;
-        }
-        if let Some(filled) = fill_missing_feature(
-            &mut datasets[idx].1,
-            bounds.target_mz,
-            bounds.rt_from,
-            bounds.rt_to,
-            bounds.seed_rt,
-            config.eic_options,
-            config.peak_options.clone(),
-        ) {
-            if filled.intensity > 0.0 {
-                *slot = Some(filled);
-            }
-        }
-    }
 }
 
 pub(crate) fn collect_filled_slots(slots: Vec<Option<Feature>>) -> Vec<Feature> {
@@ -464,7 +629,7 @@ pub(crate) fn aggregate_into_consensus(
         to: bounds.rt_to,
         np: median(&mut np_values) as usize,
         integral: median(&mut integral_values),
-        rint: rsd(&mut integral_values),
+        rint: rsd(&integral_values),
         frequency: n,
     }
 }
@@ -472,63 +637,11 @@ pub(crate) fn aggregate_into_consensus(
 pub(crate) fn median(values: &mut [f64]) -> f64 {
     values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
     let mid = values.len() / 2;
-    if values.len() % 2 == 0 {
+    if values.len().is_multiple_of(2) {
         (values[mid - 1] + values[mid]) / 2.0
     } else {
         values[mid]
     }
-}
-
-fn fill_missing_feature(
-    source: &mut impl SpectrumSource,
-    target_mz: f64,
-    rt_start: f64,
-    rt_end: f64,
-    seed_rt: f64,
-    eic_options: EicOptions,
-    peak_options: Option<FindPeaksOptions>,
-) -> Option<Feature> {
-    let (time_points, ms1_scans) = collect_scans(
-        source,
-        FromTo {
-            from: rt_start,
-            to: rt_end,
-        },
-        TimeUnit::Minutes,
-        1,
-    );
-
-    if ms1_scans.is_empty() {
-        return None;
-    }
-
-    let intensities = compute_eic_for_mz(&ms1_scans, time_points.len(), target_mz, eic_options);
-    let peak = get_peak(
-        &DataXY {
-            x: time_points,
-            y: intensities,
-        },
-        &Roi {
-            rt: seed_rt,
-            window: rt_end - rt_start,
-        },
-        peak_options,
-    )?;
-
-    if peak.intensity <= 0.0 {
-        return None;
-    }
-
-    Some(Feature {
-        mz: target_mz,
-        rt: peak.rt,
-        intensity: peak.intensity,
-        from: peak.from,
-        to: peak.to,
-        np: peak.np,
-        integral: peak.integral,
-        noise: peak.noise,
-    })
 }
 
 pub(crate) fn rsd(values: &[f64]) -> f64 {
@@ -543,3 +656,96 @@ pub(crate) fn rsd(values: &[f64]) -> f64 {
     let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1.0);
     variance.sqrt() / mean
 }
+
+// fn fill_missing_feature(
+//     source: &mut impl SpectrumSource,
+//     target_mz: f64,
+//     rt_start: f64,
+//     rt_end: f64,
+//     seed_rt: f64,
+//     eic_options: EicOptions,
+//     peak_options: Option<FindPeaksOptions>,
+// ) -> Option<Feature> {
+//     let (time_points, ms1_scans) = collect_scans(
+//         source,
+//         FromTo {
+//             from: rt_start,
+//             to: rt_end,
+//         },
+//         TimeUnit::Minutes,
+//         1,
+//     );
+
+//     if ms1_scans.is_empty() {
+//         return None;
+//     }
+
+//     let intensities = compute_eic_for_mz(&ms1_scans, time_points.len(), target_mz, eic_options);
+//     let peak = get_peak(
+//         &DataXY {
+//             x: time_points,
+//             y: intensities,
+//         },
+//         &Roi {
+//             rt: seed_rt,
+//             window: rt_end - rt_start,
+//         },
+//         peak_options,
+//     )?;
+
+//     if peak.intensity <= 0.0 {
+//         return None;
+//     }
+
+//     Some(Feature {
+//         mz: target_mz,
+//         rt: peak.rt,
+//         intensity: peak.intensity,
+//         from: peak.from,
+//         to: peak.to,
+//         np: peak.np,
+//         integral: peak.integral,
+//         noise: peak.noise,
+//     })
+// }
+
+// #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+// fn fill_missing_slots(
+//     slots: &mut [Option<Feature>],
+//     datasets: &mut [SampleDataset],
+//     bounds: &SearchBounds,
+//     config: &ConsensusAlignmentConfig,
+// ) {
+//     for (idx, slot) in slots.iter_mut().enumerate() {
+//         if slot.is_some() {
+//             continue;
+//         }
+//         if let Some(filled) = fill_missing_feature(
+//             &mut datasets[idx].1,
+//             bounds.target_mz,
+//             bounds.rt_from,
+//             bounds.rt_to,
+//             bounds.seed_rt,
+//             config.eic_options,
+//             config.peak_options.clone(),
+//         ) {
+//             if filled.intensity > 0.0 {
+//                 *slot = Some(filled);
+//             }
+//         }
+//     }
+// }
+
+// #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+// fn build_consensus_feature(
+//     cluster: Cluster,
+//     datasets: &mut [SampleDataset],
+//     config: &ConsensusAlignmentConfig,
+// ) -> Option<ConsensusFeature> {
+//     let mut slots = assign_best_per_sample(cluster, datasets.len());
+//     let bounds = compute_search_bounds(&slots, config.rt_tolerance)?;
+//     fill_missing_slots(&mut slots, datasets, &bounds, config);
+//     let hits = collect_filled_slots(slots);
+//     require_minimum_frequency(hits, config.frequency)
+//         .map(|hits| aggregate_into_consensus(hits, &bounds))
+// }
