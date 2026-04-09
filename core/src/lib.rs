@@ -185,17 +185,10 @@ impl SpectrumSource for OwnedIon {
 
 pub enum ParsedFile {
     Full(Box<MzML>),
-    Lazy(OwnedIon),
+    Lazy(Box<OwnedIon>),
 }
 
 impl ParsedFile {
-    fn ensure_mzml(&mut self) -> Result<MzML, c_int> {
-        match self {
-            ParsedFile::Full(mzml) => Ok((**mzml).clone()),
-            ParsedFile::Lazy(file) => file.ensure_mzml(),
-        }
-    }
-
     fn with_mzml<T>(&mut self, f: impl FnOnce(&MzML) -> Result<T, c_int>) -> Result<T, c_int> {
         match self {
             ParsedFile::Full(mzml) => f(mzml.as_ref()),
@@ -286,7 +279,7 @@ pub unsafe extern "C" fn parse_bin(
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let arc: Arc<[u8]> = Arc::from(unsafe { std::slice::from_raw_parts(data_ptr, data_len) });
         let owned = OwnedIon::from_ion_bytes(arc, max_cache_size).map_err(|_| ERR_PARSE)?;
-        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Lazy(owned))) };
+        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(owned)))) };
         Ok(())
     })) {
         Ok(Ok(())) => OK,
