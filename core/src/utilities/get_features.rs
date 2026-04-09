@@ -32,6 +32,10 @@ const ION_CACHE_BYTES: usize = 128 * 1024 * 1024;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use ionic::{MzML, parse_mzml};
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use memmap2::Mmap;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use std::fs::File;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use std::{fs, path::PathBuf, time::Instant};
 
 #[derive(Debug)]
@@ -130,7 +134,6 @@ pub enum SampleSourceKind {
     Mzml(PathBuf),
     Ion(PathBuf),
 }
-
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 type SampleDataset = (String, SampleSourceKind, Vec<Feature>);
 
@@ -661,101 +664,11 @@ pub(crate) fn rsd(values: &[f64]) -> f64 {
     variance.sqrt() / mean
 }
 
+// TODO: Mmap-backed mzML loading is still being tested.
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 fn open_mzml(path: &PathBuf) -> Result<MzML, String> {
-    let bytes = fs::read(path).map_err(|e| format!("read {}: {}", path.display(), e))?;
-    parse_mzml(&bytes).map_err(|e| format!("parse {}: {}", path.display(), e))
+    let file = File::open(path).map_err(|e| format!("open {}: {}", path.display(), e))?;
+    let mmap =
+        unsafe { Mmap::map(&file) }.map_err(|e| format!("mmap {}: {}", path.display(), e))?;
+    parse_mzml(&mmap[..]).map_err(|e| e.to_string())
 }
-
-// fn fill_missing_feature(
-//     source: &mut impl SpectrumSource,
-//     target_mz: f64,
-//     rt_start: f64,
-//     rt_end: f64,
-//     seed_rt: f64,
-//     eic_options: EicOptions,
-//     peak_options: Option<FindPeaksOptions>,
-// ) -> Option<Feature> {
-//     let (time_points, ms1_scans) = collect_scans(
-//         source,
-//         FromTo {
-//             from: rt_start,
-//             to: rt_end,
-//         },
-//         TimeUnit::Minutes,
-//         1,
-//     );
-
-//     if ms1_scans.is_empty() {
-//         return None;
-//     }
-
-//     let intensities = compute_eic_for_mz(&ms1_scans, time_points.len(), target_mz, eic_options);
-//     let peak = get_peak(
-//         &DataXY {
-//             x: time_points,
-//             y: intensities,
-//         },
-//         &Roi {
-//             rt: seed_rt,
-//             window: rt_end - rt_start,
-//         },
-//         peak_options,
-//     )?;
-
-//     if peak.intensity <= 0.0 {
-//         return None;
-//     }
-
-//     Some(Feature {
-//         mz: target_mz,
-//         rt: peak.rt,
-//         intensity: peak.intensity,
-//         from: peak.from,
-//         to: peak.to,
-//         np: peak.np,
-//         integral: peak.integral,
-//         noise: peak.noise,
-//     })
-// }
-
-// #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-// fn fill_missing_slots(
-//     slots: &mut [Option<Feature>],
-//     datasets: &mut [SampleDataset],
-//     bounds: &SearchBounds,
-//     config: &ConsensusAlignmentConfig,
-// ) {
-//     for (idx, slot) in slots.iter_mut().enumerate() {
-//         if slot.is_some() {
-//             continue;
-//         }
-//         if let Some(filled) = fill_missing_feature(
-//             &mut datasets[idx].1,
-//             bounds.target_mz,
-//             bounds.rt_from,
-//             bounds.rt_to,
-//             bounds.seed_rt,
-//             config.eic_options,
-//             config.peak_options.clone(),
-//         ) {
-//             if filled.intensity > 0.0 {
-//                 *slot = Some(filled);
-//             }
-//         }
-//     }
-// }
-
-// #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-// fn build_consensus_feature(
-//     cluster: Cluster,
-//     datasets: &mut [SampleDataset],
-//     config: &ConsensusAlignmentConfig,
-// ) -> Option<ConsensusFeature> {
-//     let mut slots = assign_best_per_sample(cluster, datasets.len());
-//     let bounds = compute_search_bounds(&slots, config.rt_tolerance)?;
-//     fill_missing_slots(&mut slots, datasets, &bounds, config);
-//     let hits = collect_filled_slots(slots);
-//     require_minimum_frequency(hits, config.frequency)
-//         .map(|hits| aggregate_into_consensus(hits, &bounds))
-// }
