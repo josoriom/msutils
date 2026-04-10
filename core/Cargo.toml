@@ -26,6 +26,3 @@ wgpu = "29.0.1"
 
 [target.'cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))'.dependencies]
 rayon = "1.11.0"
-
-[target.aarch64-pc-windows-gnullvm]
-linker = "aarch64-w64-mingw32-gcc"
