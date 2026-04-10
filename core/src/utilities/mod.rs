@@ -28,8 +28,8 @@ pub mod structs;
 
 pub mod cheminfo;
 
-pub mod utilities;
-pub use utilities::closest_index;
+pub mod math;
+pub use math::closest_index;
 
 pub mod find_feature;
 pub use find_feature::find_feature;

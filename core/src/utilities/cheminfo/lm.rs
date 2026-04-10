@@ -214,8 +214,8 @@ pub fn step(
 
     let func = parameterized_function(params);
     let mut evaluated_data = vec![0.0_f64; data.x.len()];
-    for i in 0..data.x.len() {
-        evaluated_data[i] = func(data.x[i]);
+    for (i, value) in evaluated_data.iter_mut().enumerate().take(data.x.len()) {
+        *value = func(data.x[i]);
     }
 
     let j = gradient_function(
@@ -251,8 +251,8 @@ pub fn step(
 fn solve_sym_posdef_or_svd(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     let mut a_bumped = a.to_vec();
     let n = a_bumped.len();
-    for i in 0..n {
-        a_bumped[i][i] += 1e-12;
+    for (i, row) in a_bumped.iter_mut().enumerate().take(n) {
+        row[i] += 1e-12;
     }
     if let Some(x) = solve_linear(&a_bumped, b) {
         return Some(x);
@@ -275,13 +275,14 @@ fn solve_linear(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
     for i in 0..n {
         let mut pivot = i;
         let mut maxv = aug[i][i].abs();
-        for r in (i + 1)..n {
-            let v = aug[r][i].abs();
+        for (r, row) in aug.iter().enumerate().take(n).skip(i + 1) {
+            let v = row[i].abs();
             if v > maxv {
                 maxv = v;
                 pivot = r;
             }
         }
+
         if maxv <= 0.0 || !maxv.is_finite() {
             return None;
         }
@@ -289,16 +290,18 @@ fn solve_linear(a: &[Vec<f64>], b: &[f64]) -> Option<Vec<f64>> {
             aug.swap(i, pivot);
         }
         let diag = aug[i][i];
-        for j in i..=n {
-            aug[i][j] /= diag;
+        for value in aug[i].iter_mut().skip(i) {
+            *value /= diag;
         }
+
         for r in 0..n {
             if r == i {
                 continue;
             }
             let factor = aug[r][i];
-            for j in i..=n {
-                aug[r][j] -= factor * aug[i][j];
+            let pivot_row = aug[i].clone();
+            for value_index in i..=n {
+                aug[r][value_index] -= factor * pivot_row[value_index];
             }
         }
     }
@@ -313,8 +316,8 @@ pub fn error_calculation(
 ) -> f64 {
     let func = parameterized_function(parameters);
     let mut error = 0.0_f64;
-    for i in 0..data.x.len() {
-        let r = data.y[i] - func(data.x[i]);
+    for (i, &x) in data.x.iter().enumerate() {
+        let r = data.y[i] - func(x);
         error += (r * r) / weight_square[i];
     }
     error
@@ -350,9 +353,8 @@ pub fn gradient_function(
             aux_params[param] -= delta;
             delta *= 2.0;
             let func_param2 = param_function(&aux_params);
-            for point in 0..nb_points {
-                ans[row_index][point] =
-                    (func_param2(data.x[point]) - func_param(data.x[point])) / delta;
+            for (i, &x) in data.x.iter().enumerate() {
+                ans[row_index][i] = (func_param2(x) - func_param(x)) / delta;
             }
         }
         row_index += 1;
@@ -414,8 +416,8 @@ pub fn check_options(
 
     let filler = get_filler(options.weights.clone(), data.x.len())?;
     let mut weight_square = vec![0.0_f64; data.x.len()];
-    for i in 0..data.x.len() {
-        weight_square[i] = filler(i);
+    for (i, value) in weight_square.iter_mut().enumerate() {
+        *value = filler(i);
     }
 
     if max_values.len() != par_len {
@@ -453,8 +455,8 @@ fn matrix_function(data: &Data2D, evaluated_data: &[f64]) -> Vec<f64> {
 
 fn eye(n: usize, value: f64) -> Vec<Vec<f64>> {
     let mut m = vec![vec![0.0_f64; n]; n];
-    for i in 0..n {
-        m[i][i] = value;
+    for (i, item) in m.iter_mut().enumerate() {
+        item[i] = value;
     }
     m
 }
@@ -559,8 +561,8 @@ fn invert(a: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, String> {
     for i in 0..n {
         let mut pivot = i;
         let mut maxv = aug[i][i].abs();
-        for r in (i + 1)..n {
-            let v = aug[r][i].abs();
+        for (r, row) in aug.iter().enumerate().skip(i + 1) {
+            let v = row[i].abs();
             if v > maxv {
                 maxv = v;
                 pivot = r;
@@ -574,17 +576,20 @@ fn invert(a: &[Vec<f64>]) -> Result<Vec<Vec<f64>>, String> {
         }
 
         let diag = aug[i][i];
-        for j in 0..(2 * n) {
-            aug[i][j] /= diag;
+        for value in aug[i].iter_mut() {
+            *value /= diag;
         }
 
-        for r in 0..n {
+        let pivot_row = aug[i].clone();
+
+        for (r, row) in aug.iter_mut().enumerate().take(n) {
             if r == i {
                 continue;
             }
-            let factor = aug[r][i];
-            for j in 0..(2 * n) {
-                aug[r][j] -= factor * aug[i][j];
+
+            let factor = row[i];
+            for (value, &pivot_value) in row.iter_mut().zip(pivot_row.iter()) {
+                *value -= factor * pivot_value;
             }
         }
     }
@@ -632,16 +637,12 @@ fn get_filler(
             }
         }
         None => {
-            let value = 1.0 / (1.0 * 1.0);
+            let value = 1.0;
             Ok(Box::new(move |_| value))
         }
     }
 }
 
 fn get_check_timeout(timeout: Option<f64>) -> Option<Instant> {
-    if let Some(secs) = timeout {
-        Some(Instant::now() + Duration::from_secs_f64(secs.max(0.0)))
-    } else {
-        None
-    }
+    timeout.map(|secs| Instant::now() + Duration::from_secs_f64(secs.max(0.0)))
 }

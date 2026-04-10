@@ -1,3 +1,5 @@
+#![allow(clippy::excessive_precision)]
+
 //! SAN plot (Signal–Artifact–Noise) — spectral quality analysis
 //!
 //! Rust implementation of JavaScript version from:
@@ -5,6 +7,7 @@
 //!
 //! # References
 //! * Kirill F. Sheberstov, Eduard Sistaré Guardiola, Marion Pupier, Damien Jeannerat (2019).
+//!
 //! “SAN plot: A graphical representation of the signal, noise, and artifacts content of spectra.”
 //!   https://doi.org/10.1002/mrc.4882
 //! * MLJS `xNoiseSanPlot.ts` `spectra-processing` repository.
@@ -88,7 +91,7 @@ pub fn noise_san_plot(array: &[f64], options: NoiseSanPlotOptions) -> NoiseSanPl
 
     if fix_offset && !magnitude_mode {
         let m = input.len() / 2;
-        let median = if input.len() % 2 == 0 {
+        let median = if input.len().is_multiple_of(2) {
             0.5 * (input[m - 1] + input[m])
         } else {
             input[m]
@@ -141,7 +144,7 @@ pub fn noise_san_plot(array: &[f64], options: NoiseSanPlotOptions) -> NoiseSanPl
         .get(p_index.min(sign_positive.len().saturating_sub(1)))
         .unwrap_or(&0.0);
 
-    let sky_point = *sign_positive.get(0).unwrap_or(&0.0);
+    let sky_point = *sign_positive.first().unwrap_or(&0.0);
 
     let mut initial_noise_level_negative = 0.0;
     if !sign_negative.is_empty() {
@@ -526,7 +529,7 @@ pub fn erfcinv(mut x: f64) -> f64 {
     if x.is_nan() {
         return f64::NAN;
     }
-    if x < 0.0 || x > 2.0 {
+    if !(0.0..=2.0).contains(&x) {
         return f64::NAN;
     }
     if x == 0.0 {

@@ -5,6 +5,7 @@
 //!
 //! # References
 //! * Peter A. Gorry, (1990).
+//!
 //! “General Least-Squares Smoothing and Differentiation by the Convolution (Savitzky–Golay) Method.”
 //! * MLJS `savitzky-golay-generalized` repository.
 
@@ -30,7 +31,7 @@ pub fn sgg(ys: &[f64], xs: &[f64], opts: SggOptions) -> Vec<f64> {
     let derivative = opts.derivative;
     let polynomial = opts.polynomial;
 
-    if window_size % 2 == 0 || window_size < 5 {
+    if window_size.is_multiple_of(2) || window_size < 5 {
         panic!("Invalid window size (should be odd and at least 5 integer number)");
     }
     if ys.is_empty() {

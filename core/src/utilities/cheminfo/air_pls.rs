@@ -5,6 +5,7 @@
 //!
 //! # References
 //! * Z. M. Zhang, S. Chen, Y. Z. Liang (2010).
+//!
 //! “Baseline correction using adaptive iteratively reweighted penalized least squares.”
 //!   https://doi.org/10.1039/B922045C
 //! * MLJS `airpls` repository.
@@ -120,9 +121,9 @@ fn get_control_points(x: &[f64], _y: &[f64], opts: &AirPlsOptions) -> (Vec<f64>,
             if index_from > index_to {
                 std::mem::swap(&mut index_from, &mut index_to);
             }
-            for i in index_from..index_to.min(n) {
-                control_points[i] = 1;
-            }
+            let start = index_from.min(index_to).min(n);
+            let end = index_from.max(index_to).min(n);
+            control_points[start..end].fill(1);
         }
     }
 
@@ -142,13 +143,14 @@ fn get_stop_criterion(y: &[f64], tolerance: f64) -> f64 {
 fn get_close_index(xs: &[f64], goal: f64) -> usize {
     let mut best = 0usize;
     let mut best_d = (xs[0] - goal).abs();
-    for i in 1..xs.len() {
-        let d = (xs[i] - goal).abs();
+    for (i, &x) in xs.iter().enumerate().skip(1) {
+        let d = (x - goal).abs();
         if d < best_d {
             best = i;
             best_d = d;
         }
     }
+
     best
 }
 

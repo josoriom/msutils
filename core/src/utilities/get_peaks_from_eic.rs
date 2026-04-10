@@ -58,7 +58,7 @@ fn compute_one<'a>(
     const HALF_WIDTH: f64 = 0.5;
     let local_from = (roi.rt - HALF_WIDTH).max(from_to.from);
     let local_to = (roi.rt + HALF_WIDTH).min(from_to.to);
-    if !(local_to > local_from) {
+    if local_to <= local_from {
         return (&roi.id, roi.rt, roi.mz, Peak::default());
     }
 
@@ -109,27 +109,25 @@ fn compute_one<'a>(
         window: roi.window,
     };
 
-    let pk = match get_peak(
+    let pk = get_peak(
         &DataXY {
             x: rts_full.to_vec(),
             y: y_full,
         },
         &roi_hint,
         Some(local_options.clone()),
-    ) {
-        Some(p) => p,
-        None => match get_peak(
+    )
+    .or_else(|| {
+        get_peak(
             &DataXY {
                 x: local_rts.to_vec(),
                 y: y_local,
             },
             &roi_hint,
             Some(local_options),
-        ) {
-            Some(p) => p,
-            None => Peak::default(),
-        },
-    };
+        )
+    })
+    .unwrap_or_default();
 
     (&roi.id, roi.rt, roi.mz, pk)
 }

@@ -78,8 +78,7 @@ pub fn scan_for_peaks(data: &DataXY) -> Vec<f64> {
     kept_groups.sort_by(|a, b| a.0.total_cmp(&b.0));
 
     let largest_window_size = *window_sizes.iter().max().unwrap();
-    let signal_intensity: Vec<f64> = data.y.iter().map(|&v| v as f64).collect();
-
+    let signal_intensity = data.y.to_vec();
     let smoothed_intensity = if largest_window_size <= n {
         sgg(
             &signal_intensity,
@@ -113,8 +112,7 @@ pub fn scan_for_peaks(data: &DataXY) -> Vec<f64> {
         let segment_right = left_index.max(right_index);
 
         let mut valley_value = f64::INFINITY;
-        for j in segment_left..=segment_right {
-            let v = smoothed_intensity[j];
+        for &v in &smoothed_intensity[segment_left..=segment_right] {
             if v < valley_value {
                 valley_value = v;
             }
@@ -209,7 +207,7 @@ fn scan_one_window(data: &DataXY, window_size: usize, mean_step: f64, epsilon: f
     let smooth_window = window_size.max(5);
 
     let smoothed_y = sgg(
-        &y,
+        y,
         &data.x,
         SggOptions {
             window_size: smooth_window,
@@ -218,7 +216,7 @@ fn scan_one_window(data: &DataXY, window_size: usize, mean_step: f64, epsilon: f
         },
     );
     let first_derivative = sgg(
-        &y,
+        y,
         &data.x,
         SggOptions {
             window_size: smooth_window,
@@ -227,7 +225,7 @@ fn scan_one_window(data: &DataXY, window_size: usize, mean_step: f64, epsilon: f
         },
     );
     let second_derivative = sgg(
-        &y,
+        y,
         &data.x,
         SggOptions {
             window_size: smooth_window,
@@ -364,8 +362,8 @@ fn group_peak_positions(positions: &[f64], heights: &[f64], tolerance: f64) -> V
 
         let mut idx = 0usize;
         let mut best = (position - groups[0].center).abs();
-        for j in 1..groups.len() {
-            let d = (position - groups[j].center).abs();
+        for (j, group) in groups.iter().enumerate().skip(1) {
+            let d = (position - group.center).abs();
             if d < best {
                 best = d;
                 idx = j;
@@ -425,9 +423,9 @@ pub fn quad_peak(xs: &[f64], ys: &[f64], i: usize) -> f64 {
     let xm1 = xs[i - 1];
     let x0 = xs[i];
     let xp1 = xs[i + 1];
-    let ym1 = ys[i - 1] as f64;
-    let y0 = ys[i] as f64;
-    let yp1 = ys[i + 1] as f64;
+    let ym1 = ys[i - 1];
+    let y0 = ys[i];
+    let yp1 = ys[i + 1];
 
     let a0 = xm1 - x0;
     let a1 = xp1 - x0;

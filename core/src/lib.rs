@@ -91,7 +91,7 @@ pub fn log_json<T: serde::Serialize>(v: &T) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn alloc(size: usize) -> *mut u8 {
+pub extern "C" fn alloc(size: usize) -> *mut u8 {
     if size == 0 {
         return core::ptr::null_mut();
     }
@@ -101,10 +101,18 @@ pub unsafe extern "C" fn alloc(size: usize) -> *mut u8 {
     p
 }
 
+/// Free memory returned by `alloc`.
+///
+/// # Safety
+/// `ptr_raw` must be a live pointer from `alloc(size)`.
+/// `size` must match the `alloc` call.
+/// After this call, `ptr_raw` is invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_(ptr_raw: *mut u8, len: usize) {
+pub unsafe extern "C" fn free_(ptr_raw: *mut u8, size: usize) {
     if !ptr_raw.is_null() {
-        drop(unsafe { Box::<[u8]>::from_raw(core::slice::from_raw_parts_mut(ptr_raw, len)) });
+        unsafe {
+            drop(Vec::<u8>::from_raw_parts(ptr_raw, 0, size));
+        }
     }
 }
 
@@ -215,6 +223,12 @@ impl SpectrumSource for ParsedFile {
     }
 }
 
+/// Free a `ParsedFile` handle.
+///
+/// # Safety
+/// `handle` must be a valid pointer returned by this library.
+/// Do not free the same handle twice.
+/// After this call, `handle` is invalid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_mzml(handle: *mut ParsedFile) {
     if !handle.is_null() {
@@ -222,6 +236,12 @@ pub unsafe extern "C" fn free_mzml(handle: *mut ParsedFile) {
     }
 }
 
+/// Parse mzML bytes and store the result in `dest`.
+///
+/// # Safety
+/// `data_ptr` must point to `data_len` readable bytes.
+/// `dest` must be a valid writable pointer to `*mut ParsedFile`.
+/// On success, `*dest` must be freed with `free_mzml`.
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn parse_mzml(
@@ -266,6 +286,12 @@ pub unsafe extern "C" fn parse_mzml(
     }
 }
 
+/// Parse binary data and store the result in `dest`.
+///
+/// # Safety
+/// `data_ptr` must point to `data_len` readable bytes.
+/// `dest` must be a valid writable pointer to `*mut ParsedFile`.
+/// On success, `*dest` must be freed with `free_mzml`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn parse_bin(
     data_ptr: *const u8,
@@ -288,6 +314,9 @@ pub unsafe extern "C" fn parse_bin(
     }
 }
 
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bin_to_json(h: *mut ParsedFile, out: *mut Buf) -> c_int {
     if h.is_null() || out.is_null() {
@@ -313,6 +342,11 @@ pub unsafe extern "C" fn bin_to_json(h: *mut ParsedFile, out: *mut Buf) -> c_int
     }
 }
 
+/// Convert a parsed file to mzML and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bin_to_mzml(h: *mut ParsedFile, out: *mut Buf) -> c_int {
     if h.is_null() || out.is_null() {
@@ -338,6 +372,11 @@ pub unsafe extern "C" fn bin_to_mzml(h: *mut ParsedFile, out: *mut Buf) -> c_int
     }
 }
 
+/// Convert a parsed file to binary and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mzml_to_bin(
     h: *mut ParsedFile,
@@ -371,6 +410,12 @@ pub unsafe extern "C" fn mzml_to_bin(
     }
 }
 
+/// Find one peak and write the result to `out`.
+///
+/// # Safety
+/// `x_ptr` and `y_ptr` must point to `len` readable `f64` values.
+/// `options` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_peak(
     x_ptr: *const f64,
@@ -402,6 +447,15 @@ pub unsafe extern "C" fn get_peak(
     }
 }
 
+/// Find peaks from EIC data and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `rts_ptr`, `mzs_ptr`, and `ranges_ptr` must point to `n` readable `f64` values.
+/// If IDs are provided, `ids_off` and `ids_len` must point to `n` readable `u32` values,
+/// and `ids_buf` must point to `ids_buf_len` readable bytes.
+/// `opts` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_peaks_from_eic(
     h: *const ParsedFile,
@@ -438,7 +492,6 @@ pub unsafe extern "C" fn get_peaks_from_eic(
             ids_len,
             ids_buf,
             ids_buf_len,
-            n,
         );
         let peaks = get_peaks_from_eic_rs(
             file,
@@ -464,6 +517,14 @@ pub unsafe extern "C" fn get_peaks_from_eic(
     }
 }
 
+/// Find peaks from chromatogram data and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `idxs` must point to `n` readable `u32` values.
+/// `rts` and `wins` must point to `n` readable `f64` values.
+/// `opts` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_peaks_from_chrom(
     h: *mut ParsedFile,
@@ -520,7 +581,23 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
                 .collect();
             let list =
                 get_peaks_from_chrom_rs(mzml, &items, Some(build_fp(opts)), cores).ok_or(ERR_PARSE)?;
-            let out_arr: Vec<_> = list.iter().map(|(idx,id,ort,rt,f,t,int,intg,ta,ts)| json!({"index":idx,"id":id,"ort":ort,"rt":rt,"from":f,"to":t,"intensity":int,"integral":intg,"total_area":ta,"timestamp":ts})).collect();
+            let out_arr: Vec<_> = list
+                .iter()
+                .map(|row| {
+                    json!({
+                        "index": row.index,
+                        "id": &row.id,
+                        "ort": row.target_rt,
+                        "rt": row.peak_rt,
+                        "from": row.from_rt,
+                        "to": row.to_rt,
+                        "intensity": row.intensity,
+                        "integral": row.area,
+                        "total_area": row.total_area,
+                        "timestamp": &row.timestamp,
+                    })
+                })
+                .collect();
             write_buf(
                 out,
                 serde_json::to_string(&out_arr)
@@ -538,8 +615,14 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
     }
 }
 
+/// Find peaks and write the result to `out`.
+///
+/// # Safety
+/// `x_ptr` and `y_ptr` must point to `len` readable `f64` values.
+/// `opts` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
-pub extern "C" fn find_peaks(
+pub unsafe extern "C" fn find_peaks(
     x_ptr: *const f64,
     y_ptr: *const f64,
     len: usize,
@@ -578,8 +661,10 @@ pub extern "C" fn find_peaks(
     }
 }
 
+/// # Safety
+/// `y_ptr` must point to `len` readable `f32` values.
 #[unsafe(no_mangle)]
-pub extern "C" fn find_noise_level(y_ptr: *const f32, len: usize) -> f32 {
+pub unsafe extern "C" fn find_noise_level(y_ptr: *const f32, len: usize) -> f32 {
     if y_ptr.is_null() || len == 0 {
         return f32::INFINITY;
     }
@@ -590,6 +675,11 @@ pub extern "C" fn find_noise_level(y_ptr: *const f32, len: usize) -> f32 {
     .unwrap_or(f32::INFINITY)
 }
 
+/// Calculate an EIC and write `x` and `y` to `ox` and `oy`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `ox` and `oy` must be valid writable `Buf` pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn calculate_eic(
     h: *mut ParsedFile,
@@ -625,6 +715,11 @@ pub unsafe extern "C" fn calculate_eic(
     }
 }
 
+/// Collect scans and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn collect_scans(
     h: *mut ParsedFile,
@@ -659,6 +754,12 @@ pub unsafe extern "C" fn collect_scans(
     }
 }
 
+/// Find features from files in `dir` and write the result to `out`.
+///
+/// # Safety
+/// `dir` must point to a valid NUL-terminated C string.
+/// `popts` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_features(
@@ -749,6 +850,12 @@ pub unsafe extern "C" fn get_features(
     }
 }
 
+/// Find features and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `popts` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn find_features(
     h: *mut ParsedFile,
@@ -765,7 +872,7 @@ pub unsafe extern "C" fn find_features(
     batch_size: c_int,
     out: *mut Buf,
 ) -> c_int {
-    if h.is_null() || out.is_null() || !from.is_finite() || !to.is_finite() || !(to > from) {
+    if h.is_null() || out.is_null() || !from.is_finite() || !to.is_finite() || to <= from {
         return ERR_INVALID_ARGS;
     }
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
@@ -822,6 +929,11 @@ pub unsafe extern "C" fn find_features(
     }
 }
 
+/// Calculate a baseline and write the result to `out`.
+///
+/// # Safety
+/// `y` must point to `len` readable `f64` values.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn calculate_baseline(
     y: *const f64,
@@ -860,6 +972,15 @@ pub unsafe extern "C" fn calculate_baseline(
     }
 }
 
+/// Find features for the given ROIs and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `rts`, `mzs`, and `wins` must point to `n` readable `f64` values.
+/// If IDs are provided, `ids_off` and `ids_len` must point to `n` readable `u32` values,
+/// and `ids_buf` must point to `ids_buf_len` readable bytes.
+/// `popts` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn find_feature(
     h: *const ParsedFile,
@@ -909,7 +1030,7 @@ pub unsafe extern "C" fn find_feature(
         if emz.is_finite() && emz >= 0.0 {
             eo.mz_tolerance = emz;
         }
-        let rois = build_eic_rois(rts, mzs, wins, ids_off, ids_len, ids_buf, ids_buf_len, n);
+        let rois = build_eic_rois(rts, mzs, wins, ids_off, ids_len, ids_buf, ids_buf_len);
         let refs: Vec<&EicRoi> = rois.iter().collect();
         let results = find_feature_rs(
             file,
@@ -948,8 +1069,9 @@ fn build_eic_rois(
     ids_len: *const u32,
     ids_buf: *const u8,
     ids_buf_len: usize,
-    n: usize,
 ) -> Vec<EicRoi> {
+    let n = rts.len();
+
     let has = !(ids_off.is_null() || ids_len.is_null() || ids_buf.is_null() || ids_buf_len == 0);
     let (offs, lens, ibuf) = if has {
         (
@@ -960,6 +1082,7 @@ fn build_eic_rois(
     } else {
         (&[][..], &[][..], None)
     };
+
     (0..n)
         .map(|i| {
             let (rt, mz, w) = (rts[i], mzs[i], wins[i]);
@@ -974,6 +1097,7 @@ fn build_eic_rois(
                     })
                 })
                 .unwrap_or_default();
+
             if ok {
                 EicRoi {
                     id,
@@ -999,10 +1123,9 @@ fn f64ok(v: f64) -> f64 {
 }
 
 fn f64_to_u8(v: &[f64]) -> Box<[u8]> {
-    let n = v.len() * 8;
-    let mut out = Vec::<u8>::with_capacity(n);
+    let n = core::mem::size_of_val(v);
+    let mut out = vec![0u8; n];
     unsafe {
-        out.set_len(n);
         ptr::copy_nonoverlapping(v.as_ptr() as *const u8, out.as_mut_ptr(), n);
     }
     out.into_boxed_slice()
@@ -1048,7 +1171,6 @@ fn build_fp(opts: *const CPeakPOptions) -> FindPeaksOptions {
             } else {
                 1.5
             }),
-            ..Default::default()
         }),
         baseline_options: Some(BaselineOptions {
             baseline_window: (o.baseline_window > 0).then_some(o.baseline_window as f64),

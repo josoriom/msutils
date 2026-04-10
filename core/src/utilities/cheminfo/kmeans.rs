@@ -2,8 +2,7 @@ pub type Point = Vec<f64>;
 
 /// K-means clustering (Lloyd’s algorithm).
 /// Pseudocode reference: Wikipedia — “K-means clustering”
-/// <https://en.wikipedia.org/wiki/K-means_clustering>
-
+/// https://en.wikipedia.org/wiki/K-means_clustering>
 pub fn kmeans<P>(points: &[P], mut centroids: Vec<Point>) -> Vec<Point>
 where
     P: AsRef<[f64]>,
@@ -42,8 +41,8 @@ where
             let mut closest_index = 0usize;
             let mut min_distance = distance2(point, centroids[0].as_slice());
 
-            for j in 1..k {
-                let d2 = distance2(point, centroids[j].as_slice());
+            for (j, centroid) in centroids.iter().enumerate() {
+                let d2 = distance2(point, centroid.as_slice());
                 if d2 < min_distance {
                     min_distance = d2;
                     closest_index = j;
@@ -69,8 +68,8 @@ where
                 }
 
                 let inv = 1.0 / clusters[i].len() as f64;
-                for t in 0..d {
-                    new_centroids[i][t] *= inv;
+                for value in new_centroids[i].iter_mut().take(d) {
+                    *value *= inv;
                 }
             }
         }
@@ -116,8 +115,8 @@ pub fn calculate_centroid(points_in_cluster: &[&Point]) -> Point {
         }
     }
     let n = points_in_cluster.len() as f64;
-    for i in 0..d {
-        centroid[i] /= n;
+    for value in centroid.iter_mut().take(d) {
+        *value /= n;
     }
     centroid
 }

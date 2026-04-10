@@ -35,7 +35,7 @@ pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> 
             }
         }
 
-        return best.cloned().or_else(|| Some(Peak::default()));
+        return Some(best.copied().unwrap_or_default());
     }
 
     let mut best_any = &peaks[0];
@@ -46,5 +46,5 @@ pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> 
             best_any = p;
         }
     }
-    Some(best_any.clone())
+    Some(*best_any)
 }

@@ -4,9 +4,9 @@ use crate::utilities::calculate_baseline::{BaselineOptions, calculate_baseline};
 use crate::utilities::closest_index;
 use crate::utilities::find_noise_level::find_noise_level;
 use crate::utilities::get_boundaries::{Boundaries, BoundariesOptions, get_boundaries};
+use crate::utilities::math::xy_integration;
 use crate::utilities::scan_for_peaks::scan_for_peaks;
 use crate::utilities::structs::{DataXY, Peak};
-use crate::utilities::utilities::xy_integration;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FilterPeaksOptions {
@@ -97,7 +97,7 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
 
     let mut y_center = Vec::with_capacity(n);
     if auto_baseline {
-        let mut b = base_opts.clone();
+        let mut b = base_opts;
         b.level = Some(0);
         let floor = calculate_baseline(&data.y, b);
         y_center.extend((0..n).map(|i| {
@@ -175,14 +175,15 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
     if !peaks.is_empty() {
         let mut cutoff = 0.0_f64;
         if noise > 0.0 {
-            let sn_mult = filter_opts.sn_ratio.unwrap_or(1.0) as f64;
+            let sn_mult = filter_opts.sn_ratio.unwrap_or(1.0);
             cutoff = sn_mult * noise;
         }
-        if let Some(user_int) = filter_opts.intensity_threshold {
-            if user_int > cutoff {
-                cutoff = user_int;
-            }
+        if let Some(user_int) = filter_opts.intensity_threshold
+            && user_int > cutoff
+        {
+            cutoff = user_int;
         }
+
         if cutoff > 0.0 {
             peaks.retain(|p| p.intensity > cutoff);
         }
@@ -208,9 +209,7 @@ pub fn apex_in_window(data: &DataXY, b: &Boundaries) -> Option<(f64, f64)> {
         return None;
     }
     if l > r {
-        let tmp = l;
-        l = r;
-        r = tmp;
+        core::mem::swap(&mut l, &mut r);
     }
 
     let need = 2 * APEX_MIN_PAD + 1;
@@ -248,19 +247,19 @@ fn filter_peak_candidates(peaks: Vec<PeakCandidate>, opt: FilterPeaksOptions) ->
 
     for p in peaks {
         let mut pass = true;
+        if let Some(mi) = min_intensity
+            && p.intensity < mi
+        {
+            pass = false;
+        }
 
-        if let Some(mi) = min_intensity {
-            if p.intensity < mi {
-                pass = false;
-            }
+        if pass
+            && let Some(w) = min_width
+            && p.number_of_points <= w
+        {
+            pass = false;
         }
-        if pass {
-            if let Some(w) = min_width {
-                if p.number_of_points <= w {
-                    pass = false;
-                }
-            }
-        }
+
         if pass {
             out.push(Peak::from(p));
         }
@@ -300,7 +299,7 @@ fn dedupe_near_identical(peaks: Vec<Peak>) -> Vec<Peak> {
             }
         }
 
-        out.push(peaks[best_idx].clone());
+        out.push(peaks[best_idx]);
         i = j;
     }
 
@@ -356,9 +355,9 @@ fn suppress_contained_peaks(data: &DataXY, mut peaks: Vec<Peak>) -> Vec<Peak> {
                     let apex_b_inside_a = peaks[ib].rt >= la && peaks[ib].rt <= ra;
                     let rel = peaks[ib].intensity / peaks[ia].intensity;
 
-                    let is_shoulder = (apex_b_inside_a && rel <= INTENSITY_RATIO_SHOULDER)
-                        || (apex_b_inside_a && frac >= OVERLAP_FRAC_SHOULDER)
-                        || (frac >= OVERLAP_FRAC_SHOULDER);
+                    let enough_overlap = frac >= OVERLAP_FRAC_SHOULDER;
+                    let inside_and_small = apex_b_inside_a && rel <= INTENSITY_RATIO_SHOULDER;
+                    let is_shoulder = enough_overlap || inside_and_small;
 
                     if is_shoulder {
                         if MERGE_SHOULDERS {
@@ -392,7 +391,7 @@ fn suppress_contained_peaks(data: &DataXY, mut peaks: Vec<Peak>) -> Vec<Peak> {
     let mut out = Vec::<Peak>::with_capacity(m);
     for i in 0..m {
         if keep[i] {
-            out.push(peaks[i].clone());
+            out.push(peaks[i]);
         }
     }
     out.sort_by(|a, b| a.rt.partial_cmp(&b.rt).unwrap_or(Ordering::Equal));

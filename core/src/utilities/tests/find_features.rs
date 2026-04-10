@@ -174,7 +174,7 @@ mod tests {
     #[test]
     fn test_deduplicate_masses_unsorted_input_same_result() {
         let opts = eic_abs(0.01);
-        let sorted = deduplicate_masses(vec![100.0, 100.005, 200.0], opts.clone());
+        let sorted = deduplicate_masses(vec![100.0, 100.005, 200.0], opts);
         let unsorted = deduplicate_masses(vec![100.005, 200.0, 100.0], opts);
         assert_eq!(sorted.len(), unsorted.len());
     }

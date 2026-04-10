@@ -61,7 +61,7 @@ get_features(
   \item{sn_ratio}{Signal-to-noise ratio threshold.}
 }
 \value{
-A data frame of aligned consensus features.
+A data frame with features (rt and mz) found in the dataset.
 }
 \details{
 The folder should contain supported sample files such as \code{.mzML} or \code{.ion}. GPU is only used during per-sample feature detection.
