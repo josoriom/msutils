@@ -70,10 +70,10 @@ typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const dou
 typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakPOptions *, size_t, Buf *);
 typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, Buf *);
+typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
-typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakPOptions *, int32_t, Buf *);
+typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakPOptions *, int32_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_collect_scans)(const MzML *, double, double, uint8_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 
@@ -775,7 +775,7 @@ static Napi::Value CalculateBaseline(const Napi::CallbackInfo &info)
 static Napi::Value FindFeatures(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (info.Length() < 10)
+  if (info.Length() < 12)
     return env.Undefined();
 
   MzML *handle = GetHandle(info[0]);
@@ -792,8 +792,10 @@ static Napi::Value FindFeatures(const Napi::CallbackInfo &info)
   CPeakPOptions opts;
   const CPeakPOptions *p_opts = ReadOptionsBuf(info[8], &opts);
   int32_t cores = info[9].As<Napi::Number>().Int32Value();
+  int32_t use_gpu = info[10].As<Napi::Number>().Int32Value();
+  int32_t batch_size = info[11].As<Napi::Number>().Int32Value();
   OwnedBuf out;
-  int32_t rc = ABI.find_features(handle, from, to, ppm, mz, gs, ge, gst, p_opts, cores, out.Out());
+  int32_t rc = ABI.find_features(handle, from, to, ppm, mz, gs, ge, gst, p_opts, cores, use_gpu, batch_size, out.Out());
   if (rc != 0)
     return ThrowRc(env, "find_features", rc);
   return TakeUtf8String(env, out.Out());
@@ -873,15 +875,13 @@ static Napi::Value ParseBin(const Napi::CallbackInfo &info)
 static Napi::Value GetFeatures(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-
-  if (info.Length() < 14 || !info[0].IsString())
+  if (info.Length() < 16 || !info[0].IsString())
   {
     Napi::TypeError::New(env, "Invalid arguments for getFeatures").ThrowAsJavaScriptException();
     return env.Undefined();
   }
 
   std::string dir_path = info[0].As<Napi::String>().Utf8Value();
-
   double from = info[1].As<Napi::Number>().DoubleValue();
   double to = info[2].As<Napi::Number>().DoubleValue();
   double eic_ppm = info[3].As<Napi::Number>().DoubleValue();
@@ -893,27 +893,24 @@ static Napi::Value GetFeatures(const Napi::CallbackInfo &info)
   double group_da = info[9].As<Napi::Number>().DoubleValue();
   double group_rt = info[10].As<Napi::Number>().DoubleValue();
   int32_t frequency = info[11].As<Napi::Number>().Int32Value();
-
   CPeakPOptions opts;
   const CPeakPOptions *p_opts = ReadOptionsBuf(info[12], &opts);
-
   int32_t cores = info[13].As<Napi::Number>().Int32Value();
+  int32_t use_gpu = info[14].As<Napi::Number>().Int32Value();
+  int32_t batch_size = info[15].As<Napi::Number>().Int32Value();
 
   OwnedBuf out;
   int32_t rc = ABI.get_features(
       dir_path.c_str(),
-      from, to,
-      eic_ppm, eic_mz,
+      from, to, eic_ppm, eic_mz,
       g_start, g_end, g_step,
       group_ppm, group_da, group_rt,
-      frequency,
-      p_opts,
-      cores,
+      frequency, p_opts, cores,
+      use_gpu, batch_size,
       out.Out());
 
   if (rc != 0)
     return ThrowRc(env, "get_features", rc);
-
   return TakeUtf8String(env, out.Out());
 }
 

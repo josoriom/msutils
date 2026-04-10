@@ -1,5 +1,7 @@
 use ionic::SpectrumSource;
 use serde::Serialize;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use std::sync::Arc;
 use std::{
     cmp::Ordering,
     collections::HashSet,
@@ -8,6 +10,8 @@ use std::{
     mem,
 };
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use crate::utilities::gpu::{GpuContext, processor::GpuBatchOptions};
 use crate::utilities::{
     calculate_eic::{
         CentroidScan, EicOptions, TimeUnit, collect_scans, compute_eic_for_mz, lower_bound,
@@ -24,6 +28,30 @@ use rayon::{ThreadPoolBuilder, prelude::*};
 pub struct MzTolerance {
     pub mz_abs: f64,
     pub ppm: f64,
+}
+
+impl MzTolerance {
+    pub(crate) fn window_at(&self, mz: f64) -> (f64, f64) {
+        let tol = self.tol_at(mz.abs());
+        (mz - tol, mz + tol)
+    }
+
+    pub(crate) fn are_close(&self, a: f64, b: f64) -> bool {
+        (a - b).abs() <= self.tol_at(0.5 * (a + b).abs())
+    }
+
+    pub(crate) fn are_close_to_ref(&self, a: f64, ref_mz: f64) -> bool {
+        (a - ref_mz).abs() <= self.tol_at(ref_mz.abs())
+    }
+
+    fn tol_at(&self, center: f64) -> f64 {
+        let tol_ppm = if self.ppm > 0.0 {
+            (self.ppm * 1e-6) * center
+        } else {
+            0.0
+        };
+        tol_ppm.max(self.mz_abs)
+    }
 }
 
 #[derive(Debug)]
@@ -68,30 +96,6 @@ pub struct FeaturePoint {
     pub intensity: f64,
 }
 
-impl MzTolerance {
-    pub fn window_at(&self, mz: f64) -> (f64, f64) {
-        let tol = self.tol_at(mz.abs());
-        (mz - tol, mz + tol)
-    }
-
-    pub fn are_close(&self, a: f64, b: f64) -> bool {
-        (a - b).abs() <= self.tol_at(0.5 * (a + b).abs())
-    }
-
-    pub fn are_close_to_ref(&self, a: f64, ref_mz: f64) -> bool {
-        (a - ref_mz).abs() <= self.tol_at(ref_mz.abs())
-    }
-
-    fn tol_at(&self, center: f64) -> f64 {
-        let tol_ppm = if self.ppm > 0.0 {
-            (self.ppm * 1e-6) * center
-        } else {
-            0.0
-        };
-        tol_ppm.max(self.mz_abs)
-    }
-}
-
 #[derive(Clone, Debug)]
 pub struct MzScanGrid {
     pub mz_min: f64,
@@ -111,57 +115,41 @@ impl Default for MzScanGrid {
 
 #[derive(Clone, Debug)]
 pub struct FindFeaturesOptions {
-    pub scan_eic_options: Option<EicOptions>,
-    pub eic_options: Option<EicOptions>,
-    pub find_peaks: Option<FindPeaksOptions>,
-    pub mz_scan_grid: Option<MzScanGrid>,
-    pub scan_width_threshold: Option<usize>,
-}
-
-impl Default for FindFeaturesOptions {
-    fn default() -> Self {
-        Self {
-            scan_eic_options: Some(EicOptions {
-                ppm_tolerance: 10.0,
-                mz_tolerance: 0.003,
-                ..Default::default()
-            }),
-            eic_options: Some(EicOptions {
-                ppm_tolerance: 20.0,
-                mz_tolerance: 0.005,
-                ..Default::default()
-            }),
-            find_peaks: Some(FindPeaksOptions::default()),
-            mz_scan_grid: Some(MzScanGrid::default()),
-            scan_width_threshold: Some(5),
-        }
-    }
-}
-
-pub struct FindFeaturesConfig {
     pub scan_eic_options: EicOptions,
     pub eic_options: EicOptions,
     pub find_peaks: FindPeaksOptions,
     pub mz_scan_grid: MzScanGrid,
     pub scan_width_threshold: usize,
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    pub gpu_context: Option<Arc<GpuContext>>,
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    pub use_gpu: bool,
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    pub batch_size: Option<usize>,
 }
 
-impl From<FindFeaturesOptions> for FindFeaturesConfig {
-    fn from(opts: FindFeaturesOptions) -> Self {
+impl Default for FindFeaturesOptions {
+    fn default() -> Self {
         Self {
-            scan_eic_options: opts.scan_eic_options.unwrap_or(EicOptions {
+            scan_eic_options: EicOptions {
                 ppm_tolerance: 10.0,
                 mz_tolerance: 0.003,
                 ..Default::default()
-            }),
-            eic_options: opts.eic_options.unwrap_or(EicOptions {
+            },
+            eic_options: EicOptions {
                 ppm_tolerance: 20.0,
                 mz_tolerance: 0.005,
                 ..Default::default()
-            }),
-            find_peaks: opts.find_peaks.unwrap_or_default(),
-            mz_scan_grid: opts.mz_scan_grid.unwrap_or_default(),
-            scan_width_threshold: opts.scan_width_threshold.unwrap_or(5),
+            },
+            find_peaks: FindPeaksOptions::default(),
+            mz_scan_grid: MzScanGrid::default(),
+            scan_width_threshold: 5,
+            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+            gpu_context: None,
+            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+            use_gpu: false,
+            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+            batch_size: None,
         }
     }
 }
@@ -172,16 +160,31 @@ pub fn find_features(
     options: Option<FindFeaturesOptions>,
     cores: usize,
 ) -> Result<Vec<Feature>, FeatureError> {
-    let config = FindFeaturesConfig::from(options.unwrap_or_default());
+    let opts = options.unwrap_or_default();
 
-    if !config.mz_scan_grid.step_size.is_finite() || config.mz_scan_grid.step_size <= 0.0 {
-        return Err(FeatureError::InvalidStepSize(config.mz_scan_grid.step_size));
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    let gpu_ctx = if opts.use_gpu {
+        opts.gpu_context.clone().or_else(|| {
+            let c = GpuContext::try_init().map(Arc::new);
+            if c.is_none() {
+                eprintln!(
+                    "[find_features] GPU requested but initialization failed, falling back to CPU"
+                );
+            }
+            c
+        })
+    } else {
+        None
+    };
+
+    if !opts.mz_scan_grid.step_size.is_finite() || opts.mz_scan_grid.step_size <= 0.0 {
+        return Err(FeatureError::InvalidStepSize(opts.mz_scan_grid.step_size));
     }
 
     let grid = build_mz_grid(
-        config.mz_scan_grid.mz_min,
-        config.mz_scan_grid.mz_max,
-        config.mz_scan_grid.step_size,
+        opts.mz_scan_grid.mz_min,
+        opts.mz_scan_grid.mz_max,
+        opts.mz_scan_grid.step_size,
     );
     if grid.is_empty() {
         return Err(FeatureError::EmptyGrid);
@@ -195,11 +198,34 @@ pub fn find_features(
         return Err(FeatureError::NoScans);
     }
 
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    let gpu_batch = gpu_ctx.as_ref().map(|ctx| {
+        safe_batch_options(
+            ctx,
+            time.len(),
+            flatten_scans_size_estimate(&scans),
+            opts.batch_size,
+        )
+    });
+
     run_with_cores(cores, || {
-        let masses = collect_candidate_masses(&scans, &time, &grid, &config)?;
-        let masses = deduplicate_masses(masses, config.eic_options);
-        let features = extract_features_from_masses(&masses, &scans, &time, &config);
-        let features = deduplicate_features(features, config.eic_options, 0.05);
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+        let gpu_args: GpuArgs<'_> = gpu_ctx
+            .as_ref()
+            .zip(gpu_batch.as_ref())
+            .map(|(ctx, batch)| (ctx.as_ref(), batch));
+
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+        let gpu_args: GpuArgs<'_> = None;
+
+        let masses = collect_candidate_masses(&scans, &time, &grid, &opts, gpu_args)?;
+
+        let masses = deduplicate_masses(masses, opts.eic_options);
+
+        let features = extract_features_from_masses(&masses, &scans, &time, &opts);
+
+        let features = deduplicate_features(features, opts.eic_options, 0.05);
+
         Ok(sort_features(features))
     })
 }
@@ -210,6 +236,10 @@ where
     F: FnOnce() -> T + Send,
     T: Send,
 {
+    if cores <= 1 {
+        return f();
+    }
+
     ThreadPoolBuilder::new()
         .num_threads(cores.max(1))
         .thread_name(|i| format!("ff-{}", i))
@@ -226,7 +256,7 @@ where
     f()
 }
 
-fn build_coarse_opts(config: &FindFeaturesConfig) -> FindPeaksOptions {
+fn build_coarse_opts(config: &FindFeaturesOptions) -> FindPeaksOptions {
     let mut coarse = config.find_peaks.clone();
     let mut filter = coarse.filter_peaks_options.unwrap_or_default();
     filter.width_threshold = Some(config.scan_width_threshold);
@@ -234,56 +264,128 @@ fn build_coarse_opts(config: &FindFeaturesConfig) -> FindPeaksOptions {
     coarse
 }
 
-fn process_single_grid_point(
-    scans: &[CentroidScan],
-    time: &[f64],
-    mz_target: f64,
-    coarse_opts: &FindPeaksOptions,
-    scan_eic_options: EicOptions,
-) -> Option<f64> {
-    let y = compute_eic_for_mz(scans, time.len(), mz_target, scan_eic_options);
-    let data = DataXY {
-        x: time.to_vec(),
-        y,
-    };
-    let apex_rt = find_peaks(&data, Some(coarse_opts.clone()))
-        .into_iter()
-        .max_by(|a, b| {
-            a.intensity
-                .partial_cmp(&b.intensity)
-                .unwrap_or(Ordering::Equal)
-        })
-        .map(|p| p.rt)?;
-    max_intensity_centroid(scans, time, apex_rt, mz_target, scan_eic_options)
-}
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+type GpuArgs<'a> = Option<(&'a GpuContext, &'a GpuBatchOptions)>;
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+type GpuArgs<'a> = Option<std::convert::Infallible>;
 
 fn collect_candidate_masses(
     scans: &[CentroidScan],
     time: &[f64],
     grid: &[f64],
-    config: &FindFeaturesConfig,
+    config: &FindFeaturesOptions,
+    gpu: GpuArgs<'_>,
+) -> Result<Vec<f64>, FeatureError> {
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    if let Some((ctx, batch_opts)) = gpu {
+        return collect_candidates_gpu(ctx, batch_opts, scans, time, grid, config);
+    }
+    collect_candidates_cpu(scans, time, grid, config)
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+fn collect_candidates_gpu(
+    ctx: &GpuContext,
+    batch_opts: &GpuBatchOptions,
+    scans: &[CentroidScan],
+    time: &[f64],
+    grid: &[f64],
+    config: &FindFeaturesOptions,
+) -> Result<Vec<f64>, FeatureError> {
+    use crate::utilities::gpu::GpuGridProcessor;
+
+    let coarse_opts = build_coarse_opts(config);
+    let intensity_threshold = config
+        .find_peaks
+        .filter_peaks_options
+        .as_ref()
+        .and_then(|o| o.intensity_threshold)
+        .unwrap_or(0.0);
+
+    let mut processor = GpuGridProcessor::new(ctx, batch_opts.clone());
+    match processor.process(scans, grid, config) {
+        Ok(survivors) if !survivors.is_empty() => {
+            let masses: Vec<f64> = survivors
+                .par_iter()
+                .filter_map(|&mz| {
+                    let eic = compute_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
+                    evaluate_eic_row(
+                        &eic,
+                        time,
+                        scans,
+                        mz,
+                        intensity_threshold,
+                        &coarse_opts,
+                        config.scan_eic_options,
+                    )
+                })
+                .collect();
+            Ok(masses)
+        }
+        Ok(_) => {
+            eprintln!("[gpu] falling back to CPU");
+            collect_candidates_cpu(scans, time, grid, config)
+        }
+        Err(e) => {
+            eprintln!("[gpu] failed: {e}, falling back to CPU");
+            collect_candidates_cpu(scans, time, grid, config)
+        }
+    }
+}
+
+fn collect_candidates_cpu(
+    scans: &[CentroidScan],
+    time: &[f64],
+    grid: &[f64],
+    config: &FindFeaturesOptions,
 ) -> Result<Vec<f64>, FeatureError> {
     let coarse_opts = build_coarse_opts(config);
-
-    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-    let masses: Vec<f64> = grid
-        .iter()
-        .filter_map(|&mz| {
-            process_single_grid_point(scans, time, mz, &coarse_opts, config.scan_eic_options)
-        })
-        .collect();
+    let intensity_threshold = config
+        .find_peaks
+        .filter_peaks_options
+        .as_ref()
+        .and_then(|o| o.intensity_threshold)
+        .unwrap_or(0.0);
 
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     let masses: Vec<f64> = grid
         .par_iter()
         .filter_map(|&mz| {
-            process_single_grid_point(scans, time, mz, &coarse_opts, config.scan_eic_options)
+            let eic = compute_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
+            evaluate_eic_row(
+                &eic,
+                time,
+                scans,
+                mz,
+                intensity_threshold,
+                &coarse_opts,
+                config.scan_eic_options,
+            )
+        })
+        .collect();
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    let masses: Vec<f64> = grid
+        .iter()
+        .filter_map(|&mz| {
+            let eic = compute_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
+            evaluate_eic_row(
+                &eic,
+                time,
+                scans,
+                mz,
+                intensity_threshold,
+                &coarse_opts,
+                config.scan_eic_options,
+            )
         })
         .collect();
 
     if masses.is_empty() {
         return Err(FeatureError::NoCandidateMasses);
     }
+
     Ok(masses)
 }
 
@@ -319,7 +421,7 @@ fn extract_peaks_for_mass(
     mz: f64,
     scans: &[CentroidScan],
     time: &[f64],
-    config: &FindFeaturesConfig,
+    config: &FindFeaturesOptions,
     final_w: usize,
 ) -> Vec<Feature> {
     let y = compute_eic_for_mz(scans, time.len(), mz, config.eic_options);
@@ -331,9 +433,9 @@ fn extract_peaks_for_mass(
     if peaks.is_empty() {
         return Vec::new();
     }
-    for i in 0..peaks.len() {
-        let p = mem::take(&mut peaks[i]);
-        peaks[i] = with_eic_apex_intensity(&data.x, &data.y, p);
+    for peak in peaks.iter_mut() {
+        let p = mem::take(peak);
+        *peak = with_eic_apex_intensity(&data.x, &data.y, p);
     }
     sort_peaks_desc(&mut peaks);
     peaks
@@ -356,7 +458,7 @@ fn extract_features_from_masses(
     masses: &[f64],
     scans: &[CentroidScan],
     time: &[f64],
-    config: &FindFeaturesConfig,
+    config: &FindFeaturesOptions,
 ) -> Vec<Feature> {
     let final_w = config
         .find_peaks
@@ -415,7 +517,7 @@ pub(crate) fn sort_features(mut features: Vec<Feature>) -> Vec<Feature> {
     features
 }
 
-pub fn max_intensity_centroid(
+pub(crate) fn max_intensity_centroid(
     scans: &[CentroidScan],
     rt: &[f64],
     apex_rt: f64,
@@ -616,7 +718,7 @@ pub(crate) fn build_mz_grid(start: f64, end: f64, step_da: f64) -> Vec<f64> {
     xs
 }
 
-fn sort_peaks_desc(xs: &mut Vec<Peak>) {
+fn sort_peaks_desc(xs: &mut [Peak]) {
     xs.sort_unstable_by(|a, b| {
         b.intensity
             .partial_cmp(&a.intensity)
@@ -627,4 +729,71 @@ fn sort_peaks_desc(xs: &mut Vec<Peak>) {
                     .unwrap_or(Ordering::Equal)
             })
     });
+}
+
+pub(crate) fn evaluate_eic_row(
+    eic: &[f64],
+    time: &[f64],
+    scans: &[CentroidScan],
+    mz_target: f64,
+    intensity_threshold: f64,
+    coarse_opts: &FindPeaksOptions,
+    scan_eic_options: EicOptions,
+) -> Option<f64> {
+    let eic_f32: Vec<f64> = eic.iter().map(|&v| v as f32 as f64).collect();
+    if eic_f32.iter().copied().fold(f64::NEG_INFINITY, f64::max) <= intensity_threshold {
+        return None;
+    }
+    let data = DataXY {
+        x: time.to_vec(),
+        y: eic_f32,
+    };
+    let apex_rt = find_peaks(&data, Some(coarse_opts.clone()))
+        .into_iter()
+        .max_by(|a, b| {
+            a.intensity
+                .partial_cmp(&b.intensity)
+                .unwrap_or(Ordering::Equal)
+        })
+        .map(|p| p.rt)?;
+    max_intensity_centroid(scans, time, apex_rt, mz_target, scan_eic_options)
+}
+
+fn flatten_scans_size_estimate(scans: &[CentroidScan]) -> u64 {
+    let total: usize = scans.iter().map(|s| s.mz.len()).sum();
+    ((total * 2 * size_of::<f32>()) + (scans.len() * 2 * size_of::<u32>())) as u64
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub(crate) fn safe_batch_options(
+    ctx: &GpuContext,
+    scan_count: usize,
+    scan_vram_bytes: u64,
+    requested: Option<usize>,
+) -> GpuBatchOptions {
+    let vram = ctx.vram_bytes.saturating_sub(scan_vram_bytes);
+    let bytes_per_row = scan_count * size_of::<f32>();
+    let max_from_vram = ((vram as f64 * 0.8) as usize / bytes_per_row).max(1);
+    let max_from_buf = (ctx.device.limits().max_buffer_size as usize / bytes_per_row).max(1);
+    let max_from_bind =
+        (ctx.device.limits().max_storage_buffer_binding_size as usize / bytes_per_row).max(1);
+    let max_safe = max_from_vram.min(max_from_buf).min(max_from_bind);
+    let batch_size = requested.unwrap_or(max_safe);
+    let clamped = batch_size.min(max_safe).max(1);
+
+    if clamped < batch_size {
+        eprintln!(
+            "[gpu] batch_size clamped {} → {} (buf limit {} MB, bind limit {} MB, vram limit {} MB)",
+            batch_size,
+            clamped,
+            ctx.device.limits().max_buffer_size / (1024 * 1024),
+            ctx.device.limits().max_storage_buffer_binding_size / (1024 * 1024),
+            vram / (1024 * 1024),
+        );
+    }
+
+    GpuBatchOptions {
+        batch_size: clamped,
+        vram_override: None,
+    }
 }

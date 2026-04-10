@@ -24,9 +24,10 @@ impl Default for EicOptions {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub enum TimeUnit {
     Seconds,
+    #[default]
     Minutes,
 }
 
@@ -37,12 +38,6 @@ impl TimeUnit {
             TimeUnit::Seconds => value / 60.0,
             TimeUnit::Minutes => value,
         }
-    }
-}
-
-impl Default for TimeUnit {
-    fn default() -> Self {
-        TimeUnit::Minutes
     }
 }
 

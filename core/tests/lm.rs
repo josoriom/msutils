@@ -1,6 +1,7 @@
 use msutils::utilities::cheminfo::lm::{
     Data2D, GradientDifference, LevenbergMarquardtOptions, Weights, error_calculation, lm,
 };
+use std::f64::consts::PI;
 
 fn assert_close_decimals(a: f64, b: f64, decimals: usize) {
     let tol = 10f64.powi(-(decimals as i32));
@@ -269,15 +270,15 @@ fn should_return_solution_with_lowest_error() {
     let data = Data2D {
         x: vec![
             0.0,
-            0.6283185307179586,
-            1.2566370614359172,
-            1.8849555921538759,
-            2.5132741228718345,
-            3.141592653589793,
-            3.7699111843077517,
-            4.39822971502571,
-            5.026548245743669,
-            5.654866776461628,
+            PI / 5.0,
+            2.0 * PI / 5.0,
+            3.0 * PI / 5.0,
+            4.0 * PI / 5.0,
+            PI,
+            6.0 * PI / 5.0,
+            7.0 * PI / 5.0,
+            8.0 * PI / 5.0,
+            9.0 * PI / 5.0,
         ],
         y: vec![
             0.0,

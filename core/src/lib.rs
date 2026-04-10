@@ -3,9 +3,12 @@ use core::ffi::c_int;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use core::ffi::{CStr, c_char, c_int};
 
+use memmap2::Mmap;
 use serde_json::json;
 use std::{
+    fs::File,
     panic::{AssertUnwindSafe, catch_unwind},
+    path::Path,
     ptr, slice,
     sync::Arc,
 };
@@ -25,7 +28,7 @@ use utilities::{
         EicOptions, calculate_eic as calculate_eic_rs, collect_scans as collect_scans_rs,
     },
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
-    find_features::{FindFeaturesOptions, MzScanGrid, find_features as find_features_rs},
+    find_features::{FindFeaturesOptions, find_features as find_features_rs},
     find_noise_level::find_noise_level as find_noise_level_rs,
     find_peaks::{FilterPeaksOptions, FindPeaksOptions, find_peaks as find_peaks_rs},
     get_peak::get_peak as get_peak_rs,
@@ -36,13 +39,10 @@ use utilities::{
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use utilities::get_features::get_features as get_features_rs;
+use utilities::get_features::{ConsensusAlignmentConfig, get_features as get_features_rs};
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::{
-    find_features::{FindFeaturesConfig, MzTolerance},
-    get_features::ConsensusAlignmentConfig,
-};
+use crate::utilities::find_features::MzTolerance;
 
 const OK: c_int = 0;
 const ERR_INVALID_ARGS: c_int = 1;
@@ -91,7 +91,7 @@ pub fn log_json<T: serde::Serialize>(v: &T) {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn alloc(size: usize) -> *mut u8 {
+pub extern "C" fn alloc(size: usize) -> *mut u8 {
     if size == 0 {
         return core::ptr::null_mut();
     }
@@ -101,16 +101,32 @@ pub unsafe extern "C" fn alloc(size: usize) -> *mut u8 {
     p
 }
 
+/// Free memory returned by `alloc`.
+///
+/// # Safety
+/// `ptr_raw` must be a live pointer from `alloc(size)`.
+/// `size` must match the `alloc` call.
+/// After this call, `ptr_raw` is invalid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn free_(ptr_raw: *mut u8, len: usize) {
+pub unsafe extern "C" fn free_(ptr_raw: *mut u8, size: usize) {
     if !ptr_raw.is_null() {
-        drop(unsafe { Box::<[u8]>::from_raw(core::slice::from_raw_parts_mut(ptr_raw, len)) });
+        unsafe {
+            drop(Vec::<u8>::from_raw_parts(ptr_raw, 0, size));
+        }
+    }
+}
+
+struct BytesBacking(Arc<[u8]>);
+
+impl AsRef<[u8]> for BytesBacking {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
     }
 }
 
 pub struct OwnedIon {
     inner: Ion<'static>,
-    _data: Arc<[u8]>,
+    _backing: Arc<dyn AsRef<[u8]> + Send + Sync>,
 }
 
 impl OwnedIon {
@@ -123,15 +139,38 @@ impl OwnedIon {
                 max_cached_bytes: max_cache_size,
             },
         )?;
-        Ok(Self { _data: data, inner })
+        let backing: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(BytesBacking(data));
+        Ok(Self {
+            _backing: backing,
+            inner,
+        })
+    }
+
+    pub fn from_ion_path(path: &Path, max_cache_size: usize) -> Result<Self, String> {
+        let file = File::open(path).map_err(|e| format!("open {}: {}", path.display(), e))?;
+        let mmap =
+            unsafe { Mmap::map(&file) }.map_err(|e| format!("mmap {}: {}", path.display(), e))?;
+        let backing: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(mmap);
+        let bytes: &[u8] = backing.as_ref().as_ref();
+        let static_ref: &'static [u8] =
+            unsafe { std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) };
+        let inner = Ion::open_with_config(
+            static_ref,
+            DecoderConfig {
+                max_cached_bytes: max_cache_size,
+            },
+        )?;
+        Ok(Self {
+            _backing: backing,
+            inner,
+        })
     }
 
     pub fn from_mzml(mzml: &MzML) -> Result<Self, String> {
         let mut buf = Vec::new();
         encode(mzml, 0, false, WritingMode::Memory, &mut buf)
             .map_err(|e| format!("encode: {e}"))?;
-        let data: Arc<[u8]> = Arc::from(buf);
-        Self::from_ion_bytes(data, 0)
+        Self::from_ion_bytes(Arc::from(buf), 0)
     }
 
     fn ensure_mzml(&mut self) -> Result<MzML, c_int> {
@@ -154,17 +193,10 @@ impl SpectrumSource for OwnedIon {
 
 pub enum ParsedFile {
     Full(Box<MzML>),
-    Lazy(OwnedIon),
+    Lazy(Box<OwnedIon>),
 }
 
 impl ParsedFile {
-    fn ensure_mzml(&mut self) -> Result<MzML, c_int> {
-        match self {
-            ParsedFile::Full(mzml) => Ok((**mzml).clone()),
-            ParsedFile::Lazy(file) => file.ensure_mzml(),
-        }
-    }
-
     fn with_mzml<T>(&mut self, f: impl FnOnce(&MzML) -> Result<T, c_int>) -> Result<T, c_int> {
         match self {
             ParsedFile::Full(mzml) => f(mzml.as_ref()),
@@ -191,6 +223,12 @@ impl SpectrumSource for ParsedFile {
     }
 }
 
+/// Free a `ParsedFile` handle.
+///
+/// # Safety
+/// `handle` must be a valid pointer returned by this library.
+/// Do not free the same handle twice.
+/// After this call, `handle` is invalid.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_mzml(handle: *mut ParsedFile) {
     if !handle.is_null() {
@@ -198,6 +236,12 @@ pub unsafe extern "C" fn free_mzml(handle: *mut ParsedFile) {
     }
 }
 
+/// Parse mzML bytes and store the result in `dest`.
+///
+/// # Safety
+/// `data_ptr` must point to `data_len` readable bytes.
+/// `dest` must be a valid writable pointer to `*mut ParsedFile`.
+/// On success, `*dest` must be freed with `free_mzml`.
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn parse_mzml(
@@ -242,6 +286,12 @@ pub unsafe extern "C" fn parse_mzml(
     }
 }
 
+/// Parse binary data and store the result in `dest`.
+///
+/// # Safety
+/// `data_ptr` must point to `data_len` readable bytes.
+/// `dest` must be a valid writable pointer to `*mut ParsedFile`.
+/// On success, `*dest` must be freed with `free_mzml`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn parse_bin(
     data_ptr: *const u8,
@@ -255,7 +305,7 @@ pub unsafe extern "C" fn parse_bin(
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let arc: Arc<[u8]> = Arc::from(unsafe { std::slice::from_raw_parts(data_ptr, data_len) });
         let owned = OwnedIon::from_ion_bytes(arc, max_cache_size).map_err(|_| ERR_PARSE)?;
-        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Lazy(owned))) };
+        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(owned)))) };
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -264,6 +314,9 @@ pub unsafe extern "C" fn parse_bin(
     }
 }
 
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bin_to_json(h: *mut ParsedFile, out: *mut Buf) -> c_int {
     if h.is_null() || out.is_null() {
@@ -289,6 +342,11 @@ pub unsafe extern "C" fn bin_to_json(h: *mut ParsedFile, out: *mut Buf) -> c_int
     }
 }
 
+/// Convert a parsed file to mzML and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn bin_to_mzml(h: *mut ParsedFile, out: *mut Buf) -> c_int {
     if h.is_null() || out.is_null() {
@@ -314,6 +372,11 @@ pub unsafe extern "C" fn bin_to_mzml(h: *mut ParsedFile, out: *mut Buf) -> c_int
     }
 }
 
+/// Convert a parsed file to binary and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mzml_to_bin(
     h: *mut ParsedFile,
@@ -347,6 +410,12 @@ pub unsafe extern "C" fn mzml_to_bin(
     }
 }
 
+/// Find one peak and write the result to `out`.
+///
+/// # Safety
+/// `x_ptr` and `y_ptr` must point to `len` readable `f64` values.
+/// `options` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_peak(
     x_ptr: *const f64,
@@ -378,6 +447,15 @@ pub unsafe extern "C" fn get_peak(
     }
 }
 
+/// Find peaks from EIC data and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `rts_ptr`, `mzs_ptr`, and `ranges_ptr` must point to `n` readable `f64` values.
+/// If IDs are provided, `ids_off` and `ids_len` must point to `n` readable `u32` values,
+/// and `ids_buf` must point to `ids_buf_len` readable bytes.
+/// `opts` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_peaks_from_eic(
     h: *const ParsedFile,
@@ -414,7 +492,6 @@ pub unsafe extern "C" fn get_peaks_from_eic(
             ids_len,
             ids_buf,
             ids_buf_len,
-            n,
         );
         let peaks = get_peaks_from_eic_rs(
             file,
@@ -440,6 +517,14 @@ pub unsafe extern "C" fn get_peaks_from_eic(
     }
 }
 
+/// Find peaks from chromatogram data and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `idxs` must point to `n` readable `u32` values.
+/// `rts` and `wins` must point to `n` readable `f64` values.
+/// `opts` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_peaks_from_chrom(
     h: *mut ParsedFile,
@@ -496,7 +581,23 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
                 .collect();
             let list =
                 get_peaks_from_chrom_rs(mzml, &items, Some(build_fp(opts)), cores).ok_or(ERR_PARSE)?;
-            let out_arr: Vec<_> = list.iter().map(|(idx,id,ort,rt,f,t,int,intg,ta,ts)| json!({"index":idx,"id":id,"ort":ort,"rt":rt,"from":f,"to":t,"intensity":int,"integral":intg,"total_area":ta,"timestamp":ts})).collect();
+            let out_arr: Vec<_> = list
+                .iter()
+                .map(|row| {
+                    json!({
+                        "index": row.index,
+                        "id": &row.id,
+                        "ort": row.target_rt,
+                        "rt": row.peak_rt,
+                        "from": row.from_rt,
+                        "to": row.to_rt,
+                        "intensity": row.intensity,
+                        "integral": row.area,
+                        "total_area": row.total_area,
+                        "timestamp": &row.timestamp,
+                    })
+                })
+                .collect();
             write_buf(
                 out,
                 serde_json::to_string(&out_arr)
@@ -514,8 +615,14 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
     }
 }
 
+/// Find peaks and write the result to `out`.
+///
+/// # Safety
+/// `x_ptr` and `y_ptr` must point to `len` readable `f64` values.
+/// `opts` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
-pub extern "C" fn find_peaks(
+pub unsafe extern "C" fn find_peaks(
     x_ptr: *const f64,
     y_ptr: *const f64,
     len: usize,
@@ -554,8 +661,10 @@ pub extern "C" fn find_peaks(
     }
 }
 
+/// # Safety
+/// `y_ptr` must point to `len` readable `f32` values.
 #[unsafe(no_mangle)]
-pub extern "C" fn find_noise_level(y_ptr: *const f32, len: usize) -> f32 {
+pub unsafe extern "C" fn find_noise_level(y_ptr: *const f32, len: usize) -> f32 {
     if y_ptr.is_null() || len == 0 {
         return f32::INFINITY;
     }
@@ -566,6 +675,11 @@ pub extern "C" fn find_noise_level(y_ptr: *const f32, len: usize) -> f32 {
     .unwrap_or(f32::INFINITY)
 }
 
+/// Calculate an EIC and write `x` and `y` to `ox` and `oy`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `ox` and `oy` must be valid writable `Buf` pointers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn calculate_eic(
     h: *mut ParsedFile,
@@ -601,6 +715,11 @@ pub unsafe extern "C" fn calculate_eic(
     }
 }
 
+/// Collect scans and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn collect_scans(
     h: *mut ParsedFile,
@@ -635,6 +754,12 @@ pub unsafe extern "C" fn collect_scans(
     }
 }
 
+/// Find features from files in `dir` and write the result to `out`.
+///
+/// # Safety
+/// `dir` must point to a valid NUL-terminated C string.
+/// `popts` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn get_features(
@@ -652,6 +777,8 @@ pub unsafe extern "C" fn get_features(
     freq: c_int,
     popts: *const CPeakPOptions,
     cores: c_int,
+    use_gpu: c_int,
+    batch_size: c_int,
     out: *mut Buf,
 ) -> c_int {
     if dir.is_null() || out.is_null() {
@@ -661,30 +788,31 @@ pub unsafe extern "C" fn get_features(
         let path = unsafe { CStr::from_ptr(dir) }
             .to_str()
             .map_err(|_| ERR_INVALID_ARGS)?;
-        let mut eo = EicOptions::default();
+
+        let mut fc = FindFeaturesOptions::default();
         if eic_ppm.is_finite() && eic_ppm >= 0.0 {
-            eo.ppm_tolerance = eic_ppm;
+            fc.eic_options.ppm_tolerance = eic_ppm;
         }
         if eic_mz.is_finite() && eic_mz >= 0.0 {
-            eo.mz_tolerance = eic_mz;
+            fc.eic_options.mz_tolerance = eic_mz;
         }
-        let mut mg = MzScanGrid::default();
         if gs.is_finite() {
-            mg.mz_min = gs;
+            fc.mz_scan_grid.mz_min = gs;
         }
         if ge.is_finite() {
-            mg.mz_max = ge;
+            fc.mz_scan_grid.mz_max = ge;
         }
         if gstep > 0.0 {
-            mg.step_size = gstep;
+            fc.mz_scan_grid.step_size = gstep;
         }
-        let fp = build_fp(popts);
-        let fc = FindFeaturesConfig::from(FindFeaturesOptions {
-            eic_options: Some(eo),
-            find_peaks: Some(fp),
-            mz_scan_grid: Some(mg),
-            ..Default::default()
-        });
+        fc.find_peaks = build_fp(popts);
+        fc.use_gpu = use_gpu != 0;
+        fc.batch_size = if batch_size > 0 {
+            Some(batch_size as usize)
+        } else {
+            None
+        };
+
         let fp2 = build_fp(popts);
         let ac = ConsensusAlignmentConfig {
             tolerance: MzTolerance {
@@ -693,9 +821,10 @@ pub unsafe extern "C" fn get_features(
             },
             rt_tolerance: if grt > 0.0 { grt } else { 0.05 },
             frequency: if freq > 0 { freq as usize } else { 1 },
-            eic_options: eo,
+            eic_options: fc.eic_options,
             peak_options: Some(fp2),
         };
+
         let feats = get_features_rs(
             path,
             FromTo { from, to },
@@ -704,6 +833,7 @@ pub unsafe extern "C" fn get_features(
             if cores > 0 { cores as usize } else { 1 },
         )
         .unwrap_or_default();
+
         let arr: Vec<_> = feats.iter().map(|f| json!({"mz":f64ok(f.mz),"rt":f64ok(f.rt),"intensity":f64ok(f.intensity),"rintensity":f64ok(f.rintensity),"from":f64ok(f.from),"to":f64ok(f.to),"integral":f64ok(f.integral),"np":f.np,"frequency":f.frequency,"rmz":f.rmz,"rint":f.rint})).collect();
         write_buf(
             out,
@@ -720,6 +850,12 @@ pub unsafe extern "C" fn get_features(
     }
 }
 
+/// Find features and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `popts` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn find_features(
     h: *mut ParsedFile,
@@ -732,42 +868,51 @@ pub unsafe extern "C" fn find_features(
     gstep: f64,
     popts: *const CPeakPOptions,
     cores: c_int,
+    use_gpu: c_int,
+    batch_size: c_int,
     out: *mut Buf,
 ) -> c_int {
-    if h.is_null() || out.is_null() || !from.is_finite() || !to.is_finite() || !(to > from) {
+    if h.is_null() || out.is_null() || !from.is_finite() || !to.is_finite() || to <= from {
         return ERR_INVALID_ARGS;
     }
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
-        let mut eo = EicOptions::default();
+
+        let mut opts = FindFeaturesOptions::default();
         if eic_ppm.is_finite() && eic_ppm >= 0.0 {
-            eo.ppm_tolerance = eic_ppm;
+            opts.eic_options.ppm_tolerance = eic_ppm;
         }
         if eic_mz.is_finite() && eic_mz >= 0.0 {
-            eo.mz_tolerance = eic_mz;
+            opts.eic_options.mz_tolerance = eic_mz;
         }
-        let mut mg = MzScanGrid::default();
         if gs.is_finite() {
-            mg.mz_min = gs;
+            opts.mz_scan_grid.mz_min = gs;
         }
         if ge.is_finite() {
-            mg.mz_max = ge;
+            opts.mz_scan_grid.mz_max = ge;
         }
         if gstep > 0.0 {
-            mg.step_size = gstep;
+            opts.mz_scan_grid.step_size = gstep;
         }
+        opts.find_peaks = build_fp(popts);
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+        {
+            opts.use_gpu = use_gpu != 0;
+            opts.batch_size = if batch_size > 0 {
+                Some(batch_size as usize)
+            } else {
+                None
+            };
+        }
+
         let feats = find_features_rs(
             file,
             FromTo { from, to },
-            Some(FindFeaturesOptions {
-                eic_options: Some(eo),
-                find_peaks: Some(build_fp(popts)),
-                mz_scan_grid: Some(mg),
-                ..Default::default()
-            }),
+            Some(opts),
             if cores > 0 { cores as usize } else { 1 },
         )
         .unwrap_or_default();
+
         let arr: Vec<_> = feats.iter().map(|f| json!({"mz":f64ok(f.mz),"rt":f64ok(f.rt),"intensity":f64ok(f.intensity),"from":f64ok(f.from),"to":f64ok(f.to),"integral":f64ok(f.integral),"np":f64ok(f.np as f64)})).collect();
         write_buf(
             out,
@@ -784,6 +929,11 @@ pub unsafe extern "C" fn find_features(
     }
 }
 
+/// Calculate a baseline and write the result to `out`.
+///
+/// # Safety
+/// `y` must point to `len` readable `f64` values.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn calculate_baseline(
     y: *const f64,
@@ -822,6 +972,15 @@ pub unsafe extern "C" fn calculate_baseline(
     }
 }
 
+/// Find features for the given ROIs and write the result to `out`.
+///
+/// # Safety
+/// `h` must be a valid unique `ParsedFile` pointer from this library.
+/// `rts`, `mzs`, and `wins` must point to `n` readable `f64` values.
+/// If IDs are provided, `ids_off` and `ids_len` must point to `n` readable `u32` values,
+/// and `ids_buf` must point to `ids_buf_len` readable bytes.
+/// `popts` must be null or point to a valid `CPeakPOptions`.
+/// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn find_feature(
     h: *const ParsedFile,
@@ -871,7 +1030,7 @@ pub unsafe extern "C" fn find_feature(
         if emz.is_finite() && emz >= 0.0 {
             eo.mz_tolerance = emz;
         }
-        let rois = build_eic_rois(rts, mzs, wins, ids_off, ids_len, ids_buf, ids_buf_len, n);
+        let rois = build_eic_rois(rts, mzs, wins, ids_off, ids_len, ids_buf, ids_buf_len);
         let refs: Vec<&EicRoi> = rois.iter().collect();
         let results = find_feature_rs(
             file,
@@ -910,8 +1069,9 @@ fn build_eic_rois(
     ids_len: *const u32,
     ids_buf: *const u8,
     ids_buf_len: usize,
-    n: usize,
 ) -> Vec<EicRoi> {
+    let n = rts.len();
+
     let has = !(ids_off.is_null() || ids_len.is_null() || ids_buf.is_null() || ids_buf_len == 0);
     let (offs, lens, ibuf) = if has {
         (
@@ -922,6 +1082,7 @@ fn build_eic_rois(
     } else {
         (&[][..], &[][..], None)
     };
+
     (0..n)
         .map(|i| {
             let (rt, mz, w) = (rts[i], mzs[i], wins[i]);
@@ -936,6 +1097,7 @@ fn build_eic_rois(
                     })
                 })
                 .unwrap_or_default();
+
             if ok {
                 EicRoi {
                     id,
@@ -961,10 +1123,9 @@ fn f64ok(v: f64) -> f64 {
 }
 
 fn f64_to_u8(v: &[f64]) -> Box<[u8]> {
-    let n = v.len() * 8;
-    let mut out = Vec::<u8>::with_capacity(n);
+    let n = core::mem::size_of_val(v);
+    let mut out = vec![0u8; n];
     unsafe {
-        out.set_len(n);
         ptr::copy_nonoverlapping(v.as_ptr() as *const u8, out.as_mut_ptr(), n);
     }
     out.into_boxed_slice()
@@ -1010,7 +1171,6 @@ fn build_fp(opts: *const CPeakPOptions) -> FindPeaksOptions {
             } else {
                 1.5
             }),
-            ..Default::default()
         }),
         baseline_options: Some(BaselineOptions {
             baseline_window: (o.baseline_window > 0).then_some(o.baseline_window as f64),

@@ -71,7 +71,7 @@ fn slope_threshold(y: &[f64], level: u8) -> f64 {
     }
     let diffs: Vec<f64> = y.windows(2).map(|w| (w[1] - w[0]).abs()).collect();
     let base = median(&diffs).max(1e-12);
-    match level.min(3).max(1) {
+    match level.clamp(1, 3) {
         1 => 3.0 * base,
         2 => 2.5 * base,
         _ => 2.0 * base,

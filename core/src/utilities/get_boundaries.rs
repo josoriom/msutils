@@ -54,51 +54,36 @@ pub fn get_boundaries(
     let idx = closest_index(&data.x, peak_x);
 
     let mut global_min = f64::INFINITY;
-    for &vv in &data.y {
-        let v = vv as f64;
+    for &v in &data.y {
         if v < global_min {
             global_min = v;
         }
     }
 
-    let from = walk(
-        &data.x,
-        &data.y,
-        idx,
-        -1,
-        opts.epsilon,
-        opts.noise,
-        opts.n_steps,
-        opts.baseline_run,
+    let config = WalkConfig {
+        epsilon: opts.epsilon,
+        noise_value: opts.noise,
+        n_steps: opts.n_steps,
+        baseline_run: opts.baseline_run,
         global_min,
-    );
+    };
 
-    let to = walk(
-        &data.x,
-        &data.y,
-        idx,
-        1,
-        opts.epsilon,
-        opts.noise,
-        opts.n_steps,
-        opts.baseline_run,
-        global_min,
-    );
+    let from = walk(&data.x, &data.y, idx, -1, config);
+    let to = walk(&data.x, &data.y, idx, 1, config);
 
     Boundaries { from, to }
 }
 
-fn walk(
-    x: &[f64],
-    y: &[f64],
-    start: usize,
-    direction: isize,
+#[derive(Clone, Copy)]
+struct WalkConfig {
     epsilon: f64,
     noise_value: f64,
     n_steps: usize,
     baseline_run: usize,
     global_min: f64,
-) -> Boundary {
+}
+
+fn walk(x: &[f64], y: &[f64], start: usize, direction: isize, config: WalkConfig) -> Boundary {
     let n = x.len() as isize;
     if n < 2 {
         return Boundary {
@@ -108,7 +93,7 @@ fn walk(
     }
 
     let dir = if direction > 0 { 1 } else { -1 };
-    let noise = (global_min + epsilon).max(noise_value);
+    let noise = (config.global_min + config.epsilon).max(config.noise_value);
 
     let mut i = start as isize;
 
@@ -116,7 +101,7 @@ fn walk(
     let mut steps_up: usize = 0;
     let mut has_risen: bool = false;
     let mut valley_idx: isize = start as isize;
-    let mut valley_val: f64 = y[start] as f64;
+    let mut valley_val: f64 = y[start];
     let mut below_noise: bool = false;
 
     let mut below_noise_run_len: usize = 0;
@@ -127,13 +112,13 @@ fn walk(
         let iu = i as usize;
         let ju = j as usize;
 
-        let y_i = y[iu] as f64;
-        let y_j = y[ju] as f64;
+        let y_i = y[iu];
+        let y_j = y[ju];
 
         if running_below_noise(
             y_j,
             noise,
-            baseline_run,
+            config.baseline_run,
             j,
             &mut below_noise_run_len,
             &mut below_noise_start,
@@ -145,7 +130,7 @@ fn walk(
             };
         }
 
-        let slope = compute_ratio_and_slope(x, y, iu, ju, dir, epsilon);
+        let slope = compute_ratio_and_slope(x, y, iu, ju, dir, config.epsilon);
 
         if is_asc_or_flat(slope) {
             if !checking {
@@ -161,7 +146,7 @@ fn walk(
                 }
             }
 
-            if steps_up >= n_steps {
+            if steps_up >= config.n_steps {
                 let end_val = y_j;
                 let rise = end_val - valley_val;
                 if !allow_rise(below_noise, end_val, noise, rise) {
@@ -255,7 +240,6 @@ fn compute_ratio_and_slope(
     } else {
         dx
     };
-    let dy = (y[ju] as f64) - (y[iu] as f64);
-    let slope_dir = (dy / denom) * if dir > 0 { 1.0 } else { -1.0 };
-    slope_dir
+    let dy = (y[ju]) - (y[iu]);
+    (dy / denom) * if dir > 0 { 1.0 } else { -1.0 }
 }

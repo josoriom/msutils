@@ -1,4 +1,4 @@
-use crate::utilities::{cheminfo::lm::ParameterizedFunction, utilities::erfc_approx};
+use crate::utilities::{cheminfo::lm::ParameterizedFunction, math::erfc_approx};
 
 use std::f64::consts::{LN_2, PI, SQRT_2};
 
@@ -38,7 +38,7 @@ pub fn sigma_from_fwhm(fwhm: f64) -> f64 {
 
 pub fn gaussian(mu: f64) -> Box<ParameterizedFunction> {
     Box::new(move |params: &[f64]| {
-        let h = params.get(0).copied().unwrap_or(1.0);
+        let h = params.first().copied().unwrap_or(1.0);
         let fwhm = params.get(1).copied().unwrap_or(1.0).abs().max(1e-12);
         let sigma = sigma_from_fwhm(fwhm);
         Box::new(move |rt: f64| gaussian_fn(rt, h, mu, sigma))
@@ -47,7 +47,7 @@ pub fn gaussian(mu: f64) -> Box<ParameterizedFunction> {
 
 pub fn emg(mu: f64) -> Box<ParameterizedFunction> {
     Box::new(move |params: &[f64]| {
-        let h_at_mu = params.get(0).copied().unwrap_or(1.0);
+        let h_at_mu = params.first().copied().unwrap_or(1.0);
         let fwhm = params.get(1).copied().unwrap_or(1.0).abs().max(1e-12);
         let tau = params.get(2).copied().unwrap_or(1.0).abs().max(1e-12);
 

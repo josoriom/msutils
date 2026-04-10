@@ -2,3 +2,6 @@
 CC_wasm32_unknown_unknown = "/opt/homebrew/opt/llvm/bin/clang"
 AR_wasm32_unknown_unknown = "/opt/homebrew/opt/llvm/bin/llvm-ar"
 CFLAGS_wasm32_unknown_unknown = "--target=wasm32-unknown-unknown"
+
+[target.aarch64-pc-windows-gnullvm]
+linker = "aarch64-w64-mingw32-gcc"

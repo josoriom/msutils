@@ -12,15 +12,17 @@ opt-level = "s"
 lto = "fat"
 codegen-units = 1
 panic = "unwind"
-debug = true
+debug = false
+strip = "symbols"
 
 [dependencies]
+bytemuck = "1.25.0"
 ionic = { git = "https://github.com/josoriom/ionic", branch = "main", version = "0.1.0" }
+memmap2 = "0.9.10"
+pollster = "0.4.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
+wgpu = "29.0.1"
 
 [target.'cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))'.dependencies]
 rayon = "1.11.0"
-
-[target.aarch64-pc-windows-gnullvm]
-linker = "aarch64-w64-mingw32-gcc"

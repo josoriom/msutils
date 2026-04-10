@@ -28,11 +28,14 @@ pub mod structs;
 
 pub mod cheminfo;
 
-pub mod utilities;
-pub use utilities::closest_index;
+pub mod math;
+pub use math::closest_index;
 
 pub mod find_feature;
 pub use find_feature::find_feature;
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub mod get_features;
 pub mod tests;
+
+pub mod gpu;

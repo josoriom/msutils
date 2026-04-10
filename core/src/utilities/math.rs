@@ -34,20 +34,20 @@ pub fn xy_integration(x: &[f64], y: &[f64]) -> (f64, f64) {
         return (0.0, f64::NEG_INFINITY);
     }
     if n == 1 {
-        return (0.0, y[0] as f64);
+        return (0.0, y[0]);
     }
     let mut s = 0.0f64;
     let mut m = y[0];
     for i in 0..(n - 1) {
         let dx: f64 = (x[i + 1] - x[i]) * 60.0;
-        let yi = y[i] as f64;
-        let yj = y[i + 1] as f64;
+        let yi = y[i];
+        let yj = y[i + 1];
         s += dx * (yi + yj) * 0.5;
         if y[i + 1] > m {
             m = y[i + 1];
         }
     }
-    (s, m as f64)
+    (s, m)
 }
 
 #[inline]

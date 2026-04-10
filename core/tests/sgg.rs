@@ -73,10 +73,10 @@ fn smoothing_test() {
     }
 
     let mut data = vec![0.0f64; n];
-    for i in 0..n {
+    for (i, value) in data.iter_mut().enumerate() {
         let angle = i as f64 * dx;
         let v = angle.sin() + jitter(i as u32) * noise;
-        data[i] = v as f64;
+        *value = v;
     }
 
     let out = sgg(&data, &xs, opts);
@@ -107,10 +107,10 @@ fn first_derivative_test() {
     }
 
     let mut data = vec![0.0f64; n];
-    for i in 0..n {
+    for (i, row) in data.iter_mut().enumerate() {
         let angle = i as f64 * dx;
         let v = angle.sin() + jitter(i as u32) * noise;
-        data[i] = v as f64;
+        *row = v;
     }
 
     let out = sgg(&data, &xs, opts);
@@ -119,9 +119,10 @@ fn first_derivative_test() {
     let decimals = ((-noise.log10()) - 1.0).round() as i32;
     let tol = 10f64.powi(-decimals.max(0));
 
-    for j in half..(n - half) {
+    for (offset, &actual) in out[half..(n - half)].iter().enumerate() {
+        let j = half + offset;
         let expected = (j as f64 * dx).cos();
-        assert_close_tol(out[j] as f64, expected, tol);
+        assert_close_tol(actual, expected, tol);
     }
 }
 
@@ -142,7 +143,7 @@ fn first_derivative_x_as_vector_equivalence() {
 
     let mut data = Vec::with_capacity(n);
     for i in 0..n {
-        data.push((i as f64 * dx).sin() as f64);
+        data.push((i as f64 * dx).sin());
     }
 
     let a = sgg(&data, &xs, opts);
@@ -172,14 +173,14 @@ fn border_test() {
     let mut data = Vec::with_capacity(n);
     for i in 0..n {
         let x = i as f64;
-        data.push((x * x * x - 4.0 * x * x + 5.0 * x) as f64);
+        data.push(x * x * x - 4.0 * x * x + 5.0 * x);
     }
 
     let out = sgg(&data, &xs, opts);
 
-    for j in 0..n {
+    for (j, item) in out.iter().enumerate() {
         let x = j as f64;
         let expected = (3.0 * x - 8.0) * x + 5.0;
-        assert_close(out[j] as f64, expected, 4);
+        assert_close(*item, expected, 4);
     }
 }

@@ -3,9 +3,8 @@ mod tests {
     use crate::utilities::{
         EicOptions,
         find_features::{
-            Feature, FeaturePoint, FindFeaturesConfig, FindFeaturesOptions, MzTolerance,
-            build_mz_grid, dedup_points, deduplicate_masses, group_by_mz, pick_best_per_rt_cluster,
-            sort_features,
+            Feature, FeaturePoint, FindFeaturesOptions, MzTolerance, build_mz_grid, dedup_points,
+            deduplicate_masses, group_by_mz, pick_best_per_rt_cluster, sort_features,
         },
     };
 
@@ -175,7 +174,7 @@ mod tests {
     #[test]
     fn test_deduplicate_masses_unsorted_input_same_result() {
         let opts = eic_abs(0.01);
-        let sorted = deduplicate_masses(vec![100.0, 100.005, 200.0], opts.clone());
+        let sorted = deduplicate_masses(vec![100.0, 100.005, 200.0], opts);
         let unsorted = deduplicate_masses(vec![100.005, 200.0, 100.0], opts);
         assert_eq!(sorted.len(), unsorted.len());
     }
@@ -375,49 +374,42 @@ mod tests {
         assert_eq!(result.len(), 1);
     }
 
-    // --- FindFeaturesConfig ---
+    // --- FindFeaturesOptions ---
 
     #[test]
     fn test_find_features_config_from_default_options() {
-        let config = FindFeaturesConfig::from(FindFeaturesOptions::default());
-        assert_eq!(config.scan_eic_options.ppm_tolerance, 10.0);
-        assert_eq!(config.eic_options.ppm_tolerance, 20.0);
-        assert_eq!(config.scan_width_threshold, 5);
-        assert_eq!(config.mz_scan_grid.step_size, 0.006);
+        let opts = FindFeaturesOptions::default();
+        assert_eq!(opts.scan_eic_options.ppm_tolerance, 10.0);
+        assert_eq!(opts.eic_options.ppm_tolerance, 20.0);
+        assert_eq!(opts.scan_width_threshold, 5);
+        assert_eq!(opts.mz_scan_grid.step_size, 0.006);
     }
 
     #[test]
-    fn test_find_features_config_from_none_options_uses_defaults() {
-        let config = FindFeaturesConfig::from(FindFeaturesOptions {
-            scan_eic_options: None,
-            eic_options: None,
-            find_peaks: None,
-            mz_scan_grid: None,
-            scan_width_threshold: None,
-        });
-        assert_eq!(config.scan_eic_options.ppm_tolerance, 10.0);
-        assert_eq!(config.scan_width_threshold, 5);
+    fn test_find_features_default_values() {
+        let opts = FindFeaturesOptions::default();
+        assert_eq!(opts.scan_eic_options.ppm_tolerance, 10.0);
+        assert_eq!(opts.scan_width_threshold, 5);
     }
 
     #[test]
-    fn test_find_features_config_custom_values_passthrough() {
-        let config = FindFeaturesConfig::from(FindFeaturesOptions {
-            scan_eic_options: Some(EicOptions {
+    fn test_find_features_custom_values_passthrough() {
+        let opts = FindFeaturesOptions {
+            scan_eic_options: EicOptions {
                 ppm_tolerance: 5.0,
                 mz_tolerance: 0.002,
                 ..Default::default()
-            }),
-            eic_options: Some(EicOptions {
+            },
+            eic_options: EicOptions {
                 ppm_tolerance: 15.0,
                 mz_tolerance: 0.004,
                 ..Default::default()
-            }),
-            scan_width_threshold: Some(3),
-            find_peaks: None,
-            mz_scan_grid: None,
-        });
-        assert_eq!(config.scan_eic_options.ppm_tolerance, 5.0);
-        assert_eq!(config.eic_options.ppm_tolerance, 15.0);
-        assert_eq!(config.scan_width_threshold, 3);
+            },
+            scan_width_threshold: 3,
+            ..Default::default()
+        };
+        assert_eq!(opts.scan_eic_options.ppm_tolerance, 5.0);
+        assert_eq!(opts.eic_options.ppm_tolerance, 15.0);
+        assert_eq!(opts.scan_width_threshold, 3);
     }
 }
