@@ -9,11 +9,12 @@ use std::{
 use rayon::prelude::*;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::{OwnedIon, utilities::gpu::GpuContext};
+use crate::utilities::gpu::GpuContext;
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use ionic::ion::{DecoderConfig, Ion, OwnedIon};
 
 use crate::utilities::find_peaks::FindPeaksOptions;
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::structs::FromTo;
 use crate::utilities::{
     calculate_eic::{
         EicOptions, TimeUnit, collect_scans, compute_eic_for_mz, lower_bound, upper_bound,
@@ -22,7 +23,7 @@ use crate::utilities::{
         Feature, FeatureError, FindFeaturesOptions, MzTolerance, dedup_points, find_features,
     },
     get_peak::get_peak,
-    structs::{DataXY, Roi},
+    structs::{DataXY, FromTo, Roi},
 };
 use ionic::SpectrumSource;
 
@@ -34,9 +35,12 @@ use ionic::{MzML, parse_mzml};
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use memmap2::Mmap;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use std::fs::File;
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use std::{fs, path::PathBuf, time::Instant};
+use std::{
+    fs,
+    fs::File,
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 #[derive(Debug)]
 pub enum AlignmentError {
@@ -343,12 +347,12 @@ fn fill_all_missing(
                     eprintln!("[Sample {}] {} failed to reopen: {}", sample_idx, name, e);
                 }
             },
-            SampleSourceKind::Ion(path) => match OwnedIon::from_ion_path(path, ION_CACHE_BYTES) {
+            SampleSourceKind::Ion(path) => match open_ion(path) {
                 Ok(mut owned) => {
                     fill_sample(
                         slots,
                         sample_idx,
-                        &mut owned,
+                        &mut *owned,
                         eic_options,
                         peak_options.clone(),
                     );
@@ -539,18 +543,16 @@ fn detect_features_per_sample(
                         Vec::new()
                     }
                 },
-                SampleSourceKind::Ion(path) => {
-                    match OwnedIon::from_ion_path(path, ION_CACHE_BYTES) {
-                        Ok(mut owned) => {
-                            find_features(&mut owned, time_window, Some(config.clone()), cores)
-                                .unwrap_or_default()
-                        }
-                        Err(e) => {
-                            eprintln!("[Sample {}] {} failed to open: {}", idx, name, e);
-                            Vec::new()
-                        }
+                SampleSourceKind::Ion(path) => match open_ion(path) {
+                    Ok(mut owned) => {
+                        find_features(&mut *owned, time_window, Some(config.clone()), cores)
+                            .unwrap_or_default()
                     }
-                }
+                    Err(e) => {
+                        eprintln!("[Sample {}] {} failed to open: {}", idx, name, e);
+                        Vec::new()
+                    }
+                },
             };
             eprintln!(
                 "[Sample {}] {} processed in {:.3}s",
@@ -666,9 +668,22 @@ pub(crate) fn rsd(values: &[f64]) -> f64 {
 
 // TODO: Mmap-backed mzML loading is still being tested.
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-fn open_mzml(path: &PathBuf) -> Result<MzML, String> {
+fn open_mzml(path: &Path) -> Result<MzML, String> {
     let file = File::open(path).map_err(|e| format!("open {}: {}", path.display(), e))?;
     let mmap =
         unsafe { Mmap::map(&file) }.map_err(|e| format!("mmap {}: {}", path.display(), e))?;
     parse_mzml(&mmap[..]).map_err(|e| e.to_string())
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+#[inline]
+fn open_ion(path: &Path) -> Result<OwnedIon, String> {
+    Ion::open_file(
+        path,
+        DecoderConfig {
+            max_cached_bytes: ION_CACHE_BYTES,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| e.to_string())
 }
