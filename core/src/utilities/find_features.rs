@@ -106,7 +106,7 @@ pub struct MzScanGrid {
 impl Default for MzScanGrid {
     fn default() -> Self {
         Self {
-            mz_min: 70.0,
+            mz_min: 40.0,
             mz_max: 1000.0,
             step_size: 0.006,
         }
