@@ -3,21 +3,17 @@ use core::ffi::c_int;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use core::ffi::{CStr, c_char, c_int};
 
-use memmap2::Mmap;
 use serde_json::json;
 use std::{
-    fs::File,
     panic::{AssertUnwindSafe, catch_unwind},
-    path::Path,
     ptr, slice,
     sync::Arc,
 };
 
 use ionic::{
     MzML, ScanMeta, SpectrumSource, bin_to_mzml as bin_to_mzml_rs,
-    decoder::decode::Ion,
     encoder::{WritingMode, encode},
-    ion::DecoderConfig,
+    ion::{DecoderConfig, Ion, OwnedIon},
     parse_mzml as parse_mzml_rs,
 };
 
@@ -116,81 +112,6 @@ pub unsafe extern "C" fn free_(ptr_raw: *mut u8, size: usize) {
     }
 }
 
-struct BytesBacking(Arc<[u8]>);
-
-impl AsRef<[u8]> for BytesBacking {
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-pub struct OwnedIon {
-    inner: Ion<'static>,
-    _backing: Arc<dyn AsRef<[u8]> + Send + Sync>,
-}
-
-impl OwnedIon {
-    pub fn from_ion_bytes(data: Arc<[u8]>, max_cache_size: usize) -> Result<Self, String> {
-        let static_ref: &'static [u8] =
-            unsafe { std::slice::from_raw_parts(data.as_ptr(), data.len()) };
-        let inner = Ion::open_with_config(
-            static_ref,
-            DecoderConfig {
-                max_cached_bytes: max_cache_size,
-            },
-        )?;
-        let backing: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(BytesBacking(data));
-        Ok(Self {
-            _backing: backing,
-            inner,
-        })
-    }
-
-    pub fn from_ion_path(path: &Path, max_cache_size: usize) -> Result<Self, String> {
-        let file = File::open(path).map_err(|e| format!("open {}: {}", path.display(), e))?;
-        let mmap =
-            unsafe { Mmap::map(&file) }.map_err(|e| format!("mmap {}: {}", path.display(), e))?;
-        let backing: Arc<dyn AsRef<[u8]> + Send + Sync> = Arc::new(mmap);
-        let bytes: &[u8] = backing.as_ref().as_ref();
-        let static_ref: &'static [u8] =
-            unsafe { std::slice::from_raw_parts(bytes.as_ptr(), bytes.len()) };
-        let inner = Ion::open_with_config(
-            static_ref,
-            DecoderConfig {
-                max_cached_bytes: max_cache_size,
-            },
-        )?;
-        Ok(Self {
-            _backing: backing,
-            inner,
-        })
-    }
-
-    pub fn from_mzml(mzml: &MzML) -> Result<Self, String> {
-        let mut buf = Vec::new();
-        encode(mzml, 0, false, WritingMode::Memory, &mut buf)
-            .map_err(|e| format!("encode: {e}"))?;
-        Self::from_ion_bytes(Arc::from(buf), 0)
-    }
-
-    fn ensure_mzml(&mut self) -> Result<MzML, c_int> {
-        self.inner.to_mzml().map_err(|_| ERR_PARSE)
-    }
-}
-
-impl SpectrumSource for OwnedIon {
-    fn for_each_scan_in_range(
-        &mut self,
-        rt_min: f64,
-        rt_max: f64,
-        ms_level: u8,
-        cb: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
-    ) {
-        self.inner
-            .for_each_scan_in_range(rt_min, rt_max, ms_level, cb);
-    }
-}
-
 pub enum ParsedFile {
     Full(Box<MzML>),
     Lazy(Box<OwnedIon>),
@@ -201,7 +122,7 @@ impl ParsedFile {
         match self {
             ParsedFile::Full(mzml) => f(mzml.as_ref()),
             ParsedFile::Lazy(file) => {
-                let mzml = file.ensure_mzml()?;
+                let mzml = file.to_mzml().map_err(|_| ERR_PARSE)?;
                 f(&mzml)
             }
         }
@@ -304,7 +225,15 @@ pub unsafe extern "C" fn parse_bin(
     }
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let arc: Arc<[u8]> = Arc::from(unsafe { std::slice::from_raw_parts(data_ptr, data_len) });
-        let owned = OwnedIon::from_ion_bytes(arc, max_cache_size).map_err(|_| ERR_PARSE)?;
+        let owned = Ion::open_bytes(
+            arc,
+            DecoderConfig {
+                max_cached_bytes: max_cache_size,
+                ..Default::default()
+            },
+        )
+        .map_err(|_| ERR_PARSE)?;
+
         unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(owned)))) };
         Ok(())
     })) {
@@ -579,8 +508,8 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
                     }
                 })
                 .collect();
-            let list =
-                get_peaks_from_chrom_rs(mzml, &items, Some(build_fp(opts)), cores).ok_or(ERR_PARSE)?;
+            let list = get_peaks_from_chrom_rs(mzml, &items, Some(build_fp(opts)), cores)
+                .ok_or(ERR_PARSE)?;
             let out_arr: Vec<_> = list
                 .iter()
                 .map(|row| {
