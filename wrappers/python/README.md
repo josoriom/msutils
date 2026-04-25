@@ -43,7 +43,7 @@ msutils.mzml_to_bin(f, level=5, f32_compress=False)
 
 ```python
 msutils.calculate_eic(f, target_mz, from_rt, to_rt, ppm_tol=20.0, mz_tol=0.005)
-msutils.collect_scans(f, from_rt, to_rt, level=1)
+msutils.get_scans(f, rt_range=(from_rt, to_rt), level=1)
 ```
 
 ### Peak detection

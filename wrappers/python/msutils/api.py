@@ -269,22 +269,68 @@ def calculate_baseline(
     return buf_to_f64(abi, buf)
 
 
-def collect_scans(
+_QUERY_RT_RANGE  = 0
+_QUERY_CLOSEST_RT = 1
+_QUERY_MZ_RANGE  = 2
+_QUERY_CLOSEST_MZ = 3
+
+
+def get_scans(
     file: MzMlFile,
-    from_rt: float,
-    to_rt: float,
+    *,
+    rt_range: Optional[tuple] = None,
+    rt: Optional[float] = None,
+    mz_range: Optional[tuple] = None,
+    mz: Optional[float] = None,
     level: int = 1,
-) -> List[Dict]:
+) -> "List[Dict] | Optional[Dict]":
+    """Retrieve scans by query.
+
+    Exactly one of rt_range, rt, mz_range, or mz must be provided.
+      rt_range=(from, to)  -> List[Dict] of scans in RT window
+      rt=value             -> Optional[Dict] single scan closest to RT
+      mz_range=(from, to)  -> List[Dict] of scans with selected_ion_mz in window
+      mz=value             -> Optional[Dict] single scan closest to selected_ion_mz
+    """
     abi = _get_abi()
     if not (0 <= level <= 255):
-        raise ValueError("collect_scans: level must be in [0, 255]")
+        raise ValueError("get_scans: level must be in [0, 255]")
+
+    provided = sum(x is not None for x in (rt_range, rt, mz_range, mz))
+    if provided != 1:
+        raise ValueError("get_scans: exactly one of rt_range, rt, mz_range, mz must be provided")
+
+    if rt_range is not None:
+        a, b = float(rt_range[0]), float(rt_range[1])
+        if not math.isfinite(a) or not math.isfinite(b):
+            raise ValueError("get_scans: rt_range values must be finite")
+        query_type = _QUERY_RT_RANGE
+    elif rt is not None:
+        a = float(rt)
+        if not math.isfinite(a):
+            raise ValueError("get_scans: rt must be finite")
+        query_type, b = _QUERY_CLOSEST_RT, math.nan
+    elif mz_range is not None:
+        a, b = float(mz_range[0]), float(mz_range[1])
+        if not math.isfinite(a) or not math.isfinite(b):
+            raise ValueError("get_scans: mz_range values must be finite")
+        query_type = _QUERY_MZ_RANGE
+    else:
+        a = float(mz)  # type: ignore[arg-type]
+        if not math.isfinite(a) or a <= 0:
+            raise ValueError("get_scans: mz must be a positive finite number")
+        query_type, b = _QUERY_CLOSEST_MZ, math.nan
+
     buf = _Buf()
-    _check("collect_scans", abi.collect_scans(
+    _check("get_scans", abi.get_scans(
         file.handle,
-        c_double(from_rt), c_double(to_rt), c_uint8(level),
+        c_uint8(query_type), c_double(a), c_double(b), c_uint8(level),
         ctypes.byref(buf),
     ))
-    return buf_to_json(abi, buf)
+    scans = buf_to_json(abi, buf)
+    if query_type in (_QUERY_CLOSEST_RT, _QUERY_CLOSEST_MZ):
+        return scans[0] if scans else None
+    return scans
 
 
 def get_peaks_from_eic(

@@ -14,8 +14,8 @@ use std::{
 use crate::utilities::gpu::{GpuContext, processor::GpuBatchOptions};
 use crate::utilities::{
     calculate_eic::{
-        CentroidScan, EicOptions, TimeUnit, collect_scans, compute_eic_for_mz, lower_bound,
-        with_eic_apex_intensity,
+        CentroidScan, EicOptions, ScanQuery, TimeUnit, collect_scans, compute_eic_for_mz,
+        lower_bound, with_eic_apex_intensity,
     },
     find_peaks::{FindPeaksOptions, find_peaks},
     structs::{DataXY, FromTo, Peak},
@@ -193,7 +193,7 @@ pub fn find_features(
         return Err(FeatureError::GridTooLarge(grid.len()));
     }
 
-    let (time, scans) = collect_scans(source, time_window, TimeUnit::Minutes, 1);
+    let (time, scans) = collect_scans(source, ScanQuery::RtRange(time_window), TimeUnit::Minutes, 1);
     if scans.is_empty() {
         return Err(FeatureError::NoScans);
     }

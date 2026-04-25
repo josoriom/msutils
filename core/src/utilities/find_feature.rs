@@ -1,5 +1,5 @@
 use crate::utilities::calculate_eic::{
-    EicOptions, collect_scans, compute_eic_for_mz, lower_bound, upper_bound,
+    EicOptions, ScanQuery, collect_scans, compute_eic_for_mz, lower_bound, upper_bound,
 };
 use crate::utilities::find_features::max_intensity_centroid;
 use crate::utilities::find_peaks::FindPeaksOptions;
@@ -80,10 +80,7 @@ pub fn find_feature(
 
     let (rts, scans) = collect_scans(
         source,
-        FromTo {
-            from: rt_min,
-            to: rt_max,
-        },
+        ScanQuery::RtRange(FromTo { from: rt_min, to: rt_max }),
         eic_opts.time_unit,
         1,
     );

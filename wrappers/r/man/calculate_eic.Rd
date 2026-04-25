@@ -28,5 +28,5 @@ plot(eic$x, eic$y, type = "l")
 }
 }
 \seealso{
-\code{\link{collect_scans}()}, \code{\link{get_peak}()}, \code{\link{find_peaks}()}
+\code{\link{get_scans}()}, \code{\link{get_peak}()}, \code{\link{find_peaks}()}
 }

@@ -4,7 +4,7 @@ use ionic::SpectrumSource;
 use rayon::{ThreadPoolBuilder, prelude::*};
 
 use crate::utilities::calculate_eic::{
-    CentroidScan, EicOptions, TimeUnit, collect_scans, compute_eic_for_mz, lower_bound, upper_bound,
+    CentroidScan, EicOptions, ScanQuery, TimeUnit, collect_scans, compute_eic_for_mz, lower_bound, upper_bound,
 };
 use crate::utilities::find_noise_level;
 use crate::utilities::find_peaks::{FilterPeaksOptions, FindPeaksOptions};
@@ -18,7 +18,7 @@ pub fn get_peaks_from_eic<'a>(
     options: Option<FindPeaksOptions>,
     cores: usize,
 ) -> Option<Vec<(&'a str, f64, f64, Peak)>> {
-    let (rts_full, scans_full) = collect_scans(source, from_to, TimeUnit::Minutes, 1);
+    let (rts_full, scans_full) = collect_scans(source, ScanQuery::RtRange(from_to), TimeUnit::Minutes, 1);
 
     if rts_full.len() < 3 || scans_full.is_empty() {
         return Some(

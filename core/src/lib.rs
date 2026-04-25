@@ -21,7 +21,7 @@ pub mod utilities;
 use utilities::{
     calculate_baseline::{BaselineOptions, calculate_baseline as calculate_baseline_rs},
     calculate_eic::{
-        EicOptions, calculate_eic as calculate_eic_rs, collect_scans as collect_scans_rs,
+        EicOptions, ScanQuery, TimeUnit, calculate_eic as calculate_eic_rs, collect_scans as collect_scans_rs,
     },
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
     find_features::{FindFeaturesOptions, find_features as find_features_rs},
@@ -644,38 +644,61 @@ pub unsafe extern "C" fn calculate_eic(
     }
 }
 
-/// Collect scans and write the result to `out`.
+/// Get scans by query and write the result to `out`.
+///
+/// `query_type`: 0=RtRange, 1=ClosestRt, 2=MzRange, 3=ClosestMz
+/// `a`, `b`: from/to for range queries; `a`=value, `b`=NaN for point queries.
 ///
 /// # Safety
 /// `h` must be a valid unique `ParsedFile` pointer from this library.
 /// `out` must be a valid writable `Buf` pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn collect_scans(
+pub unsafe extern "C" fn get_scans(
     h: *mut ParsedFile,
-    from: f64,
-    to: f64,
+    query_type: u8,
+    a: f64,
+    b: f64,
     level: u8,
     out: *mut Buf,
 ) -> c_int {
     if h.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    let query = match query_type {
+        0 => {
+            if !a.is_finite() || !b.is_finite() {
+                return ERR_INVALID_ARGS;
+            }
+            ScanQuery::RtRange(FromTo { from: a, to: b })
+        }
+        1 => {
+            if !a.is_finite() {
+                return ERR_INVALID_ARGS;
+            }
+            ScanQuery::ClosestRt(a)
+        }
+        2 => {
+            if !a.is_finite() || !b.is_finite() {
+                return ERR_INVALID_ARGS;
+            }
+            ScanQuery::MzRange(FromTo { from: a, to: b })
+        }
+        3 => {
+            if !a.is_finite() || a <= 0.0 {
+                return ERR_INVALID_ARGS;
+            }
+            ScanQuery::ClosestMz(a)
+        }
+        _ => return ERR_INVALID_ARGS,
+    };
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let (_, scans) = collect_scans_rs(
             unsafe { &mut *h },
-            FromTo { from, to },
-            EicOptions::default().time_unit,
+            query,
+            TimeUnit::Minutes,
             level,
         );
-        let arr: Vec<_> = scans.iter().map(|s| json!({"rt":s.rt,"mz":s.mz.as_ref(),"intensity":s.intensity.as_ref(),"metadata":s.metadata})).collect();
-        write_buf(
-            out,
-            serde_json::to_string(&arr)
-                .map_err(|_| ERR_PARSE)?
-                .into_bytes()
-                .into_boxed_slice(),
-        );
-        Ok(())
+        write_scans_json(out, &scans).map_err(|_| ERR_PARSE)
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
@@ -988,6 +1011,12 @@ pub unsafe extern "C" fn find_feature(
         Ok(Err(c)) => c,
         Err(_) => ERR_PANIC,
     }
+}
+
+fn write_scans_json(out: *mut Buf, scans: &[utilities::calculate_eic::CentroidScan]) -> Result<(), serde_json::Error> {
+    let arr: Vec<_> = scans.iter().map(|s| json!({"rt":s.rt,"mz":s.mz.as_ref(),"intensity":s.intensity.as_ref(),"metadata":s.metadata})).collect();
+    write_buf(out, serde_json::to_string(&arr)?.into_bytes().into_boxed_slice());
+    Ok(())
 }
 
 fn build_eic_rois(

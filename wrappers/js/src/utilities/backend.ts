@@ -26,10 +26,11 @@ export interface Backend {
     mzTol: number,
   ): { x: Float64Array; y: Float64Array };
 
-  collectScans(
+  getScans(
     handle: FileHandle,
-    from: number,
-    to: number,
+    queryType: number,
+    a: number,
+    b: number,
     level: number,
   ): any;
 

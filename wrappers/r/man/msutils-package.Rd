@@ -35,7 +35,7 @@ find features, and align features across many samples.
 
 \code{\link{find_features}()} finds untargeted features in one file.
 
-\code{\link{collect_scans}()} gets scans in a time range.
+\code{\link{get_scans}()} gets scans by RT range, closest RT, m/z range, or closest m/z.
 
 \code{\link{get_features}()} aligns features across all files in one folder.
 

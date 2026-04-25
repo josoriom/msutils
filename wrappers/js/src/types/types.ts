@@ -131,3 +131,9 @@ export type CentroidScan = {
   intensity: number[];
   metadata: SpectrumSummary;
 };
+
+export type ScanQuery =
+  | { rt: { from: number; to: number } }
+  | { rt: { closest: number } }
+  | { selectedMz: { from: number; to: number } }
+  | { selectedMz: { closest: number } };

@@ -9,7 +9,7 @@ from msutils.api import (
     convert_bin_to_mzml,
     mzml_to_bin,
     calculate_eic,
-    collect_scans,
+    get_scans,
     find_peaks,
     get_peak,
     find_noise_level,
@@ -32,7 +32,7 @@ __all__ = [
     "convert_bin_to_mzml",
     "mzml_to_bin",
     "calculate_eic",
-    "collect_scans",
+    "get_scans",
     "find_peaks",
     "get_peak",
     "find_noise_level",
@@ -73,8 +73,8 @@ class MsUtils:
     def calculate_eic(self, file: MzMlFile, target_mz: float, from_rt: float, to_rt: float, ppm_tol: float = 20.0, mz_tol: float = 0.005):
         return calculate_eic(file, target_mz, from_rt, to_rt, ppm_tol, mz_tol)
 
-    def collect_scans(self, file: MzMlFile, from_rt: float, to_rt: float, level: int = 1):
-        return collect_scans(file, from_rt, to_rt, level)
+    def get_scans(self, file: MzMlFile, *, rt_range=None, rt=None, mz_range=None, mz=None, level: int = 1):
+        return get_scans(file, rt_range=rt_range, rt=rt, mz_range=mz_range, mz=mz, level=level)
 
     def find_peaks(self, x, y, options=None):
         return find_peaks(x, y, options)

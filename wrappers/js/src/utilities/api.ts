@@ -18,6 +18,7 @@ import type {
   FromTo,
   CentroidScan,
   SpectrumSummary,
+  ScanQuery,
 } from "../types/types";
 
 export type {
@@ -36,6 +37,7 @@ export type {
   FromTo,
   CentroidScan,
   SpectrumSummary,
+  ScanQuery,
 };
 
 const DEFAULTS = {
@@ -193,12 +195,12 @@ export function calculateBaseline(
   );
 }
 
-export function collectScans(
-  file: MzMlFile,
-  fromTo: FromTo,
-  level = 1,
-): CentroidScan[] {
-  assertFile(file, "collectScans");
+const QUERY_RT_RANGE   = 0;
+const QUERY_CLOSEST_RT = 1;
+const QUERY_MZ_RANGE   = 2;
+const QUERY_CLOSEST_MZ = 3;
+
+function assertLevel(level: number, caller: string): void {
   if (
     typeof level !== "number" ||
     !Number.isFinite(level) ||
@@ -206,11 +208,60 @@ export function collectScans(
     level < 0 ||
     level > 255
   ) {
-    throw new RangeError("collectScans: level must be an integer in [0,255]");
+    throw new RangeError(`${caller}: level must be an integer in [0,255]`);
   }
-  const { from, to } = fromTo;
-  const result = backend().collectScans(file._handle!, from, to, level);
-  return camelizeKeys(result);
+}
+
+export function getScans(
+  file: MzMlFile,
+  query: ScanQuery,
+  level = 1,
+): CentroidScan[] | CentroidScan | null {
+  assertFile(file, "getScans");
+  assertLevel(level, "getScans");
+
+  let queryType: number;
+  let a: number;
+  let b: number;
+
+  const assertFinite = (v: number, label: string) => {
+    if (!Number.isFinite(v)) throw new RangeError(`getScans: ${label} must be finite`);
+  };
+
+  if ("rt" in query) {
+    if ("from" in query.rt) {
+      assertFinite(query.rt.from, "rt.from");
+      assertFinite(query.rt.to, "rt.to");
+      queryType = QUERY_RT_RANGE;
+      a = query.rt.from;
+      b = query.rt.to;
+    } else {
+      assertFinite(query.rt.closest, "rt.closest");
+      queryType = QUERY_CLOSEST_RT;
+      a = query.rt.closest;
+      b = NaN;
+    }
+  } else {
+    if ("from" in query.selectedMz) {
+      assertFinite(query.selectedMz.from, "selectedMz.from");
+      assertFinite(query.selectedMz.to, "selectedMz.to");
+      queryType = QUERY_MZ_RANGE;
+      a = query.selectedMz.from;
+      b = query.selectedMz.to;
+    } else {
+      assertFinite(query.selectedMz.closest, "selectedMz.closest");
+      if (query.selectedMz.closest <= 0) throw new RangeError("getScans: selectedMz.closest must be positive");
+      queryType = QUERY_CLOSEST_MZ;
+      a = query.selectedMz.closest;
+      b = NaN;
+    }
+  }
+
+  const raw = camelizeKeys(backend().getScans(file._handle!, queryType, a, b, level));
+  if (queryType === QUERY_CLOSEST_RT || queryType === QUERY_CLOSEST_MZ) {
+    return raw?.length ? raw[0] : null;
+  }
+  return raw as CentroidScan[];
 }
 
 export function getPeaksFromEic(
