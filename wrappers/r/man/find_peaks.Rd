@@ -1,8 +1,9 @@
 \name{find_peaks}
 \alias{find_peaks}
-\title{Find peaks in a 1D trace}
+\title{Find all peaks in a trace}
 \description{
-Finds peaks in one numeric trace, where \code{x} is time and \code{y} is intensity.
+Detects peaks in one numeric trace (\code{x} = time, \code{y} = intensity).
+Returns all peaks that pass the given filters.
 }
 \usage{
 find_peaks(
@@ -21,30 +22,30 @@ find_peaks(
 )
 }
 \arguments{
-  \item{x}{Numeric x values, usually retention time.}
-  \item{y}{Numeric y values, usually intensity.}
-  \item{integral_threshold}{Minimum peak area threshold.}
-  \item{intensity_threshold}{Minimum intensity threshold.}
-  \item{width_threshold}{Minimum peak width.}
-  \item{noise}{Manual noise estimate.}
-  \item{auto_noise}{Logical flag to estimate noise automatically.}
-  \item{auto_baseline}{Logical flag to estimate baseline automatically.}
-  \item{baseline_window}{Baseline window size.}
-  \item{baseline_window_factor}{Baseline window factor.}
-  \item{allow_overlap}{Logical flag to allow overlapping peaks.}
-  \item{window_size}{Optional local window size.}
-  \item{sn_ratio}{Signal-to-noise ratio threshold.}
+  \item{x}{Numeric retention-time vector.}
+  \item{y}{Numeric intensity vector, same length as \code{x}. Minimum 3 points.}
+  \item{integral_threshold}{Minimum peak area. \code{NaN} disables this filter.}
+  \item{intensity_threshold}{Minimum peak apex intensity. Default 1000.}
+  \item{width_threshold}{Minimum peak width in number of data points. Default 5.}
+  \item{noise}{Fixed noise level. \code{NaN} disables. Use with \code{auto_noise = FALSE}.}
+  \item{auto_noise}{If \code{TRUE}, estimate noise level from the signal. Default \code{TRUE}.}
+  \item{auto_baseline}{If \code{TRUE}, subtract a rolling baseline before detection. Default \code{TRUE}.}
+  \item{baseline_window}{Baseline rolling window size. \code{0} uses a default.}
+  \item{baseline_window_factor}{Scales the baseline window. \code{0} uses a default.}
+  \item{allow_overlap}{If \code{TRUE}, keep peaks whose boundaries overlap. Default \code{FALSE}.}
+  \item{window_size}{Savitzky-Golay smoothing window. \code{0} selects automatically.}
+  \item{sn_ratio}{Minimum signal-to-noise ratio. Default 1.}
 }
 \value{
-A parsed R object describing detected peaks, usually a data frame.
-}
-\details{
-This works on numeric vectors. It does not take a file handle.
+A data frame with one row per peak. Columns: \code{rt}, \code{from}, \code{to},
+\code{intensity}, \code{integral}, \code{np} (number of points), \code{noise}.
 }
 \examples{
+\donttest{
 x <- seq(0, 10, length.out = 200)
 y <- dnorm(x, mean = 4, sd = 0.2) * 10000
 find_peaks(x, y, intensity_threshold = 1000, width_threshold = 5L)
+}
 }
 \seealso{
 \code{\link{get_peak}()}, \code{\link{calculate_baseline}()}

@@ -9,6 +9,21 @@ use crate::utilities::scan_for_peaks::scan_for_peaks;
 use crate::utilities::structs::{DataXY, Peak};
 
 #[derive(Clone, Copy, Debug)]
+pub struct ArtifactFilterOptions {
+    /// Maximum allowed variation index (total variation / 2*amplitude).
+    /// Smooth peaks score ~1.0–1.5; spike forests score 5–20. Set to 0.0 to disable.
+    pub max_variation_index: f64,
+}
+
+impl Default for ArtifactFilterOptions {
+    fn default() -> Self {
+        Self {
+            max_variation_index: 3.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct FilterPeaksOptions {
     pub integral_threshold: Option<f64>,
     pub width_threshold: Option<usize>,
@@ -39,6 +54,8 @@ impl Default for FilterPeaksOptions {
 struct PeakCandidate {
     from: f64,
     to: f64,
+    from_idx: usize,
+    to_idx: usize,
     rt: f64,
     integral: f64,
     intensity: f64,
@@ -67,6 +84,7 @@ pub struct FindPeaksOptions {
     pub get_boundaries_options: Option<BoundariesOptions>,
     pub filter_peaks_options: Option<FilterPeaksOptions>,
     pub baseline_options: Option<BaselineOptions>,
+    pub artifact_filter_options: Option<ArtifactFilterOptions>,
 }
 
 impl Default for FindPeaksOptions {
@@ -75,6 +93,7 @@ impl Default for FindPeaksOptions {
             get_boundaries_options: Some(BoundariesOptions::default()),
             filter_peaks_options: Some(FilterPeaksOptions::default()),
             baseline_options: Some(BaselineOptions::default()),
+            artifact_filter_options: Some(ArtifactFilterOptions::default()),
         }
     }
 }
@@ -150,6 +169,8 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
                 candidates.push(PeakCandidate {
                     from: fx,
                     to: tx,
+                    from_idx: fi,
+                    to_idx: ti,
                     rt,
                     integral,
                     intensity,
@@ -165,7 +186,13 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
         return Vec::new();
     }
 
-    // println!("{candidates:?}");
+    if let Some(artifact_opts) = o.artifact_filter_options {
+        filter_artifacts(&mut candidates, &normalized_data, &artifact_opts);
+    }
+
+    if candidates.is_empty() {
+        return Vec::new();
+    }
 
     let mut peaks = filter_peak_candidates(candidates, filter_opts);
 
@@ -396,4 +423,46 @@ fn suppress_contained_peaks(data: &DataXY, mut peaks: Vec<Peak>) -> Vec<Peak> {
     }
     out.sort_by(|a, b| a.rt.partial_cmp(&b.rt).unwrap_or(Ordering::Equal));
     out
+}
+
+/// Normalized total variation of the signal window.
+/// One pass computes min, max, and total variation simultaneously.
+/// Smooth peaks score ~1.0–1.5; spike forests score 5+.
+fn compute_variation_index(y: &[f64]) -> f64 {
+    if y.len() < 2 {
+        return 1.0;
+    }
+    let mut min = y[0];
+    let mut max = y[0];
+    let mut tv = 0.0_f64;
+    for w in y.windows(2) {
+        tv += (w[1] - w[0]).abs();
+        if w[1] < min {
+            min = w[1];
+        }
+        if w[1] > max {
+            max = w[1];
+        }
+    }
+    let amplitude = max - min;
+    if amplitude <= 0.0 {
+        return 1.0;
+    }
+    tv / (2.0 * amplitude)
+}
+
+fn filter_artifacts(
+    candidates: &mut Vec<PeakCandidate>,
+    data: &DataXY,
+    opts: &ArtifactFilterOptions,
+) {
+    candidates.retain(|p| !is_artifact(p, data, opts));
+}
+
+fn is_artifact(p: &PeakCandidate, data: &DataXY, opts: &ArtifactFilterOptions) -> bool {
+    if opts.max_variation_index <= 0.0 {
+        return false;
+    }
+    let window = &data.y[p.from_idx..=p.to_idx];
+    compute_variation_index(window) > opts.max_variation_index
 }

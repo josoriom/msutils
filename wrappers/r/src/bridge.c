@@ -60,7 +60,7 @@ typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *,
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, size_t, MzML **);
 typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakPOptions *, int32_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_collect_scans)(const MzML *, double, double, uint8_t, int32_t, Buf *);
+typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 typedef void (*fn_free_mzml)(MzML *);
 
@@ -83,7 +83,7 @@ typedef struct
   fn_parse_bin parse_bin;
   fn_free_mzml free_mzml;
   fn_get_features get_features;
-  fn_collect_scans collect_scans;
+  fn_get_scans get_scans;
 } abi_type;
 
 static DLIB abi_handle = NULL;
@@ -146,7 +146,7 @@ int abi_load(const char *path, const char **err)
     goto fail;
   if (resolve_required((void **)&ABI.get_features, "get_features"))
     goto fail;
-  if (resolve_required((void **)&ABI.collect_scans, "collect_scans"))
+  if (resolve_required((void **)&ABI.get_scans, "get_scans"))
     goto fail;
   ABI.free_ = (fn_free_)DLSYM(abi_handle, "free_");
   if (!ABI.free_)
@@ -351,7 +351,7 @@ SEXP C_parse_mzml(SEXP data)
   return ptr;
 }
 
-SEXP C_bin_to_json(SEXP bin)
+SEXP C_ion_to_json(SEXP bin)
 {
   MzML *handle = GetHandle(bin);
   REQUIRE_BOUND(ABI.bin_to_json, "bin_to_json");
@@ -364,7 +364,7 @@ SEXP C_bin_to_json(SEXP bin)
   return res;
 }
 
-SEXP C_bin_to_mzml(SEXP bin)
+SEXP C_ion_to_mzml(SEXP bin)
 {
   MzML *handle = GetHandle(bin);
   REQUIRE_BOUND(ABI.bin_to_mzml, "bin_to_mzml");
@@ -377,7 +377,7 @@ SEXP C_bin_to_mzml(SEXP bin)
   return res;
 }
 
-SEXP C_mzml_to_bin(SEXP bin, SEXP level, SEXP f32_compress)
+SEXP C_mzml_to_ion(SEXP bin, SEXP level, SEXP f32_compress)
 {
   MzML *handle = GetHandle(bin);
   if (!(TYPEOF(level) == INTSXP || TYPEOF(level) == REALSXP) || LENGTH(level) != 1)
@@ -720,7 +720,7 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
   return res;
 }
 
-SEXP C_parse_bin(SEXP bin, SEXP max_cache_size)
+SEXP C_parse_ion(SEXP bin, SEXP max_cache_size)
 {
   if (TYPEOF(bin) != RAWSXP)
     error("msutils: data must be a raw vector");
@@ -742,26 +742,14 @@ SEXP C_parse_bin(SEXP bin, SEXP max_cache_size)
   return ptr;
 }
 
-SEXP C_collect_scans(SEXP bin, SEXP from_time, SEXP to_time, SEXP level, SEXP include_metadata)
+SEXP C_get_scans(SEXP bin, SEXP query_type, SEXP a, SEXP b, SEXP level)
 {
   MzML *handle = GetHandle(bin);
-  REQUIRE_BOUND(ABI.collect_scans, "collect_scans");
+  REQUIRE_BOUND(ABI.get_scans, "get_scans");
   REQUIRE_BOUND(ABI.free_, "free_");
-
-  uint8_t lv = (uint8_t)asInteger(level);
-
-  int32_t meta = 0;
-  if (include_metadata != R_NilValue)
-  {
-    if (TYPEOF(include_metadata) == LGLSXP)
-      meta = (asLogical(include_metadata) == TRUE) ? 1 : 0;
-    else
-      meta = asInteger(include_metadata) != 0 ? 1 : 0;
-  }
-
   Buf out = (Buf){0};
-  int code = ABI.collect_scans(handle, asReal(from_time), asReal(to_time), lv, meta, &out);
-  die_code("collect_scans", code);
+  int code = ABI.get_scans(handle, (uint8_t)asInteger(query_type), asReal(a), asReal(b), (uint8_t)asInteger(level), &out);
+  die_code("get_scans", code);
   SEXP res = mk_string_len(out.ptr, out.len);
   ABI.free_(out.ptr, out.len);
   return res;

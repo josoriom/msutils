@@ -74,7 +74,7 @@ typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakPOptions *, int32_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_collect_scans)(const MzML *, double, double, uint8_t, Buf *);
+typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 
 typedef struct
@@ -96,7 +96,7 @@ typedef struct
   fn_free_ free_;
   fn_free_mzml free_mzml;
   fn_get_features get_features;
-  fn_collect_scans collect_scans;
+  fn_get_scans get_scans;
 } msabi_t;
 
 static msabi_t ABI{};
@@ -273,7 +273,7 @@ static int abi_load(const char *path, const char **err)
     goto fail;
   if (resolve_required((void **)&ABI.get_features, "get_features"))
     goto fail;
-  if (resolve_required((void **)&ABI.collect_scans, "collect_scans"))
+  if (resolve_required((void **)&ABI.get_scans, "get_scans"))
     goto fail;
 
   ABI.find_noise_level = (fn_find_noise_level)DLSYM(LIB_HANDLE, "find_noise_level");
@@ -914,31 +914,32 @@ static Napi::Value GetFeatures(const Napi::CallbackInfo &info)
   return TakeUtf8String(env, out.Out());
 }
 
-static Napi::Value CollectScans(const Napi::CallbackInfo &info)
+static Napi::Value GetScans(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (!ThrowIfMissing(env, (void *)ABI.collect_scans, "collect_scans"))
+  if (!ThrowIfMissing(env, (void *)ABI.get_scans, "get_scans"))
     return env.Undefined();
 
   MzML *handle = GetHandle(info[0]);
   if (!handle)
     return ThrowRc(env, "UseAfterFree/InvalidHandle", 0);
 
-  if (info.Length() < 4 || !info[1].IsNumber() || !info[2].IsNumber() || !info[3].IsNumber())
+  if (info.Length() < 5 || !info[1].IsNumber() || !info[2].IsNumber() || !info[3].IsNumber() || !info[4].IsNumber())
   {
-    Napi::TypeError::New(env, "expected: (External handle, number fromRt, number toRt, number level, boolean|number includeMetadata?)")
+    Napi::TypeError::New(env, "expected: (External handle, number queryType, number a, number b, number level)")
         .ThrowAsJavaScriptException();
     return env.Undefined();
   }
 
-  double from_rt = info[1].As<Napi::Number>().DoubleValue();
-  double to_rt = info[2].As<Napi::Number>().DoubleValue();
-  uint8_t level = (uint8_t)info[3].As<Napi::Number>().Uint32Value();
+  uint8_t query_type = (uint8_t)info[1].As<Napi::Number>().Uint32Value();
+  double a = info[2].As<Napi::Number>().DoubleValue();
+  double b = info[3].As<Napi::Number>().DoubleValue();
+  uint8_t level = (uint8_t)info[4].As<Napi::Number>().Uint32Value();
 
   OwnedBuf out;
-  int32_t rc = ABI.collect_scans(handle, from_rt, to_rt, level, out.Out());
+  int32_t rc = ABI.get_scans(handle, query_type, a, b, level, out.Out());
   if (rc != 0)
-    return ThrowRc(env, "collect_scans", rc);
+    return ThrowRc(env, "get_scans", rc);
 
   return TakeUtf8String(env, out.Out());
 }
@@ -962,7 +963,7 @@ static Napi::Object Init(Napi::Env env, Napi::Object exports)
   exports.Set("parseBin", Napi::Function::New(env, ParseBin));
   exports.Set("dispose", Napi::Function::New(env, DisposeMzML));
   exports.Set("getFeatures", Napi::Function::New(env, GetFeatures));
-  exports.Set("collectScans", Napi::Function::New(env, CollectScans));
+  exports.Set("getScans", Napi::Function::New(env, GetScans));
   return exports;
 }
 

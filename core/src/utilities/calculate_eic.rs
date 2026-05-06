@@ -162,24 +162,42 @@ pub fn compute_eic_for_mz(
     intensities
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ScanQuery {
+    RtRange(FromTo),
+    ClosestRt(f64),
+    MzRange(FromTo),
+    ClosestMz(f64),
+}
+
 pub fn collect_scans(
     source: &mut impl SpectrumSource,
-    time_range: FromTo,
+    query: ScanQuery,
     time_unit: TimeUnit,
     ms_level: u8,
 ) -> (Vec<f64>, Vec<CentroidScan>) {
-    let is_single_point = (time_range.from - time_range.to).abs() < f64::EPSILON;
-    let target_rt = time_unit.to_minutes(time_range.from);
-    let (rt_min, rt_max) = if is_single_point {
-        (0.0_f64, f64::MAX)
-    } else {
-        (
-            time_unit.to_minutes(time_range.from.min(time_range.to)),
-            time_unit.to_minutes(time_range.from.max(time_range.to)),
-        )
-    };
-    let mut scans = Vec::new();
+    let (rt_min, rt_max) = rt_bounds(&query, time_unit);
+    let scans = fetch_scans(source, rt_min, rt_max, ms_level);
+    apply_query(scans, query, time_unit)
+}
 
+fn rt_bounds(query: &ScanQuery, time_unit: TimeUnit) -> (f64, f64) {
+    match query {
+        ScanQuery::RtRange(r) => (
+            time_unit.to_minutes(r.from.min(r.to)),
+            time_unit.to_minutes(r.from.max(r.to)),
+        ),
+        ScanQuery::ClosestRt(_) | ScanQuery::ClosestMz(_) | ScanQuery::MzRange(_) => (0.0, f64::MAX),
+    }
+}
+
+fn fetch_scans(
+    source: &mut impl SpectrumSource,
+    rt_min: f64,
+    rt_max: f64,
+    ms_level: u8,
+) -> Vec<CentroidScan> {
+    let mut scans = Vec::new();
     source.for_each_scan_in_range(rt_min, rt_max, ms_level, &mut |rt, meta, mz, intensity| {
         scans.push(CentroidScan {
             rt,
@@ -188,13 +206,38 @@ pub fn collect_scans(
             metadata: SpectrumSummary::from_scan_meta(rt * 60.0, meta),
         });
     });
+    scans
+}
 
-    scans.sort_unstable_by(|a, b| a.rt.partial_cmp(&b.rt).unwrap_or(Ordering::Equal));
-    if is_single_point {
-        return closest_scan_to(scans, target_rt);
+fn apply_query(
+    mut scans: Vec<CentroidScan>,
+    query: ScanQuery,
+    time_unit: TimeUnit,
+) -> (Vec<f64>, Vec<CentroidScan>) {
+    match query {
+        ScanQuery::RtRange(_) => {
+            scans.sort_unstable_by(|a, b| a.rt.partial_cmp(&b.rt).unwrap_or(Ordering::Equal));
+            let rts = scans.iter().map(|s| s.rt).collect();
+            (rts, scans)
+        }
+        ScanQuery::ClosestRt(rt) => {
+            let target = time_unit.to_minutes(rt);
+            pick_closest_by(scans, |s| (s.rt - target).abs())
+        }
+        ScanQuery::MzRange(r) => {
+            scans.retain(|s| {
+                let mz = s.metadata.selected_ion_mz;
+                mz.is_finite() && mz >= r.from.min(r.to) && mz <= r.from.max(r.to)
+            });
+            scans.sort_unstable_by(|a, b| a.rt.partial_cmp(&b.rt).unwrap_or(Ordering::Equal));
+            let rts = scans.iter().map(|s| s.rt).collect();
+            (rts, scans)
+        }
+        ScanQuery::ClosestMz(mz) => {
+            scans.retain(|s| s.metadata.selected_ion_mz.is_finite());
+            pick_closest_by(scans, |s| (s.metadata.selected_ion_mz - mz).abs())
+        }
     }
-    let retention_times = scans.iter().map(|s| s.rt).collect();
-    (retention_times, scans)
 }
 
 pub fn with_eic_apex_intensity(rt: &[f64], y: &[f64], mut p: Peak) -> Peak {
@@ -235,18 +278,20 @@ pub fn upper_bound(values: &[f64], target: f64) -> usize {
     low
 }
 
-fn closest_scan_to(mut scans: Vec<CentroidScan>, target_rt: f64) -> (Vec<f64>, Vec<CentroidScan>) {
-    let closest_index = scans
+fn pick_closest_by<F>(mut scans: Vec<CentroidScan>, distance: F) -> (Vec<f64>, Vec<CentroidScan>)
+where
+    F: Fn(&CentroidScan) -> f64,
+{
+    let best = scans
         .iter()
         .enumerate()
         .min_by(|(_, a), (_, b)| {
-            (a.rt - target_rt)
-                .abs()
-                .partial_cmp(&(b.rt - target_rt).abs())
+            distance(a)
+                .partial_cmp(&distance(b))
                 .unwrap_or(Ordering::Equal)
         })
         .map(|(i, _)| i);
-    match closest_index {
+    match best {
         Some(i) => {
             let s = scans.swap_remove(i);
             (vec![s.rt], vec![s])

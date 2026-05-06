@@ -17,7 +17,7 @@ use ionic::ion::{DecoderConfig, Ion, OwnedIon};
 use crate::utilities::find_peaks::FindPeaksOptions;
 use crate::utilities::{
     calculate_eic::{
-        EicOptions, TimeUnit, collect_scans, compute_eic_for_mz, lower_bound, upper_bound,
+        EicOptions, ScanQuery, TimeUnit, collect_scans, compute_eic_for_mz, lower_bound, upper_bound,
     },
     find_features::{
         Feature, FeatureError, FindFeaturesOptions, MzTolerance, dedup_points, find_features,
@@ -399,10 +399,7 @@ fn fill_sample(
 
     let (all_times, all_scans) = collect_scans(
         source,
-        FromTo {
-            from: rt_min,
-            to: rt_max,
-        },
+        ScanQuery::RtRange(FromTo { from: rt_min, to: rt_max }),
         TimeUnit::Minutes,
         1,
     );

@@ -76,7 +76,7 @@ class _ABI:
              c_double, c_double, POINTER(PeakOptions), POINTER(_Buf)], c_int32),
         "calculate_eic": ([c_void_p, c_double, c_double, c_double,
              c_double, c_double, POINTER(_Buf), POINTER(_Buf)], c_int32),
-        "collect_scans": ([c_void_p, c_double, c_double, c_uint8, POINTER(_Buf)], c_int32),
+        "get_scans": ([c_void_p, c_uint8, c_double, c_double, c_uint8, POINTER(_Buf)], c_int32),
         "get_peaks_from_eic": ([c_void_p,
              POINTER(c_double), POINTER(c_double), POINTER(c_double),
              POINTER(c_uint32), POINTER(c_uint32),

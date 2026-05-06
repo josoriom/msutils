@@ -1,12 +1,13 @@
 \name{find_feature}
 \alias{find_feature}
-\title{Targeted feature extraction}
+\title{Find targeted features by m/z and RT}
 \description{
-Finds one or more target features from known m/z and RT values.
+Extracts peaks for one or more targets defined by m/z and RT.
+Use this when you already know what you are looking for.
 }
 \usage{
 find_feature(
-  bin,
+  file,
   rt, mz, window, id = NULL,
   scan_ppm, scan_mz, eic_ppm, eic_mz,
   cores = 1L,
@@ -24,33 +25,31 @@ find_feature(
 )
 }
 \arguments{
-  \item{bin}{A file handle returned by \code{\link{parse_mzml}()} or \code{\link{parse_bin}()}.}
-  \item{rt}{Target retention time or vector of RT values.}
-  \item{mz}{Target m/z or vector of m/z values.}
-  \item{window}{Target RT window or vector of windows.}
-  \item{id}{Optional feature identifiers.}
-  \item{scan_ppm}{PPM tolerance used while scanning spectra.}
-  \item{scan_mz}{Absolute m/z tolerance used while scanning spectra.}
-  \item{eic_ppm}{PPM tolerance used for EIC extraction.}
-  \item{eic_mz}{Absolute m/z tolerance used for EIC extraction.}
-  \item{cores}{Number of CPU cores to use.}
-  \item{integral_threshold}{Minimum peak area threshold.}
-  \item{intensity_threshold}{Minimum intensity threshold.}
-  \item{width_threshold}{Minimum peak width.}
-  \item{noise}{Manual noise estimate.}
-  \item{auto_noise}{Logical flag to estimate noise automatically.}
-  \item{auto_baseline}{Logical flag to estimate baseline automatically.}
-  \item{baseline_window}{Baseline window size.}
-  \item{baseline_window_factor}{Baseline window factor.}
-  \item{allow_overlap}{Logical flag to allow overlapping peaks.}
-  \item{window_size}{Optional smoothing or local window size.}
-  \item{sn_ratio}{Signal-to-noise ratio threshold.}
+  \item{file}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
+  \item{rt}{Target RT or numeric vector of RTs (minutes).}
+  \item{mz}{Target m/z or numeric vector of m/z values (Da).}
+  \item{window}{RT search half-window or numeric vector of half-windows.}
+  \item{id}{Optional character vector of feature labels. \code{NULL} uses blank labels.}
+  \item{scan_ppm}{PPM tolerance for spectrum scan extraction.}
+  \item{scan_mz}{Absolute m/z tolerance (Da) for spectrum scan extraction.}
+  \item{eic_ppm}{PPM tolerance for EIC extraction.}
+  \item{eic_mz}{Absolute m/z tolerance (Da) for EIC extraction.}
+  \item{cores}{Number of CPU cores to use. Default 1.}
+  \item{integral_threshold}{Minimum peak area. \code{NaN} disables.}
+  \item{intensity_threshold}{Minimum apex intensity. Default 1000.}
+  \item{width_threshold}{Minimum peak width in points. Default 5.}
+  \item{noise}{Fixed noise level. \code{NaN} disables.}
+  \item{auto_noise}{Estimate noise automatically. Default \code{TRUE}.}
+  \item{auto_baseline}{Subtract rolling baseline before detection. Default \code{TRUE}.}
+  \item{baseline_window}{Baseline window size. \code{0} uses a default.}
+  \item{baseline_window_factor}{Scales the baseline window. \code{0} uses a default.}
+  \item{allow_overlap}{Allow overlapping peak boundaries. Default \code{FALSE}.}
+  \item{window_size}{Savitzky-Golay smoothing window. \code{0} selects automatically.}
+  \item{sn_ratio}{Minimum signal-to-noise ratio. Default 1.}
 }
 \value{
-A data frame of extracted targeted features.
-}
-\details{
-Use this when you already know the target m/z and RT values you want to check.
+A data frame with one row per target. Columns include \code{id}, \code{mz},
+\code{rt}, \code{from}, \code{to}, \code{intensity}, \code{integral}.
 }
 \seealso{
 \code{\link{find_features}()}, \code{\link{get_peaks_from_eic}()}

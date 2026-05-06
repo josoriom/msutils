@@ -243,10 +243,11 @@ class WasmExports {
     optsPtr: number,
     outBuf: number,
   ) => number;
-  readonly collectScans: (
+  readonly getScans: (
     handle: number,
-    from: number,
-    to: number,
+    queryType: number,
+    a: number,
+    b: number,
     level: number,
     outBuf: number,
   ) => number;
@@ -270,7 +271,7 @@ class WasmExports {
     this.findNoiseLevel = this.resolve(ex, ["find_noise_level"]);
     this.calculateBaseline = this.resolve(ex, ["calculate_baseline"]);
     this.findFeature = this.resolve(ex, ["find_feature"]);
-    this.collectScans = this.resolve(ex, ["collect_scans"]);
+    this.getScans = this.resolve(ex, ["get_scans"]);
   }
 
   private resolve<T extends Function>(
@@ -401,15 +402,9 @@ class WasmApi {
     return { x, y };
   }
 
-  collectScans(handle: number, from: number, to: number, level: number): any {
-    const rc = this.fn.collectScans(
-      handle,
-      from,
-      to,
-      level,
-      this.jsonOutputSlot,
-    );
-    if (rc !== 0) throw new Error("collect_scans failed with code " + rc);
+  getScans(handle: number, queryType: number, a: number, b: number, level: number): any {
+    const rc = this.fn.getScans(handle, queryType, a, b, level, this.jsonOutputSlot);
+    if (rc !== 0) throw new Error("get_scans failed with code " + rc);
     return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
   }
 
@@ -740,13 +735,14 @@ export class WasmBackend implements Backend {
     );
   }
 
-  collectScans(
+  getScans(
     handle: FileHandle,
-    from: number,
-    to: number,
+    queryType: number,
+    a: number,
+    b: number,
     level: number,
   ): any {
-    return this.getApi().collectScans(handle as number, from, to, level);
+    return this.getApi().getScans(handle as number, queryType, a, b, level);
   }
 
   findPeaks(

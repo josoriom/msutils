@@ -1,103 +1,235 @@
 # msutils-py
 
+Python wrappers for the msutils Rust library for LC-MS data processing.
+
 ## Install
 
 ```bash
 pip install git+https://github.com/josoriom/msutils#subdirectory=wrappers/python
 ```
 
-## Usage
+## Concepts
+
+**Sample**: A parsed mzML or ion file held in memory. Create samples with `parse_mzml()` or `parse_ion()`. Use as a context manager (`with`) to ensure automatic cleanup.
+
+**XY data**: A pair of numeric sequences where `x` is retention time and `y` is intensity.
+
+## Quick start
+
+Load a file and extract peaks in a few lines:
 
 ```python
 import msutils
 
 raw = open("sample.mzML", "rb").read()
 
-with msutils.parse_mzml(raw) as f:
-    eic   = msutils.calculate_eic(f, target_mz=174.112, from_rt=1, to_rt=15)
+with msutils.parse_mzml(raw) as sample:
+    eic   = msutils.calculate_eic(sample, target_mz=174.112, from_rt=1, to_rt=15)
     peaks = msutils.find_peaks(eic["x"], eic["y"], options={"auto_noise": True, "sn_ratio": 3.0})
     for p in peaks:
         print(f"rt={p['rt']:.3f}  intensity={p['intensity']:.0f}")
 ```
 
-The library loads automatically on import. No initialisation call needed.
+The library loads automatically on import. No initialization call needed.
 
-## Full API
+## Load files
 
-### Parsing
+### Load mzML
+
+Load an mzML file into a sample.
 
 ```python
-f = msutils.parse_mzml(bytes)
-f = msutils.parse_bin(bytes)
+sample = msutils.parse_mzml(bytes)
 ```
 
-### Conversion
+### Load ion
+
+Load an ion binary file into a sample.
 
 ```python
-msutils.bin_to_json(f)
-msutils.convert_bin_to_mzml(f)
-msutils.mzml_to_bin(f, level=5, f32_compress=False)
+sample = msutils.parse_ion(bytes)
 ```
 
-### EIC / scans
+## Convert
+
+### Sample to JSON
+
+Get JSON from a sample.
 
 ```python
-msutils.calculate_eic(f, target_mz, from_rt, to_rt, ppm_tol=20.0, mz_tol=0.005)
-msutils.collect_scans(f, from_rt, to_rt, level=1)
+json = msutils.ion_to_json(sample)
 ```
 
-### Peak detection
+### Sample to mzML
+
+Get mzML text from a sample.
 
 ```python
-msutils.find_peaks(x, y, options=None)
-msutils.get_peak(x, y, rt, range_, options=None)
-msutils.find_noise_level(y)
-msutils.calculate_baseline(y, baseline_window=0, baseline_window_factor=0)
+mzml = msutils.ion_to_mzml(sample)
 ```
 
-### Batch peak extraction
+### Sample to ion
+
+Convert a sample to compressed ion bytes.
 
 ```python
-targets = [{"rt": 5.3, "mz": 174.112, "range": 0.5, "id": "A"}]
-
-msutils.get_peaks_from_eic(f, targets, from_rt=0.5, to_rt=5.0, options=None, cores=1)
-msutils.get_peaks_from_chrom(f, items, options=None, cores=1)
+ion_bytes = msutils.mzml_to_ion(sample, level=5, f32_compress=False)
 ```
 
-### Feature detection
+### Sample instance methods
+
+Convert using sample methods.
 
 ```python
-msutils.find_features(
-    f, from_rt=1, to_rt=15,
-    eic     = {"ppm_tolerance": 10, "mz_tolerance": 0.005},
-    grid    = {"start": 40, "end": 1000, "step_size": 0.005},
-    options = {"auto_noise": True, "sn_ratio": 3},
-    cores   = 4,
+with msutils.parse_mzml(data) as sample:
+    json = sample.to_json()
+    mzml = sample.to_mzml()
+    ion_bytes = sample.to_ion(level=12)
+    sample.dispose()
+```
+
+## Extract from samples
+
+### Extract EIC
+
+Get an extracted ion chromatogram for one m/z from a sample.
+
+```python
+eic = msutils.calculate_eic(sample, target_mz=174.112, from_rt=1, to_rt=15, ppm_tol=20.0, mz_tol=0.005)
+```
+
+### Get scans
+
+Get scans from a sample by retention time range and MS level.
+
+```python
+scans = msutils.get_scans(sample, rt_range=(1, 15), level=1)
+```
+
+## Process XY data
+
+### Calculate baseline
+
+Estimate a baseline for XY data.
+
+```python
+baseline = msutils.calculate_baseline(y, baseline_window=0, baseline_window_factor=0)
+```
+
+### Find noise level
+
+Estimate the noise level in XY data.
+
+```python
+noise = msutils.find_noise_level(y)
+```
+
+### Find peaks
+
+Find all peaks in XY data.
+
+```python
+peaks = msutils.find_peaks(x, y, options={"auto_noise": True, "sn_ratio": 3.0})
+```
+
+### Get single peak
+
+Find one peak near a target retention time in XY data.
+
+```python
+peak = msutils.get_peak(x, y, rt=5.3, range_=0.6, options={"auto_noise": True})
+```
+
+## Find peaks from samples
+
+### From EICs
+
+Find peaks for many targets using extracted ion chromatograms from a sample.
+
+```python
+targets = [
+    {"rt": 5.3, "mz": 174.112, "range": 0.5, "id": "compound_A"},
+    {"rt": 7.1, "mz": 203.156, "range": 0.5, "id": "compound_B"},
+]
+
+peaks = msutils.get_peaks_from_eic(
+    sample, targets,
+    from_rt=0.5, to_rt=10.0,
+    options={"auto_noise": True},
+    cores=2
 )
+```
 
-msutils.find_feature(
-    f, targets,
-    scan_eic = {"ppm_tolerance": 10, "mz_tolerance": 0.003},
-    eic      = {"ppm_tolerance": 20, "mz_tolerance": 0.005},
-    options  = {"auto_noise": True},
-    cores    = 2,
-)
+### From chromatograms
 
-msutils.get_features(
-    "/path/to/bin/dir", from_rt=0, to_rt=20,
-    eic      = {"ppm_tolerance": 5},
-    grid     = {"start": 50, "end": 1000, "step_size": 0.01},
-    grouping = {"ppm_tolerance": 5, "rt_tolerance": 0.05, "frequency": 2},
-    cores    = 8,
+Find peaks from stored chromatograms in a sample.
+
+```python
+items = [
+    {"idx": 0, "rt": 5.3, "window": 0.5},
+    {"idx": 5, "rt": 7.1, "window": 0.5},
+]
+
+peaks = msutils.get_peaks_from_chrom(sample, items, options=None, cores=2)
+```
+
+## Untargeted
+
+### Targeted feature detection
+
+Find targeted features by m/z and retention time from a sample.
+
+```python
+targets = [
+    {"rt": 5.3, "mz": 174.112, "range": 0.5, "id": "A"},
+    {"rt": 7.1, "mz": 203.156, "range": 0.5, "id": "B"},
+]
+
+features = msutils.find_feature(
+    sample, targets,
+    scan_eic={"ppm_tolerance": 10, "mz_tolerance": 0.003},
+    eic={"ppm_tolerance": 20, "mz_tolerance": 0.005},
+    options={"auto_noise": True},
+    cores=2,
 )
 ```
 
-### Peak options
+### From single sample
 
-The `options` parameter accepts a plain dict:
+Find all features in a sample.
 
 ```python
-{
+features = msutils.find_features(
+    sample,
+    from_rt=1, to_rt=15,
+    eic={"ppm_tolerance": 10, "mz_tolerance": 0.005},
+    grid={"start": 40, "end": 1000, "step_size": 0.005},
+    options={"auto_noise": True, "sn_ratio": 3},
+    cores=4,
+)
+```
+
+### Align features across samples
+
+Find and align features across many samples.
+
+```python
+features = msutils.get_features(
+    "/path/to/ion/dir",
+    from_rt=0, to_rt=20,
+    eic={"ppm_tolerance": 5},
+    grid={"start": 50, "end": 1000, "step_size": 0.01},
+    grouping={"ppm_tolerance": 5, "rt_tolerance": 0.05, "frequency": 2},
+    cores=8,
+)
+```
+
+## Peak detection options
+
+Pass peak detection options as a dictionary:
+
+```python
+options = {
     "integral_threshold":     0.0,
     "intensity_threshold":    150.0,
     "width_threshold":        5,
@@ -110,14 +242,4 @@ The `options` parameter accepts a plain dict:
     "window_size":            0,
     "sn_ratio":               3.0,
 }
-```
-
-### MzMlFile instance methods
-
-```python
-with msutils.parse_mzml(data) as f:
-    f.to_json()
-    f.to_mzml()
-    f.to_bin(level=12)
-    f.dispose()
 ```

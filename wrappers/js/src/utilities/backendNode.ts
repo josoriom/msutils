@@ -146,14 +146,15 @@ export class NodeBackend implements Backend {
     ) as { x: Float64Array; y: Float64Array };
   }
 
-  collectScans(
+  getScans(
     handle: FileHandle,
-    from: number,
-    to: number,
+    queryType: number,
+    a: number,
+    b: number,
     level: number,
   ): any {
     return JSON.parse(
-      this.native.collectScans(handle, from, to, level) as string,
+      this.native.getScans(handle, queryType, a, b, level) as string,
     );
   }
 
