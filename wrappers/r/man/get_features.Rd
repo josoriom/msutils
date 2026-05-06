@@ -1,12 +1,15 @@
 \name{get_features}
 \alias{get_features}
-\title{Align features across a directory of samples}
+\title{Find and align features across many files}
 \description{
-Finds features in each sample file and then aligns them across one folder.
+Detects features in every file in a folder and groups them by m/z and RT.
+Returns a consensus feature table aligned across all samples.
 }
 \usage{
 get_features(
-  dir_path, from = 0, to = 10,
+  dir_path,
+  from = 0,
+  to = 10,
   eic_ppm_tol = 10,
   eic_mz_tol = 0.005,
   grid_start = 40,
@@ -33,50 +36,48 @@ get_features(
 )
 }
 \arguments{
-  \item{dir_path}{Path to a folder with sample files.}
-  \item{from}{Start retention time.}
-  \item{to}{End retention time.}
-  \item{eic_ppm_tol}{PPM tolerance for EIC extraction.}
-  \item{eic_mz_tol}{Absolute m/z tolerance for EIC extraction.}
-  \item{grid_start}{Start m/z for the search grid.}
-  \item{grid_end}{End m/z for the search grid.}
-  \item{grid_step}{Grid step size.}
-  \item{group_ppm_tol}{PPM tolerance used during alignment grouping.}
-  \item{group_da_tol}{Absolute m/z tolerance used during alignment grouping.}
-  \item{group_rt_tol}{RT tolerance used during alignment grouping.}
-  \item{frequency}{Minimum number of samples required for a consensus feature.}
-  \item{cores}{Number of CPU cores to use.}
-  \item{use_gpu}{Logical flag to enable GPU acceleration when available.}
-  \item{batch_size}{Optional GPU batch size.}
-  \item{integral_threshold}{Minimum peak area threshold.}
-  \item{intensity_threshold}{Minimum intensity threshold.}
-  \item{width_threshold}{Minimum peak width.}
-  \item{noise}{Manual noise estimate.}
-  \item{auto_noise}{Logical flag to estimate noise automatically.}
-  \item{auto_baseline}{Logical flag to estimate baseline automatically.}
-  \item{baseline_window}{Baseline window size.}
-  \item{baseline_window_factor}{Baseline window factor.}
-  \item{allow_overlap}{Logical flag to allow overlapping peaks.}
-  \item{window_size}{Optional smoothing or local window size.}
-  \item{sn_ratio}{Signal-to-noise ratio threshold.}
+  \item{dir_path}{Path to a folder with mzML or ion files.}
+  \item{from}{Start retention time (minutes). Default 0.}
+  \item{to}{End retention time (minutes). Default 10.}
+  \item{eic_ppm_tol}{PPM tolerance for EIC extraction. Default 10.}
+  \item{eic_mz_tol}{Absolute m/z tolerance (Da) for EIC extraction. Default 0.005.}
+  \item{grid_start}{Lower m/z bound of the search grid (Da). Default 40.}
+  \item{grid_end}{Upper m/z bound of the search grid (Da). Default 1000.}
+  \item{grid_step}{Grid step size (ppm). Default 0.005.}
+  \item{group_ppm_tol}{PPM tolerance used when grouping features across samples. Default 5.}
+  \item{group_da_tol}{Absolute m/z tolerance (Da) used when grouping features. Default 0.0025.}
+  \item{group_rt_tol}{RT tolerance (minutes) used when grouping features. Default 0.05.}
+  \item{frequency}{Minimum number of samples in which a feature must appear to be kept. Default 1.}
+  \item{cores}{Number of CPU cores to use. Default 1.}
+  \item{use_gpu}{Use GPU acceleration if available. Default \code{FALSE}.}
+  \item{batch_size}{GPU batch size. \code{0} selects automatically.}
+  \item{integral_threshold}{Minimum peak area. \code{NaN} disables.}
+  \item{intensity_threshold}{Minimum apex intensity. Default 1000.}
+  \item{width_threshold}{Minimum peak width in points. Default 5.}
+  \item{noise}{Fixed noise level. \code{NaN} disables.}
+  \item{auto_noise}{Estimate noise automatically. Default \code{TRUE}.}
+  \item{auto_baseline}{Subtract rolling baseline before detection. Default \code{TRUE}.}
+  \item{baseline_window}{Baseline window size. \code{0} uses a default.}
+  \item{baseline_window_factor}{Scales the baseline window. \code{0} uses a default.}
+  \item{allow_overlap}{Allow overlapping peak boundaries. Default \code{FALSE}.}
+  \item{window_size}{Savitzky-Golay smoothing window. \code{0} selects automatically.}
+  \item{sn_ratio}{Minimum signal-to-noise ratio. Default 1.}
 }
 \value{
-A data frame with features (rt and mz) found in the dataset.
-}
-\details{
-The folder should contain supported sample files such as \code{.mzML} or \code{.ion}. GPU is only used during per-sample feature detection.
+A data frame with one row per consensus feature. Columns include \code{mz},
+\code{rt}, \code{from}, \code{to}, \code{intensity}, \code{integral},
+\code{np}, \code{frequency} (number of samples), \code{rmz} (representative m/z).
 }
 \examples{
-\dontrun{
-aligned <- get_features(
+\donttest{
+features <- get_features(
   "/path/to/samples",
-  from = 0,
-  to = 10,
+  from = 0, to = 10,
   cores = 4L,
-  use_gpu = TRUE
+  frequency = 2L
 )
 }
 }
 \seealso{
-\code{\link{find_features}()}, \code{\link{parse_mzml}()}, \code{\link{parse_bin}()}
+\code{\link{find_features}()}, \code{\link{parse_mzml}()}, \code{\link{parse_ion}()}
 }

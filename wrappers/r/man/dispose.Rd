@@ -1,21 +1,19 @@
 \name{dispose}
 \alias{dispose}
-\title{Dispose a native handle}
+\title{Free a sample file}
 \description{
-Releases a file handle created by \code{msutils}.
+Releases native memory held by a sample file. Call this when you want to free
+memory immediately rather than waiting for R garbage collection.
 }
 \usage{
-dispose(bin)
+dispose(file)
 }
 \arguments{
-  \item{bin}{A file handle returned by \code{\link{parse_mzml}()} or \code{\link{parse_bin}()}.}
+  \item{file}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
 }
 \value{
-Called for its side effect of freeing native memory.
-}
-\details{
-You usually do not need this. R will free the handle later. Use this when you want to free memory now.
+\code{NULL}, called for its side effect.
 }
 \seealso{
-\code{\link{parse_mzml}()}, \code{\link{parse_bin}()}
+\code{\link{parse_mzml}()}, \code{\link{parse_ion}()}
 }

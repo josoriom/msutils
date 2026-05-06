@@ -351,7 +351,7 @@ SEXP C_parse_mzml(SEXP data)
   return ptr;
 }
 
-SEXP C_bin_to_json(SEXP bin)
+SEXP C_ion_to_json(SEXP bin)
 {
   MzML *handle = GetHandle(bin);
   REQUIRE_BOUND(ABI.bin_to_json, "bin_to_json");
@@ -364,7 +364,7 @@ SEXP C_bin_to_json(SEXP bin)
   return res;
 }
 
-SEXP C_bin_to_mzml(SEXP bin)
+SEXP C_ion_to_mzml(SEXP bin)
 {
   MzML *handle = GetHandle(bin);
   REQUIRE_BOUND(ABI.bin_to_mzml, "bin_to_mzml");
@@ -377,7 +377,7 @@ SEXP C_bin_to_mzml(SEXP bin)
   return res;
 }
 
-SEXP C_mzml_to_bin(SEXP bin, SEXP level, SEXP f32_compress)
+SEXP C_mzml_to_ion(SEXP bin, SEXP level, SEXP f32_compress)
 {
   MzML *handle = GetHandle(bin);
   if (!(TYPEOF(level) == INTSXP || TYPEOF(level) == REALSXP) || LENGTH(level) != 1)
@@ -720,7 +720,7 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
   return res;
 }
 
-SEXP C_parse_bin(SEXP bin, SEXP max_cache_size)
+SEXP C_parse_ion(SEXP bin, SEXP max_cache_size)
 {
   if (TYPEOF(bin) != RAWSXP)
     error("msutils: data must be a raw vector");

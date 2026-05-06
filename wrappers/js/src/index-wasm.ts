@@ -9,4 +9,4 @@ export async function init(): Promise<void> {
 }
 
 export * from "./utilities/api";
-export { MzMlFile } from "./utilities/mzmlFile";
+export { SampleFile } from "./utilities/sampleFile";

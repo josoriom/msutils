@@ -1,5 +1,5 @@
 import type { Backend } from "./backend";
-import { MzMlFile } from "./mzmlFile";
+import { SampleFile } from "./sampleFile";
 import { camelizeKeys, toCores, toUint8 } from "./shared";
 import { packPeakOptions, encodeTargetIds, unpackTargets } from "./pack";
 import type {
@@ -83,48 +83,81 @@ async function backendAsync(): Promise<Backend> {
   return backend();
 }
 
-function assertFile(file: MzMlFile, caller: string): void {
-  if (!(file instanceof MzMlFile) || !file._handle) {
-    throw new Error(`${caller}: expects a valid MzMlFile object`);
+function assertFile(file: SampleFile, caller: string): void {
+  if (!(file instanceof SampleFile) || !file._handle) {
+    throw new Error(`${caller}: expects a valid SampleFile object`);
   }
 }
 
-export async function parseMzML(data: BinaryInput): Promise<MzMlFile> {
+/**
+ * Parse an mzML file buffer into a {@link SampleFile}.
+ *
+ * @param data - Raw mzML file bytes.
+ * @returns Loaded sample.
+ */
+export async function parseMzML(data: BinaryInput): Promise<SampleFile> {
   const b = await backendAsync();
   const handle = b.parseMzML(toUint8(data));
-  return new MzMlFile(handle, b);
+  return new SampleFile(handle, b);
 }
 
-export async function parseBin(
+/**
+ * Parse an ion binary buffer into a {@link SampleFile}.
+ *
+ * @param data - Raw ion file bytes.
+ * @param options.maxCacheSize - Maximum scan cache size. Default 0 (unlimited).
+ * @returns Loaded sample.
+ */
+export async function parseIon(
   data: BinaryInput,
   options: { maxCacheSize?: number } = {},
-): Promise<MzMlFile> {
+): Promise<SampleFile> {
   const { maxCacheSize = 0 } = options;
   if (maxCacheSize < 0 || !Number.isFinite(maxCacheSize)) {
     throw new TypeError(
-      "parseBin: maxCacheSize must be a non-negative integer",
+      "parseIon: maxCacheSize must be a non-negative integer",
     );
   }
   const b = await backendAsync();
   const handle = b.parseBin(toUint8(data), maxCacheSize);
-  return new MzMlFile(handle, b);
+  return new SampleFile(handle, b);
 }
 
-export function binToJson(file: MzMlFile): string {
-  assertFile(file, "binToJson");
+/**
+ * Return the sample data as a JSON string.
+ *
+ * @param file - Loaded sample.
+ * @returns JSON string representation of the sample.
+ */
+export function ionToJson(file: SampleFile): string {
+  assertFile(file, "ionToJson");
   return JSON.stringify(camelizeKeys(backend().fileToJson(file._handle!)));
 }
 
-export function convertBinToMzml(file: MzMlFile): string {
-  assertFile(file, "convertBinToMzml");
+/**
+ * Serialize a sample back to mzML format.
+ *
+ * @param file - Loaded sample.
+ * @returns Full mzML file content as a string.
+ */
+export function ionToMzml(file: SampleFile): string {
+  assertFile(file, "ionToMzml");
   return backend().fileToMzml(file._handle!);
 }
 
-export function mzmlToBin(
-  file: MzMlFile,
+/**
+ * Encode a sample as compressed ion binary bytes.
+ *
+ * @param file - Loaded sample.
+ * @param options.level - Compression level, 0 (none) to 22 (max). Default 5.
+ * @param options.f32Compress - Compress intensity values to 32-bit float. Default false.
+ * @returns Raw ion binary bytes.
+ */
+export function mzmlToIon(
+  file: SampleFile,
   options: { level?: number; f32Compress?: boolean } = {},
 ): Uint8Array {
-  assertFile(file, "mzmlToBin");
+  assertFile(file, "mzmlToIon");
   const { level = 5, f32Compress = false } = options;
   if (
     typeof level !== "number" ||
@@ -133,16 +166,26 @@ export function mzmlToBin(
     level < 0 ||
     level > 22
   ) {
-    throw new RangeError("mzmlToBin: level must be an integer in [0,22]");
+    throw new RangeError("mzmlToIon: level must be an integer in [0,22]");
   }
   if (typeof f32Compress !== "boolean") {
-    throw new TypeError("mzmlToBin: f32Compress must be a boolean");
+    throw new TypeError("mzmlToIon: f32Compress must be a boolean");
   }
   return backend().fileToBin(file._handle!, level, f32Compress);
 }
 
+/**
+ * Extract an extracted ion chromatogram (EIC) for a target m/z.
+ *
+ * @param file - Loaded sample.
+ * @param targetMz - Target m/z value.
+ * @param fromTo - Retention time range `{ from, to }` in minutes.
+ * @param ppmTol - PPM tolerance. Default 20.
+ * @param mzTol - Absolute m/z tolerance in Da. Default 0.005.
+ * @returns Object with `x` (retention times) and `y` (intensities) arrays.
+ */
 export function calculateEic(
-  file: MzMlFile,
+  file: SampleFile,
   targetMz: number,
   fromTo: FromTo,
   ppmTol = 20,
@@ -160,6 +203,14 @@ export function calculateEic(
   );
 }
 
+/**
+ * Detect peaks in a chromatographic trace.
+ *
+ * @param x - Retention time array.
+ * @param y - Intensity array.
+ * @param opts - Peak detection options.
+ * @returns Array of detected peaks.
+ */
 export function findPeaks(
   x: Float64Array,
   y: Float64Array,
@@ -168,6 +219,16 @@ export function findPeaks(
   return backend().findPeaks(x, y, packPeakOptions(opts));
 }
 
+/**
+ * Find a single peak near a target retention time.
+ *
+ * @param x - Retention time array.
+ * @param y - Intensity array.
+ * @param rt - Target retention time in minutes.
+ * @param range - Search window half-width in minutes.
+ * @param opts - Peak detection options.
+ * @returns The best matching peak.
+ */
 export function getPeak(
   x: Float64Array,
   y: Float64Array,
@@ -178,10 +239,24 @@ export function getPeak(
   return backend().getPeak(x, y, rt, range, packPeakOptions(opts));
 }
 
+/**
+ * Estimate the noise level of an intensity array.
+ *
+ * @param y - Intensity array.
+ * @returns Estimated noise level.
+ */
 export function findNoiseLevel(y: Float64Array | Float32Array): number {
   return backend().findNoiseLevel(y);
 }
 
+/**
+ * Compute the rolling baseline of an intensity array.
+ *
+ * @param y - Intensity array.
+ * @param options.baselineWindow - Rolling window size in points. Default auto.
+ * @param options.baselineWindowFactor - Window scaling factor. Default auto.
+ * @returns Baseline array, same length as `y`.
+ */
 export function calculateBaseline(
   y: Float64Array | ArrayLike<number>,
   options?: BaselineOptions,
@@ -212,8 +287,16 @@ function assertLevel(level: number, caller: string): void {
   }
 }
 
+/**
+ * Retrieve centroid scans from a sample by retention time or precursor m/z.
+ *
+ * @param file - Loaded sample.
+ * @param query - Query by RT range, closest RT, m/z range, or closest m/z.
+ * @param level - MS level (1 = MS1, 2 = MS2, etc.). Default 1.
+ * @returns Array of scans for range queries, single scan (or null) for closest queries.
+ */
 export function getScans(
-  file: MzMlFile,
+  file: SampleFile,
   query: ScanQuery,
   level = 1,
 ): CentroidScan[] | CentroidScan | null {
@@ -264,8 +347,18 @@ export function getScans(
   return raw as CentroidScan[];
 }
 
+/**
+ * Extract and pick peaks for a list of targets using their EIC traces.
+ *
+ * @param file - Loaded sample.
+ * @param targets - List of targets with `id`, `rt`, `mz`, and `ranges`.
+ * @param fromTo - Retention time range `{ from, to }` in minutes.
+ * @param options - Peak detection options.
+ * @param cores - Number of CPU cores to use. Default 1.
+ * @returns Array of found features, one per target.
+ */
 export function getPeaksFromEic(
-  file: MzMlFile,
+  file: SampleFile,
   targets: Target[],
   fromTo: FromTo,
   options?: PeakOptions,
@@ -292,8 +385,17 @@ export function getPeaksFromEic(
   );
 }
 
+/**
+ * Pick peaks from pre-computed chromatogram traces.
+ *
+ * @param file - Loaded sample.
+ * @param items - List of chromatogram items with `idx`, `rt`, and `window`.
+ * @param options - Peak detection options.
+ * @param cores - Number of CPU cores to use. Default 1.
+ * @returns Array of chromatogram peaks.
+ */
 export function getPeaksFromChrom(
-  file: MzMlFile,
+  file: SampleFile,
   items: ChromItem[],
   options?: PeakOptions,
   cores = 1,
@@ -325,8 +427,16 @@ export function getPeaksFromChrom(
   );
 }
 
+/**
+ * Detect all chromatographic features across an m/z grid.
+ *
+ * @param file - Loaded sample.
+ * @param fromTo - Retention time range `{ from, to }` in minutes.
+ * @param options - Feature detection options (eic, grid, findPeak, cores).
+ * @returns Array of detected features.
+ */
 export function findFeatures(
-  file: MzMlFile,
+  file: SampleFile,
   fromTo: FromTo,
   options: FindFeaturesOptions = {},
 ): Feature[] {
@@ -380,8 +490,16 @@ export function findFeatures(
   );
 }
 
+/**
+ * Find a feature for each target using its EIC and scan data.
+ *
+ * @param file - Loaded sample.
+ * @param targets - List of targets with `id`, `rt`, `mz`, and `ranges`.
+ * @param options - Detection options including `scanEic`, `eic`, `findPeak`, and `cores`.
+ * @returns Array of found features, one per target.
+ */
 export function findFeature(
-  file: MzMlFile,
+  file: SampleFile,
   targets: Target[],
   options: FindFeaturesOptions & {
     scanEic?: { ppmTolerance?: number; mzTolerance?: number };
@@ -430,6 +548,15 @@ export function findFeature(
   );
 }
 
+/**
+ * Detect and group consensus features across multiple samples in a directory.
+ * Node.js only — not available in the WASM build.
+ *
+ * @param directoryPath - Path to a directory containing ion files.
+ * @param fromTo - Retention time range `{ from, to }` in minutes.
+ * @param options - Feature detection and grouping options.
+ * @returns Array of consensus features aligned across samples.
+ */
 export function getFeatures(
   directoryPath: string,
   fromTo: FromTo,

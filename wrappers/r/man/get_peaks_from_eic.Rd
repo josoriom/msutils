@@ -1,12 +1,13 @@
 \name{get_peaks_from_eic}
 \alias{get_peaks_from_eic}
-\title{Batch targeted peak detection from EICs}
+\title{Find peaks for many targets using EICs}
 \description{
-Finds many target peaks by first building EICs and then searching near the given RT values.
+Builds an EIC for each target and finds the best peak near the given RT.
+Use this for batch targeted peak extraction from one file.
 }
 \usage{
 get_peaks_from_eic(
-  bin, df, from = 0.5, to = 5, cores = 1L,
+  file, df, from = 0.5, to = 5, cores = 1L,
   integral_threshold = NaN,
   intensity_threshold = 1000,
   width_threshold = 5L,
@@ -21,38 +22,37 @@ get_peaks_from_eic(
 )
 }
 \arguments{
-  \item{bin}{A file handle returned by \code{\link{parse_mzml}()} or \code{\link{parse_bin}()}.}
-  \item{df}{A data frame with columns \code{id}, \code{rt}, \code{mz}, and \code{ranges}.}
-  \item{from}{Start retention time for the EIC extraction window.}
-  \item{to}{End retention time for the EIC extraction window.}
-  \item{cores}{Number of CPU cores to use.}
-  \item{integral_threshold}{Minimum peak area threshold.}
-  \item{intensity_threshold}{Minimum intensity threshold.}
-  \item{width_threshold}{Minimum peak width.}
-  \item{noise}{Manual noise estimate.}
-  \item{auto_noise}{Logical flag to estimate noise automatically.}
-  \item{auto_baseline}{Logical flag to estimate baseline automatically.}
-  \item{baseline_window}{Baseline window size.}
-  \item{baseline_window_factor}{Baseline window factor.}
-  \item{allow_overlap}{Logical flag to allow overlapping peaks.}
-  \item{window_size}{Optional smoothing or local window size.}
-  \item{sn_ratio}{Signal-to-noise ratio threshold.}
+  \item{file}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
+  \item{df}{Data frame with columns \code{id} (character), \code{rt} (numeric),
+    \code{mz} (numeric), \code{ranges} (numeric RT half-window).}
+  \item{from}{EIC extraction start time (minutes). Default 0.5.}
+  \item{to}{EIC extraction end time (minutes). Default 5.}
+  \item{cores}{Number of CPU cores to use. Default 1.}
+  \item{integral_threshold}{Minimum peak area. \code{NaN} disables.}
+  \item{intensity_threshold}{Minimum apex intensity. Default 1000.}
+  \item{width_threshold}{Minimum peak width in points. Default 5.}
+  \item{noise}{Fixed noise level. \code{NaN} disables.}
+  \item{auto_noise}{Estimate noise automatically. Default \code{TRUE}.}
+  \item{auto_baseline}{Subtract rolling baseline before detection. Default \code{TRUE}.}
+  \item{baseline_window}{Baseline window size. \code{0} uses a default.}
+  \item{baseline_window_factor}{Scales the baseline window. \code{0} uses a default.}
+  \item{allow_overlap}{Allow overlapping peak boundaries. Default \code{FALSE}.}
+  \item{window_size}{Savitzky-Golay smoothing window. \code{0} selects automatically.}
+  \item{sn_ratio}{Minimum signal-to-noise ratio. Default 1.}
 }
 \value{
-A data frame of targeted peaks.
-}
-\details{
-The input table must have the columns \code{id}, \code{rt}, \code{mz}, and \code{ranges}.
+A data frame with one row per target. Columns include \code{id}, \code{mz},
+\code{rt}, \code{from}, \code{to}, \code{intensity}, \code{integral}.
 }
 \examples{
-\dontrun{
+\donttest{
 targets <- data.frame(
-  id = c("Leucine", "Alanine"),
-  rt = c(4.15, 2.39),
-  mz = c(302.1499, 260.1030),
+  id     = c("Leucine", "Alanine"),
+  rt     = c(4.15, 2.39),
+  mz     = c(302.1499, 260.1030),
   ranges = c(0.2, 0.2)
 )
-get_peaks_from_eic(file, targets, cores = 2L)
+get_peaks_from_eic(sample, targets, cores = 2L)
 }
 }
 \seealso{

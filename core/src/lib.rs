@@ -1108,6 +1108,7 @@ fn build_fp(opts: *const CPeakPOptions) -> FindPeaksOptions {
             get_boundaries_options: Some(Default::default()),
             filter_peaks_options: Some(Default::default()),
             baseline_options: Some(Default::default()),
+            artifact_filter_options: Some(Default::default()),
         };
     }
     let o = unsafe { *opts };
@@ -1136,5 +1137,6 @@ fn build_fp(opts: *const CPeakPOptions) -> FindPeaksOptions {
                 .then_some(o.baseline_window_factor as usize),
             level: Some(1),
         }),
+        artifact_filter_options: Some(Default::default()),
     }
 }

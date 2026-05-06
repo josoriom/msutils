@@ -23,7 +23,7 @@ from msutils._pack import (
     unpack_targets,
 )
 from msutils._shared import to_cores
-from msutils.file import MzMlFile
+from msutils.file import SampleFile
 
 _abi: Optional[_ABI] = None
 
@@ -107,21 +107,21 @@ def _get_numeric(mapping: Optional[Dict], key: str, default: float) -> float:
     return parsed if math.isfinite(parsed) else default
 
 
-def _bin_to_json_raw(file: MzMlFile) -> Any:
+def _ion_to_json_raw(file: SampleFile) -> Any:
     abi = file._abi
     buf = _Buf()
     _check("bin_to_json", abi.bin_to_json(file.handle, ctypes.byref(buf)))
     return buf_to_json(abi, buf)
 
 
-def _bin_to_mzml_raw(file: MzMlFile) -> str:
+def _ion_to_mzml_raw(file: SampleFile) -> str:
     abi = file._abi
     buf = _Buf()
     _check("bin_to_mzml", abi.bin_to_mzml(file.handle, ctypes.byref(buf)))
     return buf_to_str(abi, buf)
 
 
-def _mzml_to_bin_raw(file: MzMlFile, level: int, f32_compress: bool) -> bytes:
+def _mzml_to_ion_raw(file: SampleFile, level: int, f32_compress: bool) -> bytes:
     abi = file._abi
     if not (0 <= level <= 22):
         raise ValueError("level must be in [0, 22]")
@@ -138,7 +138,14 @@ def _mzml_to_bin_raw(file: MzMlFile, level: int, f32_compress: bool) -> bytes:
     return buf_to_bytes(abi, buf)
 
 
-def parse_mzml(data: bytes) -> MzMlFile:
+def parse_mzml(data: bytes) -> SampleFile:
+    """Load an mzML file.
+
+    Args:
+        data: Raw bytes from one mzML file.
+
+    Returns: A SampleFile for use in other msutils functions.
+    """
     abi = _get_abi()
     arr = (c_uint8 * len(data)).from_buffer_copy(data)
     ptr = ctypes.c_void_p()
@@ -146,13 +153,21 @@ def parse_mzml(data: bytes) -> MzMlFile:
         ctypes.cast(arr, POINTER(c_uint8)), len(data),
         ctypes.byref(ptr),
     ))
-    return MzMlFile(ptr, abi)
+    return SampleFile(ptr, abi)
 
 
-def parse_bin(data: bytes, max_cache_size: int = 0) -> MzMlFile:
+def parse_ion(data: bytes, max_cache_size: int = 0) -> SampleFile:
+    """Load an ion file.
+
+    Args:
+        data: Raw bytes from one ion file.
+        max_cache_size: Cache size in bytes. 0 sets no limit. Larger valuesspeed up repeated reads at the cost of RAM (default 0).
+
+    Returns: A SampleFile for use in other msutils functions.
+    """
     abi = _get_abi()
     if not isinstance(max_cache_size, int) or max_cache_size < 0:
-        raise ValueError("parse_bin: max_cache_size must be a non-negative integer")
+        raise ValueError("parse_ion: max_cache_size must be a non-negative integer")
     arr = (c_uint8 * len(data)).from_buffer_copy(data)
     ptr = ctypes.c_void_p()
     _check("parse_bin", abi.parse_bin(
@@ -161,37 +176,74 @@ def parse_bin(data: bytes, max_cache_size: int = 0) -> MzMlFile:
         c_size_t(max_cache_size),
         ctypes.byref(ptr),
     ))
-    return MzMlFile(ptr, abi)
+    return SampleFile(ptr, abi)
 
 
-def bin_to_json(file: MzMlFile) -> Any:
-    return _bin_to_json_raw(file)
+def ion_to_json(file: SampleFile) -> Any:
+    """Get JSON from a sample.
+
+    Args:
+        file: SampleFile from parse_mzml() or parse_ion().
+
+    Returns: Parsed JSON object with all run metadata, spectra, and chromatograms.
+    """
+    return _ion_to_json_raw(file)
 
 
-def convert_bin_to_mzml(file: MzMlFile) -> str:
-    return _bin_to_mzml_raw(file)
+def ion_to_mzml(file: SampleFile) -> str:
+    """Get mzML file from a sample.
+
+    Args:
+        file: SampleFile from parse_mzml() or parse_ion().
+
+    Returns: A string with valid mzML content.
+    """
+    return _ion_to_mzml_raw(file)
 
 
-def mzml_to_bin(
-    file: MzMlFile,
+def mzml_to_ion(
+    file: SampleFile,
     level: int = 12,
     f32_compress: bool = False,
 ) -> bytes:
+    """Convert a sample to ion binary bytes.
+
+    Args:
+        file: SampleFile from parse_mzml() or parse_ion().
+        level: Compression level, integer 0 (none) to 22 (max). Default 12.
+        f32_compress: If True, compress intensity values to 32-bit float.
+
+    Returns: Raw ion binary bytes.
+    """
     if not isinstance(level, int) or not (0 <= level <= 22):
-        raise ValueError("mzml_to_bin: level must be an integer in [0, 22]")
+        raise ValueError("mzml_to_ion: level must be an integer in [0, 22]")
     if not isinstance(f32_compress, bool):
-        raise TypeError("mzml_to_bin: f32_compress must be a bool")
-    return _mzml_to_bin_raw(file, level, f32_compress)
+        raise TypeError("mzml_to_ion: f32_compress must be a bool")
+    return _mzml_to_ion_raw(file, level, f32_compress)
 
 
 def calculate_eic(
-    file: MzMlFile,
+    file: SampleFile,
     target_mz: float,
     from_rt: float,
     to_rt: float,
     ppm_tol: float = 20.0,
     mz_tol: float  = 0.005,
 ) -> Dict[str, np.ndarray]:
+    """Get an extracted ion chromatogram (EIC).
+
+    Extracts an EIC for one target m/z over a given retention-time range.
+
+    Args:
+        file: SampleFile from parse_mzml() or parse_ion().
+        target_mz: Target m/z value (Da).
+        from_rt: Start retention time (minutes).
+        to_rt: End retention time (minutes).
+        ppm_tol: Mass tolerance in ppm. Default 20.
+        mz_tol: Absolute mass tolerance in Da. Default 0.005.
+
+    Returns: Dict with keys 'x' (retention time array) and 'y' (intensity array).
+    """
     abi = _get_abi()
     buf_x, buf_y = _Buf(), _Buf()
     _check("calculate_eic", abi.calculate_eic(
@@ -208,6 +260,28 @@ def find_peaks(
     y: Sequence,
     options: Optional[Dict[str, Any]] = None,
 ) -> List[Dict]:
+    """Find all peaks in a trace.
+
+    Detects peaks in one numeric trace (x = time, y = intensity).
+    Returns all peaks that pass the given filters.
+
+    Args:
+        x: Retention-time sequence. Minimum 3 points.
+        y: Intensity sequence, same length as x.
+        options: Optional dict of peak filter settings. Keys:
+            intensity_threshold (float), 
+            width_threshold (int),
+            noise (float),
+            auto_noise (bool: default: True),
+            auto_baseline (bool: default: True),
+            baseline_window (int),
+            baseline_window_factor (int),
+            allow_overlap (bool),
+            sn_ratio (float).
+
+    Returns:
+        List of dicts, one per peak. Each dict has keys: rt, from, to, intensity and integral.
+    """
     abi = _get_abi()
     x_array, y_array = _to_f64_array(x), _to_f64_array(y)
     if len(x_array) != len(y_array) or len(x_array) < 3:
@@ -228,6 +302,22 @@ def get_peak(
     range_: float,
     options: Optional[Dict[str, Any]] = None,
 ) -> Dict:
+    """Find one peak near a target RT.
+
+    Finds the best peak within a given retention-time window around one
+    target RT. Use this when you already know approximately where to look.
+
+    Args:
+        x: Retention-time sequence. Minimum 3 points.
+        y: Intensity sequence, same length as x.
+        rt: Target retention time.
+        range_: Half-width of the search window around rt.
+        options: Optional dict of peak filter settings (same keys as find_peaks).
+
+    Returns:
+        Dict with peak fields: rt, from, to, intensity, integral.
+        Empty dict if no peak was found.
+    """
     abi = _get_abi()
     x_array, y_array = _to_f64_array(x), _to_f64_array(y)
     if len(x_array) != len(y_array) or len(x_array) < 3:
@@ -247,6 +337,14 @@ def get_peak(
 
 
 def find_noise_level(y: Sequence) -> float:
+    """Estimate the noise level of a signal.
+
+    Args:
+        y: Intensity sequence.
+
+    Returns:
+        Estimated noise level as a float.
+    """
     abi = _get_abi()
     arr = np.asarray(y, dtype=np.float32)
     ptr = arr.ctypes.data_as(POINTER(c_float))
@@ -258,6 +356,19 @@ def calculate_baseline(
     baseline_window: int = 0,
     baseline_window_factor: int = 0,
 ) -> np.ndarray:
+    """Estimate a signal baseline.
+
+    Fits a rolling baseline to one numeric signal vector.
+
+    Args:
+        y: Numeric signal sequence.
+        baseline_window: Rolling window size. 0 uses a default.
+        baseline_window_factor: Scales the effective window. Larger values
+            give a smoother baseline. 0 uses a default.
+
+    Returns:
+        Numpy array, same length as y, with the estimated baseline values.
+    """
     abi = _get_abi()
     y_array = _to_f64_array(y)
     buf = _Buf()
@@ -269,14 +380,14 @@ def calculate_baseline(
     return buf_to_f64(abi, buf)
 
 
-_QUERY_RT_RANGE  = 0
+_QUERY_RT_RANGE   = 0
 _QUERY_CLOSEST_RT = 1
-_QUERY_MZ_RANGE  = 2
+_QUERY_MZ_RANGE   = 2
 _QUERY_CLOSEST_MZ = 3
 
 
 def get_scans(
-    file: MzMlFile,
+    file: SampleFile,
     *,
     rt_range: Optional[tuple] = None,
     rt: Optional[float] = None,
@@ -284,13 +395,21 @@ def get_scans(
     mz: Optional[float] = None,
     level: int = 1,
 ) -> "List[Dict] | Optional[Dict]":
-    """Retrieve scans by query.
+    """Get scans by RT or m/z query.
 
-    Exactly one of rt_range, rt, mz_range, or mz must be provided.
-      rt_range=(from, to)  -> List[Dict] of scans in RT window
-      rt=value             -> Optional[Dict] single scan closest to RT
-      mz_range=(from, to)  -> List[Dict] of scans with selected_ion_mz in window
-      mz=value             -> Optional[Dict] single scan closest to selected_ion_mz
+    Fetches scans from a loaded file. Exactly one query mode must be provided.
+
+    Args:
+        file: SampleFile from parse_mzml() or parse_ion().
+        rt_range: Tuple (from, to) in minutes — all scans in RT window.
+        rt: Target RT in minutes — returns the single closest scan.
+        mz_range: Tuple (from, to) in Da — all scans with precursor m/z in window.
+        mz: Target precursor m/z in Da — returns the single closest scan.
+        level: MS level to query (0–255). Default 1.
+
+    Returns:
+        Range query: list of scan dicts, each with rt, mz, intensity, metadata.
+        Point query: single scan dict, or None if no scan was found.
     """
     abi = _get_abi()
     if not (0 <= level <= 255):
@@ -334,13 +453,31 @@ def get_scans(
 
 
 def get_peaks_from_eic(
-    file: MzMlFile,
+    file: SampleFile,
     targets: Sequence[Dict[str, Any]],
     from_rt: float = 0.5,
     to_rt: float   = 5.0,
     options: Optional[Dict[str, Any]] = None,
     cores: int = 1,
 ) -> List[Dict]:
+    """Find peaks for many targets using EICs.
+
+    Builds an EIC for each target and finds the best peak near the given RT.
+    Use this for batch targeted peak extraction from one file.
+
+    Args:
+        file: SampleFile from parse_mzml() or parse_ion().
+        targets: List of dicts, each with keys: id (str), rt (float),
+            mz (float), range (float, RT half-window).
+        from_rt: EIC extraction start time (minutes). Default 0.5.
+        to_rt: EIC extraction end time (minutes). Default 5.0.
+        options: Optional dict of peak filter settings (same keys as find_peaks).
+        cores: Number of CPU cores to use. Default 1.
+
+    Returns:
+        List of dicts, one per target. Each dict has keys: id, mz, rt,
+        from, to, intensity, integral.
+    """
     abi = _get_abi()
     rts, mzs, ranges, ids = unpack_targets(targets)
     offsets, lengths, id_buf = encode_target_ids(ids)
@@ -372,11 +509,27 @@ def get_peaks_from_eic(
 
 
 def get_peaks_from_chrom(
-    file: MzMlFile,
+    file: SampleFile,
     items: Sequence[Dict[str, Any]],
     options: Optional[Dict[str, Any]] = None,
     cores: int = 1,
 ) -> List[Dict]:
+    """Find peaks from stored chromatograms.
+
+    Finds peaks from file-stored chromatograms using index, RT, and RT window.
+    Use this when you already know which chromatogram index to read.
+
+    Args:
+        file: SampleFile from parse_mzml() or parse_ion().
+        items: List of dicts with keys: idx (int, chromatogram index),
+            rt (float, target retention time), window or range (float, RT half-window).
+        options: Optional dict of peak filter settings (same keys as find_peaks).
+        cores: Number of CPU cores to use. Default 1.
+
+    Returns:
+        List of dicts, one per input item. Each dict has keys: index, rt,
+        from, to, intensity, integral.
+    """
     abi = _get_abi()
     n = len(items)
     indices = np.empty(n, dtype=np.uint32)
@@ -400,7 +553,7 @@ def get_peaks_from_chrom(
 
 
 def find_features(
-    file: MzMlFile,
+    file: SampleFile,
     from_rt: float,
     to_rt: float,
     *,
@@ -411,6 +564,29 @@ def find_features(
     use_gpu: bool = False,
     batch_size: int = 0,
 ) -> List[Dict]:
+    """Find all features in one file.
+
+    Scans the full m/z grid and finds all chromatographic features.
+    No target list is needed.
+
+    Args:
+        file: SampleFile from parse_mzml() or parse_ion().
+        from_rt: Start retention time (minutes).
+        to_rt: End retention time (minutes).
+        eic: Optional dict with EIC extraction settings. Keys:
+            ppm_tolerance (float, default 10.0), mz_tolerance (float, default 0.005).
+        grid: Optional dict with m/z grid settings. Keys:
+            start (float, default 40.0), end (float, default 1000.0),
+            step_size (float, default 0.005).
+        options: Optional dict of peak filter settings (same keys as find_peaks).
+        cores: Number of CPU cores to use. Default 1.
+        use_gpu: Use GPU acceleration if available. Default False.
+        batch_size: GPU batch size. 0 selects automatically.
+
+    Returns:
+        List of dicts, one per detected feature. Each dict has keys: mz, rt,
+        from, to, intensity, integral, ratio, np (number of points).
+    """
     abi = _get_abi()
 
     eic_ppm  = _get_float(eic,  "ppm_tolerance", _EicDefaults.ppm_tolerance)
@@ -446,7 +622,7 @@ def find_features(
 
 
 def find_feature(
-    file: MzMlFile,
+    file: SampleFile,
     targets: Sequence[Dict[str, Any]],
     *,
     scan_eic: Optional[Dict[str, float]] = None,
@@ -454,6 +630,26 @@ def find_feature(
     options: Optional[Dict[str, Any]]    = None,
     cores: int = 1,
 ) -> List[Dict]:
+    """Find targeted features by m/z and RT.
+
+    Extracts peaks for one or more targets defined by m/z and RT.
+    Use this when you already know what you are looking for.
+
+    Args:
+        file: SampleFile from parse_mzml() or parse_ion().
+        targets: List of dicts with keys: id (str, optional), rt (float),
+            mz (float), range (float, RT half-window).
+        scan_eic: Optional dict for spectrum scan tolerance. Keys:
+            ppm_tolerance (float), mz_tolerance (float).
+        eic: Optional dict for EIC extraction tolerance. Keys:
+            ppm_tolerance (float), mz_tolerance (float).
+        options: Optional dict of peak filter settings (same keys as find_peaks).
+        cores: Number of CPU cores to use. Default 1.
+
+    Returns:
+        List of dicts, one per target. Each dict has keys: id, mz, rt,
+        from, to, intensity, integral.
+    """
     abi = _get_abi()
 
     scan_ppm = _get_tolerance(scan_eic, "ppm_tolerance", 10.0)
@@ -515,6 +711,32 @@ def get_features(
     use_gpu: bool = False,
     batch_size: int = 0,
 ) -> List[Dict]:
+    """Find and align features across many files.
+
+    Detects features in every file in a folder and groups them by m/z and RT.
+    Returns a consensus feature table aligned across all samples.
+
+    Args:
+        directory_path: Path to a folder with mzML or ion files.
+        from_rt: Start retention time (minutes).
+        to_rt: End retention time (minutes).
+        eic: Optional dict for EIC extraction settings. Keys:
+            ppm_tolerance (float, default 10.0), mz_tolerance (float, default 0.005).
+        grid: Optional dict for m/z grid settings. Keys:
+            start (float, default 40.0), end (float, default 1000.0),
+            step_size (float, default 0.005).
+        grouping: Optional dict for cross-sample alignment settings. Keys:
+            ppm_tolerance (float), mz_tolerance (float), rt_tolerance (float),
+            frequency (int, min samples a feature must appear in).
+        options: Optional dict of peak filter settings (same keys as find_peaks).
+        cores: Number of CPU cores to use. Default 1.
+        use_gpu: Use GPU acceleration if available. Default False.
+        batch_size: GPU batch size. 0 selects automatically.
+
+    Returns:
+        List of dicts, one per consensus feature. Each dict has keys: mz, rt,
+        from, to, intensity, integral, np, frequency, rmz.
+    """
     abi = _get_abi()
 
     if not directory_path:

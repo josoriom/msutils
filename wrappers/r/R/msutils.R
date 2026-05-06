@@ -68,8 +68,8 @@ parse_mzml <- function(data) {
   .Call("C_parse_mzml", data, PACKAGE="msutils")
 }
 
-mzml_to_bin <- function(bin, level = 12L, f32_compress = FALSE) {
-  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML handle)")
+mzml_to_ion <- function(bin, level = 12L, f32_compress = FALSE) {
+  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML sample)")
 
   if (!is.numeric(level) || length(level) != 1 || is.na(level))
     stop("`level` must be a single number 0..22")
@@ -80,17 +80,17 @@ mzml_to_bin <- function(bin, level = 12L, f32_compress = FALSE) {
   if (!is.logical(f32_compress) || length(f32_compress) != 1 || is.na(f32_compress))
     stop("`f32_compress` must be TRUE/FALSE")
 
-  .Call("C_mzml_to_bin", bin, lvl, f32_compress, PACKAGE = "msutils")
+  .Call("C_mzml_to_ion", bin, lvl, f32_compress, PACKAGE = "msutils")
 }
 
-bin_to_json <- function(bin) {
-  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML handle)")
-  .Call("C_bin_to_json", bin, PACKAGE="msutils")
+ion_to_json <- function(bin) {
+  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML sample)")
+  .Call("C_ion_to_json", bin, PACKAGE="msutils")
 }
 
-bin_to_mzml <- function(bin) {
-  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML handle)")
-  .Call("C_bin_to_mzml", bin, PACKAGE = "msutils")
+ion_to_mzml <- function(bin) {
+  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML sample)")
+  .Call("C_ion_to_mzml", bin, PACKAGE = "msutils")
 }
 
 get_peak <- function(
@@ -219,7 +219,7 @@ get_peaks_from_chrom <- function(
 }
 
 calculate_eic <- function(bin, targets, from, to, ppm_tolerance=20, mz_tolerance=0.005) {
-  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML handle)")
+  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML sample)")
   stopifnot(is.numeric(targets), length(targets) == 1)
   .Call("C_calculate_eic",
     bin, as.numeric(targets), as.numeric(from), as.numeric(to),
@@ -392,11 +392,11 @@ find_features <- function(
   df
 }
 
-parse_bin <- function(bin, max_cache_size = 0) {
-  if (!is.raw(bin)) stop("`bin` must be a raw vector (BINZ bytes)")
+parse_ion <- function(bin, max_cache_size = 0) {
+  if (!is.raw(bin)) stop("`bin` must be a raw vector (ion bytes)")
   if (!is.numeric(max_cache_size) || length(max_cache_size) != 1 || is.na(max_cache_size) || max_cache_size < 0)
     stop("`max_cache_size` must be a single non-negative number")
-  .Call("C_parse_bin", bin, as.numeric(max_cache_size), PACKAGE = "msutils")
+  .Call("C_parse_ion", bin, as.numeric(max_cache_size), PACKAGE = "msutils")
 }
 
 .QUERY_RT_RANGE   <- 0L
@@ -407,7 +407,7 @@ parse_bin <- function(bin, max_cache_size = 0) {
 get_scans <- function(bin, rt_from = NULL, rt_to = NULL, rt = NULL,
                       mz_from = NULL, mz_to = NULL, mz = NULL,
                       level = 1L) {
-  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML handle)")
+  if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML sample)")
   if (!is.numeric(level) || length(level) != 1) stop("level must be a single numeric")
 
   provided <- c(!is.null(rt_from) && !is.null(rt_to),
@@ -526,9 +526,9 @@ get_features <- function(
   cores
 }
 
-bin_to_df <- function(bin) {
+ion_to_df <- function(bin) {
   if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer")
-  x <- jsonlite::fromJSON(bin_to_json(bin), simplifyVector = TRUE)
+  x <- jsonlite::fromJSON(ion_to_json(bin), simplifyVector = TRUE)
   if (!is.null(x$Err)) stop(x$Err)
   
   root <- if (!is.null(x$Ok)) x$Ok else x

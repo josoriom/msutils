@@ -5,7 +5,7 @@ if TYPE_CHECKING:
     from msutils._bridge import _ABI
 
 
-class MzMlFile:
+class SampleFile:
     def __init__(self, handle: ctypes.c_void_p, abi: "_ABI") -> None:
         self._handle: ctypes.c_void_p | None = handle
         self._abi = abi
@@ -13,7 +13,7 @@ class MzMlFile:
     @property
     def handle(self) -> ctypes.c_void_p:
         if self._handle is None:
-            raise RuntimeError("MzMlFile: file has been disposed")
+            raise RuntimeError("SampleFile: file has been disposed")
         return self._handle
 
     def dispose(self) -> None:
@@ -24,7 +24,7 @@ class MzMlFile:
     def __del__(self) -> None:
         self.dispose()
 
-    def __enter__(self) -> "MzMlFile":
+    def __enter__(self) -> "SampleFile":
         return self
 
     def __exit__(self, *_: Any) -> None:
@@ -32,18 +32,18 @@ class MzMlFile:
 
     def to_json(self) -> Any:
         from msutils import api as _api
-        return _api._bin_to_json_raw(self)
+        return _api._ion_to_json_raw(self)
 
     def to_mzml(self) -> str:
         from msutils import api as _api
-        return _api._bin_to_mzml_raw(self)
+        return _api._ion_to_mzml_raw(self)
 
-    def to_bin(self, level: int = 12, f32_compress: bool = False) -> bytes:
+    def to_ion(self, level: int = 12, f32_compress: bool = False) -> bytes:
         from msutils import api as _api
-        return _api._mzml_to_bin_raw(self, level, f32_compress)
+        return _api._mzml_to_ion_raw(self, level, f32_compress)
 
     def __repr__(self) -> str:
         if self._handle is None:
-            return "<MzMlFile disposed>"
+            return "<SampleFile disposed>"
         v = ctypes.cast(self._handle, ctypes.c_void_p).value
-        return f"<MzMlFile handle=0x{v:x}>"
+        return f"<SampleFile handle=0x{v:x}>"
