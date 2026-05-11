@@ -90,8 +90,6 @@ windows-arm64:
 	mkdir -p $(ARTIFACTS)/windows-arm64
 	cp core/target-windows-arm64/$(WINDOWS_ARM64_TARGET)/release/$(CRATE).dll $(ARTIFACTS)/windows-arm64/
 
-# Upload all artifacts to a GitHub Release (requires `gh` CLI + VERSION env var)
-# Usage: VERSION=0.1.0 make release
 release:
 	@test -n "$(VERSION)" || (echo "❌  Set VERSION=x.y.z" && exit 1)
 	@command -v gh >/dev/null || (echo "❌  Install gh: https://cli.github.com" && exit 1)

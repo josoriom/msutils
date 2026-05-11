@@ -135,5 +135,5 @@ export type CentroidScan = {
 export type ScanQuery =
   | { rt: { from: number; to: number } }
   | { rt: { closest: number } }
-  | { selectedMz: { from: number; to: number } }
-  | { selectedMz: { closest: number } };
+  | { mz: { from: number; to: number } }
+  | { mz: { closest: number } };

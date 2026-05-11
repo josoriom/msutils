@@ -10,8 +10,6 @@ use crate::utilities::structs::{DataXY, Peak};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ArtifactFilterOptions {
-    /// Maximum allowed variation index (total variation / 2*amplitude).
-    /// Smooth peaks score ~1.0–1.5; spike forests score 5–20. Set to 0.0 to disable.
     pub max_variation_index: f64,
 }
 
@@ -110,9 +108,6 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
 
     let auto_baseline = filter_opts.auto_baseline.unwrap_or(false);
     let auto_noise = filter_opts.auto_noise.unwrap_or(false);
-    if auto_noise && filter_opts.noise.is_some() {
-        panic!("auto_noise=true cannot be used with noise");
-    }
 
     let mut y_center = Vec::with_capacity(n);
     if auto_baseline {
@@ -425,9 +420,6 @@ fn suppress_contained_peaks(data: &DataXY, mut peaks: Vec<Peak>) -> Vec<Peak> {
     out
 }
 
-/// Normalized total variation of the signal window.
-/// One pass computes min, max, and total variation simultaneously.
-/// Smooth peaks score ~1.0–1.5; spike forests score 5+.
 fn compute_variation_index(y: &[f64]) -> f64 {
     if y.len() < 2 {
         return 1.0;

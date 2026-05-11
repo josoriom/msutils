@@ -11,7 +11,7 @@ use std::{
 };
 
 use ionic::{
-    MzML, ScanMeta, SpectrumSource, bin_to_mzml as bin_to_mzml_rs,
+    MzML, ScanMeta, ScanSource, ScanSummary, SpectrumSource, bin_to_mzml as bin_to_mzml_rs,
     encoder::{WritingMode, encode},
     ion::{DecoderConfig, Ion, OwnedIon},
     parse_mzml as parse_mzml_rs,
@@ -21,7 +21,7 @@ pub mod utilities;
 use utilities::{
     calculate_baseline::{BaselineOptions, calculate_baseline as calculate_baseline_rs},
     calculate_eic::{
-        EicOptions, ScanQuery, TimeUnit, calculate_eic as calculate_eic_rs, collect_scans as collect_scans_rs,
+        EicOptions, ScanQuery, TimeUnit, calculate_eic as calculate_eic_rs, get_scans as get_scans_rs,
     },
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
     find_features::{FindFeaturesOptions, find_features as find_features_rs},
@@ -140,6 +140,22 @@ impl SpectrumSource for ParsedFile {
         match self {
             ParsedFile::Full(mzml) => mzml.for_each_scan_in_range(rt_min, rt_max, ms_level, cb),
             ParsedFile::Lazy(file) => file.for_each_scan_in_range(rt_min, rt_max, ms_level, cb),
+        }
+    }
+}
+
+impl ScanSource for ParsedFile {
+    fn for_each_summary(&mut self, cb: &mut dyn FnMut(usize, ScanSummary)) {
+        match self {
+            ParsedFile::Full(mzml) => mzml.for_each_summary(cb),
+            ParsedFile::Lazy(file) => file.for_each_summary(cb),
+        }
+    }
+
+    fn load_scan(&mut self, index: usize, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> bool {
+        match self {
+            ParsedFile::Full(mzml) => mzml.load_scan(index, mz, intensity),
+            ParsedFile::Lazy(file) => file.load_scan(index, mz, intensity),
         }
     }
 }
@@ -692,7 +708,7 @@ pub unsafe extern "C" fn get_scans(
         _ => return ERR_INVALID_ARGS,
     };
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let (_, scans) = collect_scans_rs(
+        let (_, scans) = get_scans_rs(
             unsafe { &mut *h },
             query,
             TimeUnit::Minutes,
@@ -1121,7 +1137,7 @@ fn build_fp(opts: *const CPeakPOptions) -> FindPeaksOptions {
                 && o.intensity_threshold >= 0.0)
                 .then_some(o.intensity_threshold),
             width_threshold: (o.width_threshold > 0).then_some(o.width_threshold as usize),
-            noise: (o.noise.is_finite() && o.noise > 0.0).then_some(o.noise),
+            noise: (o.noise.is_finite() && o.noise > 0.0 && o.auto_noise == 0).then_some(o.noise),
             auto_noise: Some(o.auto_noise != 0),
             auto_baseline: Some(o.auto_baseline != 0),
             allow_overlap: Some(o.allow_overlap != 0),

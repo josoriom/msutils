@@ -4,12 +4,16 @@ function snakeToCamel(key: string): string {
   return key.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
 }
 
+const UNSAFE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
 export function camelizeKeys<T>(value: T): T {
   if (Array.isArray(value)) return value.map(camelizeKeys) as unknown as T;
   if (value && typeof value === "object" && !ArrayBuffer.isView(value)) {
-    const result: any = {};
-    for (const [key, val] of Object.entries(value))
+    const result: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value)) {
+      if (UNSAFE_KEYS.has(key)) continue;
       result[snakeToCamel(key)] = camelizeKeys(val);
+    }
     return result as T;
   }
   return value;

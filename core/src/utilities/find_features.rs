@@ -1,4 +1,4 @@
-use ionic::SpectrumSource;
+use ionic::ScanSource;
 use serde::Serialize;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use std::sync::Arc;
@@ -11,13 +11,13 @@ use std::{
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::gpu::{GpuContext, processor::GpuBatchOptions};
 use crate::utilities::{
     calculate_eic::{
-        CentroidScan, EicOptions, ScanQuery, TimeUnit, collect_scans, compute_eic_for_mz,
-        lower_bound, with_eic_apex_intensity,
+        CentroidScan, EicOptions, ScanQuery, TimeUnit, get_eic_for_mz, get_scans, lower_bound,
+        with_eic_apex_intensity,
     },
     find_peaks::{FindPeaksOptions, find_peaks},
+    gpu::{GpuContext, processor::GpuBatchOptions},
     structs::{DataXY, FromTo, Peak},
 };
 
@@ -155,7 +155,7 @@ impl Default for FindFeaturesOptions {
 }
 
 pub fn find_features(
-    source: &mut impl SpectrumSource,
+    source: &mut impl ScanSource,
     time_window: FromTo,
     options: Option<FindFeaturesOptions>,
     cores: usize,
@@ -193,7 +193,12 @@ pub fn find_features(
         return Err(FeatureError::GridTooLarge(grid.len()));
     }
 
-    let (time, scans) = collect_scans(source, ScanQuery::RtRange(time_window), TimeUnit::Minutes, 1);
+    let (time, scans) = get_scans(
+        source,
+        ScanQuery::RtRange(time_window),
+        TimeUnit::Minutes,
+        1,
+    );
     if scans.is_empty() {
         return Err(FeatureError::NoScans);
     }
@@ -309,7 +314,7 @@ fn collect_candidates_gpu(
             let masses: Vec<f64> = survivors
                 .par_iter()
                 .filter_map(|&mz| {
-                    let eic = compute_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
+                    let eic = get_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
                     evaluate_eic_row(
                         &eic,
                         time,
@@ -352,7 +357,7 @@ fn collect_candidates_cpu(
     let masses: Vec<f64> = grid
         .par_iter()
         .filter_map(|&mz| {
-            let eic = compute_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
+            let eic = get_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
             evaluate_eic_row(
                 &eic,
                 time,
@@ -369,7 +374,7 @@ fn collect_candidates_cpu(
     let masses: Vec<f64> = grid
         .iter()
         .filter_map(|&mz| {
-            let eic = compute_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
+            let eic = get_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
             evaluate_eic_row(
                 &eic,
                 time,
@@ -424,7 +429,7 @@ fn extract_peaks_for_mass(
     config: &FindFeaturesOptions,
     final_w: usize,
 ) -> Vec<Feature> {
-    let y = compute_eic_for_mz(scans, time.len(), mz, config.eic_options);
+    let y = get_eic_for_mz(scans, time.len(), mz, config.eic_options);
     let data = DataXY {
         x: time.to_vec(),
         y,

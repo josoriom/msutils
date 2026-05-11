@@ -1,11 +1,12 @@
-use crate::utilities::calculate_eic::{
-    EicOptions, ScanQuery, collect_scans, compute_eic_for_mz, lower_bound, upper_bound,
+use crate::utilities::{
+    calculate_eic::{EicOptions, ScanQuery, get_eic_for_mz, get_scans, lower_bound, upper_bound},
+    find_features::max_intensity_centroid,
+    find_peaks::FindPeaksOptions,
+    get_peak::get_peak,
+    structs::{DataXY, EicRoi, FromTo, Peak, Roi},
 };
-use crate::utilities::find_features::max_intensity_centroid;
-use crate::utilities::find_peaks::FindPeaksOptions;
-use crate::utilities::get_peak::get_peak;
-use crate::utilities::structs::{DataXY, EicRoi, FromTo, Peak, Roi};
-use ionic::SpectrumSource;
+
+use ionic::ScanSource;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::{ThreadPoolBuilder, prelude::*};
 
@@ -43,7 +44,7 @@ impl Default for FindFeatureOptions {
 }
 
 pub fn find_feature(
-    source: &mut impl SpectrumSource,
+    source: &mut impl ScanSource,
     rois: &[&EicRoi],
     cores: usize,
     options: Option<FindFeatureOptions>,
@@ -78,9 +79,12 @@ pub fn find_feature(
         return vec![None; rois.len()];
     }
 
-    let (rts, scans) = collect_scans(
+    let (rts, scans) = get_scans(
         source,
-        ScanQuery::RtRange(FromTo { from: rt_min, to: rt_max }),
+        ScanQuery::RtRange(FromTo {
+            from: rt_min,
+            to: rt_max,
+        }),
         eic_opts.time_unit,
         1,
     );
@@ -106,7 +110,7 @@ pub fn find_feature(
         let local_scans = &scans[start..end];
 
         let refined_mz = max_intensity_centroid(local_scans, local_rts, roi.rt, roi.mz, scan_opts)?;
-        let y = compute_eic_for_mz(local_scans, local_rts.len(), refined_mz, eic_opts);
+        let y = get_eic_for_mz(local_scans, local_rts.len(), refined_mz, eic_opts);
         let data = DataXY {
             x: local_rts.to_vec(),
             y,

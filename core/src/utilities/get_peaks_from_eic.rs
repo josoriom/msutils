@@ -1,24 +1,28 @@
-use ionic::SpectrumSource;
+use ionic::ScanSource;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::{ThreadPoolBuilder, prelude::*};
 
-use crate::utilities::calculate_eic::{
-    CentroidScan, EicOptions, ScanQuery, TimeUnit, collect_scans, compute_eic_for_mz, lower_bound, upper_bound,
+use crate::utilities::{
+    calculate_eic::{
+        CentroidScan, EicOptions, ScanQuery, TimeUnit, get_eic_for_mz, get_scans, lower_bound,
+        upper_bound,
+    },
+    find_noise_level,
+    find_peaks::{FilterPeaksOptions, FindPeaksOptions},
+    get_peak::get_peak,
+    structs::{DataXY, EicRoi, FromTo, Peak, Roi},
 };
-use crate::utilities::find_noise_level;
-use crate::utilities::find_peaks::{FilterPeaksOptions, FindPeaksOptions};
-use crate::utilities::get_peak::get_peak;
-use crate::utilities::structs::{DataXY, EicRoi, FromTo, Peak, Roi};
 
 pub fn get_peaks_from_eic<'a>(
-    source: &mut impl SpectrumSource,
+    source: &mut impl ScanSource,
     from_to: FromTo,
     rois: &'a [EicRoi],
     options: Option<FindPeaksOptions>,
     cores: usize,
 ) -> Option<Vec<(&'a str, f64, f64, Peak)>> {
-    let (rts_full, scans_full) = collect_scans(source, ScanQuery::RtRange(from_to), TimeUnit::Minutes, 1);
+    let (rts_full, scans_full) =
+        get_scans(source, ScanQuery::RtRange(from_to), TimeUnit::Minutes, 1);
 
     if rts_full.len() < 3 || scans_full.is_empty() {
         return Some(
@@ -73,15 +77,13 @@ fn compute_one<'a>(
     let local_rts = &rts_full[start..end];
     let local_scans = &scans_full[start..end];
 
-    let y_local = compute_eic_for_mz(local_scans, local_rts.len(), roi.mz, eic_opts);
-    let y_full = compute_eic_for_mz(scans_full, rts_full.len(), roi.mz, eic_opts);
-
-    if y_local.len() < 3 {
-        return (&roi.id, roi.rt, roi.mz, Peak::default());
-    }
+    let y_full = get_eic_for_mz(scans_full, rts_full.len(), roi.mz, eic_opts);
 
     let noise = find_noise_level(&y_full);
-    let max_y = y_local.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let max_y = y_full[start..end]
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max);
     let snr = if noise.intensity > 0.0 {
         max_y / noise.intensity
     } else {
@@ -118,6 +120,10 @@ fn compute_one<'a>(
         Some(local_options.clone()),
     )
     .or_else(|| {
+        let y_local = get_eic_for_mz(local_scans, local_rts.len(), roi.mz, eic_opts);
+        if y_local.len() < 3 {
+            return None;
+        }
         get_peak(
             &DataXY {
                 x: local_rts.to_vec(),

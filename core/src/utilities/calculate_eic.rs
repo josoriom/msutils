@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, sync::Arc};
 
-use ionic::{ScanMeta, SpectrumSource};
+use ionic::{ScanMeta, ScanSource, ScanSummary, SpectrumSource};
 use serde::Serialize;
 
 use crate::utilities::structs::{FromTo, Peak};
@@ -92,6 +92,19 @@ impl SpectrumSummary {
             polarity: meta.polarity,
         }
     }
+
+    #[inline]
+    pub fn from_summary(s: &ScanSummary) -> Self {
+        Self {
+            rt_seconds: s.rt * 60.0,
+            base_peak_mz: s.base_peak_mz,
+            selected_ion_mz: s.selected_ion_mz,
+            base_peak_int: s.base_peak_int,
+            total_ion_current: s.total_ion_current,
+            ms_level: s.ms_level,
+            polarity: s.polarity,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -139,7 +152,7 @@ pub fn calculate_eic(
     Eic { x, y }
 }
 
-pub fn compute_eic_for_mz(
+pub fn get_eic_for_mz(
     scans: &[CentroidScan],
     scan_count: usize,
     target_mz: f64,
@@ -170,74 +183,148 @@ pub enum ScanQuery {
     ClosestMz(f64),
 }
 
-pub fn collect_scans(
-    source: &mut impl SpectrumSource,
+pub fn get_scans(
+    source: &mut impl ScanSource,
     query: ScanQuery,
     time_unit: TimeUnit,
     ms_level: u8,
 ) -> (Vec<f64>, Vec<CentroidScan>) {
-    let (rt_min, rt_max) = rt_bounds(&query, time_unit);
-    let scans = fetch_scans(source, rt_min, rt_max, ms_level);
-    apply_query(scans, query, time_unit)
-}
-
-fn rt_bounds(query: &ScanQuery, time_unit: TimeUnit) -> (f64, f64) {
     match query {
-        ScanQuery::RtRange(r) => (
-            time_unit.to_minutes(r.from.min(r.to)),
-            time_unit.to_minutes(r.from.max(r.to)),
-        ),
-        ScanQuery::ClosestRt(_) | ScanQuery::ClosestMz(_) | ScanQuery::MzRange(_) => (0.0, f64::MAX),
+        ScanQuery::RtRange(range) => get_by_rt_range(source, range, time_unit, ms_level),
+        ScanQuery::ClosestRt(rt) => get_closest_by_rt(source, time_unit.to_minutes(rt), ms_level),
+        ScanQuery::MzRange(range) => get_by_mz_range(source, range, ms_level),
+        ScanQuery::ClosestMz(mz) => get_closest_by_mz(source, mz, ms_level),
     }
 }
 
-fn fetch_scans(
-    source: &mut impl SpectrumSource,
-    rt_min: f64,
-    rt_max: f64,
+fn get_by_rt_range(
+    source: &mut impl ScanSource,
+    range: FromTo,
+    time_unit: TimeUnit,
     ms_level: u8,
-) -> Vec<CentroidScan> {
-    let mut scans = Vec::new();
-    source.for_each_scan_in_range(rt_min, rt_max, ms_level, &mut |rt, meta, mz, intensity| {
-        scans.push(CentroidScan {
-            rt,
-            mz: Arc::from(mz),
-            intensity: Arc::from(intensity),
-            metadata: SpectrumSummary::from_scan_meta(rt * 60.0, meta),
-        });
+) -> (Vec<f64>, Vec<CentroidScan>) {
+    let rt_min = time_unit.to_minutes(range.from.min(range.to));
+    let rt_max = time_unit.to_minutes(range.from.max(range.to));
+    let mut candidates: Vec<(usize, ScanSummary)> = Vec::new();
+    source.for_each_summary(&mut |index, summary| {
+        if ms_level != 0 && summary.ms_level != ms_level {
+            return;
+        }
+        if !summary.rt.is_finite() || summary.rt < rt_min || summary.rt > rt_max {
+            return;
+        }
+        candidates.push((index, summary));
     });
-    scans
+    candidates.sort_unstable_by(|a, b| a.1.rt.partial_cmp(&b.1.rt).unwrap_or(Ordering::Equal));
+    load_selected(source, candidates)
 }
 
-fn apply_query(
-    mut scans: Vec<CentroidScan>,
-    query: ScanQuery,
-    time_unit: TimeUnit,
+fn get_closest_by_rt(
+    source: &mut impl ScanSource,
+    target_rt: f64,
+    ms_level: u8,
 ) -> (Vec<f64>, Vec<CentroidScan>) {
-    match query {
-        ScanQuery::RtRange(_) => {
-            scans.sort_unstable_by(|a, b| a.rt.partial_cmp(&b.rt).unwrap_or(Ordering::Equal));
-            let rts = scans.iter().map(|s| s.rt).collect();
-            (rts, scans)
+    let mut by_dist: Vec<(f64, usize, ScanSummary)> = Vec::new();
+    source.for_each_summary(&mut |index, summary| {
+        if ms_level != 0 && summary.ms_level != ms_level {
+            return;
         }
-        ScanQuery::ClosestRt(rt) => {
-            let target = time_unit.to_minutes(rt);
-            pick_closest_by(scans, |s| (s.rt - target).abs())
+        if !summary.rt.is_finite() {
+            return;
         }
-        ScanQuery::MzRange(r) => {
-            scans.retain(|s| {
-                let mz = s.metadata.selected_ion_mz;
-                mz.is_finite() && mz >= r.from.min(r.to) && mz <= r.from.max(r.to)
-            });
-            scans.sort_unstable_by(|a, b| a.rt.partial_cmp(&b.rt).unwrap_or(Ordering::Equal));
-            let rts = scans.iter().map(|s| s.rt).collect();
-            (rts, scans)
+        by_dist.push(((summary.rt - target_rt).abs(), index, summary));
+    });
+    by_dist.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    load_first(source, by_dist.into_iter().map(|(_, i, s)| (i, s)))
+}
+
+fn get_by_mz_range(
+    source: &mut impl ScanSource,
+    range: FromTo,
+    ms_level: u8,
+) -> (Vec<f64>, Vec<CentroidScan>) {
+    let mz_min = range.from.min(range.to);
+    let mz_max = range.from.max(range.to);
+    let mut candidates: Vec<(usize, ScanSummary)> = Vec::new();
+    source.for_each_summary(&mut |index, summary| {
+        if ms_level != 0 && summary.ms_level != ms_level {
+            return;
         }
-        ScanQuery::ClosestMz(mz) => {
-            scans.retain(|s| s.metadata.selected_ion_mz.is_finite());
-            pick_closest_by(scans, |s| (s.metadata.selected_ion_mz - mz).abs())
+        let mz = summary.selected_ion_mz;
+        if !mz.is_finite() || mz < mz_min || mz > mz_max {
+            return;
         }
+        candidates.push((index, summary));
+    });
+    candidates.sort_unstable_by(|a, b| a.1.rt.partial_cmp(&b.1.rt).unwrap_or(Ordering::Equal));
+    load_selected(source, candidates)
+}
+
+fn get_closest_by_mz(
+    source: &mut impl ScanSource,
+    target_mz: f64,
+    ms_level: u8,
+) -> (Vec<f64>, Vec<CentroidScan>) {
+    let mut by_dist: Vec<(f64, usize, ScanSummary)> = Vec::new();
+    source.for_each_summary(&mut |index, summary| {
+        if ms_level != 0 && summary.ms_level != ms_level {
+            return;
+        }
+        if !summary.selected_ion_mz.is_finite() {
+            return;
+        }
+        by_dist.push(((summary.selected_ion_mz - target_mz).abs(), index, summary));
+    });
+    by_dist.sort_unstable_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(Ordering::Equal));
+    load_first(source, by_dist.into_iter().map(|(_, i, s)| (i, s)))
+}
+
+fn load_first(
+    source: &mut impl ScanSource,
+    candidates: impl Iterator<Item = (usize, ScanSummary)>,
+) -> (Vec<f64>, Vec<CentroidScan>) {
+    let mut mz_buf = Vec::new();
+    let mut int_buf = Vec::new();
+    for (index, summary) in candidates {
+        if !source.load_scan(index, &mut mz_buf, &mut int_buf) {
+            continue;
+        }
+        let len = mz_buf.len().min(int_buf.len());
+        return (
+            vec![summary.rt],
+            vec![CentroidScan {
+                rt: summary.rt,
+                mz: Arc::from(&mz_buf[..len]),
+                intensity: Arc::from(&int_buf[..len]),
+                metadata: SpectrumSummary::from_summary(&summary),
+            }],
+        );
     }
+    (Vec::new(), Vec::new())
+}
+
+fn load_selected(
+    source: &mut impl ScanSource,
+    candidates: Vec<(usize, ScanSummary)>,
+) -> (Vec<f64>, Vec<CentroidScan>) {
+    let mut mz_buf = Vec::new();
+    let mut int_buf = Vec::new();
+    let mut rts = Vec::with_capacity(candidates.len());
+    let mut scans = Vec::with_capacity(candidates.len());
+    for (index, summary) in candidates {
+        if !source.load_scan(index, &mut mz_buf, &mut int_buf) {
+            continue;
+        }
+        let len = mz_buf.len().min(int_buf.len());
+        rts.push(summary.rt);
+        scans.push(CentroidScan {
+            rt: summary.rt,
+            mz: Arc::from(&mz_buf[..len]),
+            intensity: Arc::from(&int_buf[..len]),
+            metadata: SpectrumSummary::from_summary(&summary),
+        });
+    }
+    (rts, scans)
 }
 
 pub fn with_eic_apex_intensity(rt: &[f64], y: &[f64], mut p: Peak) -> Peak {
@@ -278,28 +365,6 @@ pub fn upper_bound(values: &[f64], target: f64) -> usize {
     low
 }
 
-fn pick_closest_by<F>(mut scans: Vec<CentroidScan>, distance: F) -> (Vec<f64>, Vec<CentroidScan>)
-where
-    F: Fn(&CentroidScan) -> f64,
-{
-    let best = scans
-        .iter()
-        .enumerate()
-        .min_by(|(_, a), (_, b)| {
-            distance(a)
-                .partial_cmp(&distance(b))
-                .unwrap_or(Ordering::Equal)
-        })
-        .map(|(i, _)| i);
-    match best {
-        Some(i) => {
-            let s = scans.swap_remove(i);
-            (vec![s.rt], vec![s])
-        }
-        None => (Vec::new(), Vec::new()),
-    }
-}
-
 #[inline]
 fn mz_tolerance_for(target_mz: f64, options: EicOptions) -> f64 {
     let ppm_window = if options.ppm_tolerance > 0.0 {
@@ -336,4 +401,258 @@ fn max_in_range(retention_times: &[f64], intensities: &[f64], from_rt: f64, to_r
         }
     }
     maximum
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ionic::ScanSummary;
+
+    struct MockSource {
+        scans: Vec<(ScanSummary, Vec<f64>, Vec<f64>)>,
+    }
+
+    impl MockSource {
+        fn new(scans: Vec<(ScanSummary, Vec<f64>, Vec<f64>)>) -> Self {
+            Self { scans }
+        }
+    }
+
+    impl ScanSource for MockSource {
+        fn for_each_summary(&mut self, cb: &mut dyn FnMut(usize, ScanSummary)) {
+            for (i, (summary, _, _)) in self.scans.iter().enumerate() {
+                cb(i, *summary);
+            }
+        }
+
+        fn load_scan(&mut self, index: usize, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> bool {
+            let Some((_, m, i)) = self.scans.get(index) else { return false };
+            *mz = m.clone();
+            *intensity = i.clone();
+            !m.is_empty()
+        }
+    }
+
+    fn make_scan(rt: f64, ms_level: u8, selected_ion_mz: f64, mz: Vec<f64>, intensity: Vec<f64>) -> (ScanSummary, Vec<f64>, Vec<f64>) {
+        (
+            ScanSummary {
+                rt,
+                ms_level,
+                polarity: 0,
+                selected_ion_mz,
+                base_peak_mz: f64::NAN,
+                base_peak_int: f64::NAN,
+                total_ion_current: f64::NAN,
+            },
+            mz,
+            intensity,
+        )
+    }
+
+    #[test]
+    fn lower_bound_empty() {
+        assert_eq!(lower_bound(&[], 5.0), 0);
+    }
+
+    #[test]
+    fn lower_bound_before_all() {
+        assert_eq!(lower_bound(&[1.0, 2.0, 3.0], 0.0), 0);
+    }
+
+    #[test]
+    fn lower_bound_after_all() {
+        assert_eq!(lower_bound(&[1.0, 2.0, 3.0], 4.0), 3);
+    }
+
+    #[test]
+    fn lower_bound_exact_match() {
+        assert_eq!(lower_bound(&[1.0, 2.0, 3.0], 2.0), 1);
+    }
+
+    #[test]
+    fn upper_bound_empty() {
+        assert_eq!(upper_bound(&[], 5.0), 0);
+    }
+
+    #[test]
+    fn upper_bound_exact_match() {
+        assert_eq!(upper_bound(&[1.0, 2.0, 3.0], 2.0), 2);
+    }
+
+    #[test]
+    fn upper_bound_after_all() {
+        assert_eq!(upper_bound(&[1.0, 2.0, 3.0], 5.0), 3);
+    }
+
+    #[test]
+    fn summed_intensity_sums_window() {
+        let mz = vec![100.0, 200.0, 300.0];
+        let int = vec![10.0, 20.0, 30.0];
+        assert_eq!(summed_intensity_in_window(&mz, &int, 150.0, 250.0), 20.0);
+    }
+
+    #[test]
+    fn summed_intensity_empty_input() {
+        assert_eq!(summed_intensity_in_window(&[], &[], 0.0, 100.0), 0.0);
+    }
+
+    #[test]
+    fn summed_intensity_no_match_in_window() {
+        let mz = vec![100.0, 200.0];
+        let int = vec![10.0, 20.0];
+        assert_eq!(summed_intensity_in_window(&mz, &int, 300.0, 400.0), 0.0);
+    }
+
+    #[test]
+    fn summed_intensity_multiple_in_window() {
+        let mz = vec![100.0, 150.0, 200.0, 250.0];
+        let int = vec![10.0, 15.0, 20.0, 25.0];
+        assert_eq!(summed_intensity_in_window(&mz, &int, 100.0, 200.0), 45.0);
+    }
+
+    #[test]
+    fn mz_tolerance_ppm_dominates() {
+        let opts = EicOptions { ppm_tolerance: 10.0, mz_tolerance: 0.001, ..Default::default() };
+        let tol = mz_tolerance_for(500.0, opts);
+        assert!((tol - 0.005).abs() < 1e-9);
+    }
+
+    #[test]
+    fn mz_tolerance_abs_dominates() {
+        let opts = EicOptions { ppm_tolerance: 1.0, mz_tolerance: 0.1, ..Default::default() };
+        let tol = mz_tolerance_for(500.0, opts);
+        assert!((tol - 0.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn get_by_rt_range_returns_matching_scans() {
+        let mut source = MockSource::new(vec![
+            make_scan(1.0, 1, f64::NAN, vec![100.0], vec![10.0]),
+            make_scan(2.0, 1, f64::NAN, vec![200.0], vec![20.0]),
+            make_scan(3.0, 1, f64::NAN, vec![300.0], vec![30.0]),
+        ]);
+        let (rts, scans) = get_scans(&mut source, ScanQuery::RtRange(FromTo { from: 1.0, to: 2.5 }), TimeUnit::Minutes, 1);
+        assert_eq!(rts, vec![1.0, 2.0]);
+        assert_eq!(scans.len(), 2);
+    }
+
+    #[test]
+    fn get_by_rt_range_filters_wrong_ms_level() {
+        let mut source = MockSource::new(vec![
+            make_scan(1.0, 1, f64::NAN, vec![100.0], vec![10.0]),
+            make_scan(2.0, 2, f64::NAN, vec![200.0], vec![20.0]),
+        ]);
+        let (rts, scans) = get_scans(&mut source, ScanQuery::RtRange(FromTo { from: 0.0, to: 5.0 }), TimeUnit::Minutes, 1);
+        assert_eq!(rts, vec![1.0]);
+        assert_eq!(scans.len(), 1);
+    }
+
+    #[test]
+    fn get_by_rt_range_empty_when_no_match() {
+        let mut source = MockSource::new(vec![
+            make_scan(5.0, 1, f64::NAN, vec![100.0], vec![10.0]),
+        ]);
+        let (rts, scans) = get_scans(&mut source, ScanQuery::RtRange(FromTo { from: 0.0, to: 2.0 }), TimeUnit::Minutes, 1);
+        assert!(rts.is_empty());
+        assert!(scans.is_empty());
+    }
+
+    #[test]
+    fn get_closest_rt_picks_nearest_scan() {
+        let mut source = MockSource::new(vec![
+            make_scan(1.0, 1, f64::NAN, vec![100.0], vec![10.0]),
+            make_scan(3.0, 1, f64::NAN, vec![300.0], vec![30.0]),
+            make_scan(5.0, 1, f64::NAN, vec![500.0], vec![50.0]),
+        ]);
+        let (rts, scans) = get_scans(&mut source, ScanQuery::ClosestRt(2.8), TimeUnit::Minutes, 1);
+        assert_eq!(rts, vec![3.0]);
+        assert_eq!(scans.len(), 1);
+    }
+
+    #[test]
+    fn get_closest_rt_falls_back_when_best_fails_to_load() {
+        let mut source = MockSource::new(vec![
+            make_scan(1.0, 1, f64::NAN, vec![], vec![]),
+            make_scan(2.0, 1, f64::NAN, vec![200.0], vec![20.0]),
+        ]);
+        let (rts, scans) = get_scans(&mut source, ScanQuery::ClosestRt(1.0), TimeUnit::Minutes, 1);
+        assert_eq!(rts, vec![2.0]);
+        assert_eq!(scans.len(), 1);
+    }
+
+    #[test]
+    fn get_closest_rt_empty_when_source_empty() {
+        let mut source = MockSource::new(vec![]);
+        let (rts, scans) = get_scans(&mut source, ScanQuery::ClosestRt(1.0), TimeUnit::Minutes, 1);
+        assert!(rts.is_empty());
+        assert!(scans.is_empty());
+    }
+
+    #[test]
+    fn get_by_mz_range_returns_matching_scans() {
+        let mut source = MockSource::new(vec![
+            make_scan(1.0, 2, 500.0, vec![500.0], vec![100.0]),
+            make_scan(2.0, 2, 600.0, vec![600.0], vec![200.0]),
+            make_scan(3.0, 2, 700.0, vec![700.0], vec![300.0]),
+        ]);
+        let (rts, scans) = get_scans(&mut source, ScanQuery::MzRange(FromTo { from: 490.0, to: 650.0 }), TimeUnit::Minutes, 2);
+        assert_eq!(rts.len(), 2);
+        assert!(rts.contains(&1.0) && rts.contains(&2.0));
+        assert_eq!(scans.len(), 2);
+    }
+
+    #[test]
+    fn get_by_mz_range_skips_nan_selected_ion_mz() {
+        let mut source = MockSource::new(vec![
+            make_scan(1.0, 2, f64::NAN, vec![100.0], vec![10.0]),
+            make_scan(2.0, 2, 600.0, vec![600.0], vec![200.0]),
+        ]);
+        let (rts, scans) = get_scans(&mut source, ScanQuery::MzRange(FromTo { from: 0.0, to: 1000.0 }), TimeUnit::Minutes, 2);
+        assert_eq!(rts, vec![2.0]);
+        assert_eq!(scans.len(), 1);
+    }
+
+    #[test]
+    fn get_closest_mz_picks_nearest_selected_ion() {
+        let mut source = MockSource::new(vec![
+            make_scan(1.0, 2, 500.0, vec![500.0], vec![100.0]),
+            make_scan(2.0, 2, 600.0, vec![600.0], vec![200.0]),
+            make_scan(3.0, 2, 700.0, vec![700.0], vec![300.0]),
+        ]);
+        let (rts, scans) = get_scans(&mut source, ScanQuery::ClosestMz(610.0), TimeUnit::Minutes, 2);
+        assert_eq!(rts, vec![2.0]);
+        assert_eq!(scans[0].metadata.selected_ion_mz, 600.0);
+    }
+
+    #[test]
+    fn get_closest_mz_falls_back_when_best_fails_to_load() {
+        let mut source = MockSource::new(vec![
+            make_scan(1.0, 2, 500.0, vec![], vec![]),
+            make_scan(2.0, 2, 510.0, vec![510.0], vec![200.0]),
+        ]);
+        let (rts, scans) = get_scans(&mut source, ScanQuery::ClosestMz(500.0), TimeUnit::Minutes, 2);
+        assert_eq!(rts, vec![2.0]);
+        assert_eq!(scans.len(), 1);
+    }
+
+    #[test]
+    fn get_closest_mz_empty_when_no_finite_selected_ion_mz() {
+        let mut source = MockSource::new(vec![
+            make_scan(1.0, 2, f64::NAN, vec![100.0], vec![10.0]),
+        ]);
+        let (rts, scans) = get_scans(&mut source, ScanQuery::ClosestMz(500.0), TimeUnit::Minutes, 2);
+        assert!(rts.is_empty());
+        assert!(scans.is_empty());
+    }
+
+    #[test]
+    fn ms_level_zero_allows_all_levels() {
+        let mut source = MockSource::new(vec![
+            make_scan(1.0, 1, f64::NAN, vec![100.0], vec![10.0]),
+            make_scan(2.0, 2, f64::NAN, vec![200.0], vec![20.0]),
+        ]);
+        let (rts, scans) = get_scans(&mut source, ScanQuery::RtRange(FromTo { from: 0.0, to: 5.0 }), TimeUnit::Minutes, 0);
+        assert_eq!(rts.len(), 2);
+        assert_eq!(scans.len(), 2);
+    }
 }

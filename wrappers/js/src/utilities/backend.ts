@@ -2,6 +2,7 @@ export type FileHandle = unknown;
 
 export interface Backend {
   readonly ready: boolean;
+  readonly handlesAreGcFinalized: boolean;
 
   init(): Promise<void>;
 

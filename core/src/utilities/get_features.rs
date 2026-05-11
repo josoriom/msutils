@@ -12,20 +12,22 @@ use rayon::prelude::*;
 use crate::utilities::gpu::GpuContext;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use ionic::ion::{DecoderConfig, Ion, OwnedIon};
+use ionic::{
+    ScanSource,
+    ion::{DecoderConfig, Ion, OwnedIon},
+};
 
-use crate::utilities::find_peaks::FindPeaksOptions;
 use crate::utilities::{
     calculate_eic::{
-        EicOptions, ScanQuery, TimeUnit, collect_scans, compute_eic_for_mz, lower_bound, upper_bound,
+        EicOptions, ScanQuery, TimeUnit, get_eic_for_mz, get_scans, lower_bound, upper_bound,
     },
     find_features::{
         Feature, FeatureError, FindFeaturesOptions, MzTolerance, dedup_points, find_features,
     },
+    find_peaks::FindPeaksOptions,
     get_peak::get_peak,
     structs::{DataXY, FromTo, Roi},
 };
-use ionic::SpectrumSource;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 const ION_CACHE_BYTES: usize = 128 * 1024 * 1024;
@@ -368,7 +370,7 @@ fn fill_all_missing(
 fn fill_sample(
     slots: &mut [ClusterSlot],
     sample_idx: usize,
-    source: &mut impl SpectrumSource,
+    source: &mut impl ScanSource,
     eic_options: EicOptions,
     peak_options: Option<FindPeaksOptions>,
 ) {
@@ -397,9 +399,12 @@ fn fill_sample(
         .map(|&ci| slots[ci].1.rt_to)
         .fold(f64::NEG_INFINITY, f64::max);
 
-    let (all_times, all_scans) = collect_scans(
+    let (all_times, all_scans) = get_scans(
         source,
-        ScanQuery::RtRange(FromTo { from: rt_min, to: rt_max }),
+        ScanQuery::RtRange(FromTo {
+            from: rt_min,
+            to: rt_max,
+        }),
         TimeUnit::Minutes,
         1,
     );
@@ -418,7 +423,7 @@ fn fill_sample(
                 return (ci, None);
             }
             let time_slice = all_times[start..end].to_vec();
-            let intensities = compute_eic_for_mz(
+            let intensities = get_eic_for_mz(
                 &all_scans[start..end],
                 time_slice.len(),
                 bounds.target_mz,

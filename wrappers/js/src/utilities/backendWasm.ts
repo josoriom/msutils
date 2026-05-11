@@ -672,6 +672,7 @@ async function loadWasm(): Promise<WasmApi> {
 export class WasmBackend implements Backend {
   private api: WasmApi | null = null;
   ready = false;
+  readonly handlesAreGcFinalized = false;
 
   async init(): Promise<void> {
     if (this.api) return;

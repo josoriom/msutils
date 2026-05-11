@@ -645,6 +645,12 @@ static Napi::Value GetPeaksFromEic(const Napi::CallbackInfo &info)
   if (!handle)
     return ThrowRc(env, "UseAfterFree", 0);
 
+  if (!info[1].IsTypedArray() || !info[2].IsTypedArray() || !info[3].IsTypedArray())
+  {
+    Napi::TypeError::New(env, "expected: (External, Float64Array rts, Float64Array mzs, Float64Array ranges, ...)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
   Napi::Float64Array rts = info[1].As<Napi::Float64Array>();
   Napi::Float64Array mzs = info[2].As<Napi::Float64Array>();
   Napi::Float64Array rng = info[3].As<Napi::Float64Array>();
@@ -674,6 +680,12 @@ static Napi::Value GetPeaksFromChrom(const Napi::CallbackInfo &info)
   MzML *handle = GetHandle(info[0]);
   if (!handle)
     return ThrowRc(env, "UseAfterFree", 0);
+
+  if (!info[1].IsTypedArray() || !info[2].IsTypedArray() || !info[3].IsTypedArray())
+  {
+    Napi::TypeError::New(env, "expected: (External, Uint32Array indices, Float64Array rts, Float64Array windows, ...)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
 
   Napi::Uint32Array idx = info[1].As<Napi::Uint32Array>();
   Napi::Float64Array rts = info[2].As<Napi::Float64Array>();
@@ -810,6 +822,12 @@ static Napi::Value FindFeature(const Napi::CallbackInfo &info)
   MzML *handle = GetHandle(info[0]);
   if (!handle)
     return ThrowRc(env, "UseAfterFree", 0);
+
+  if (!info[1].IsTypedArray() || !info[2].IsTypedArray() || !info[3].IsTypedArray())
+  {
+    Napi::TypeError::New(env, "expected: (External, Float64Array rts, Float64Array mzs, Float64Array windows, ...)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
 
   Napi::Float64Array rts = info[1].As<Napi::Float64Array>();
   Napi::Float64Array mzs = info[2].As<Napi::Float64Array>();

@@ -41,10 +41,10 @@ export type {
 };
 
 const DEFAULTS = {
-  eic: { mzTolerance: 0.005, ppmTolerance: 10.0 },
+  eic: { mzTolerance: 0.005, ppmTolerance: 20.0 },
   grid: { start: 40, end: 1000, stepSize: 0.005 },
   grouping: {
-    ppmTolerance: 5.0,
+    ppmTolerance: 10.0,
     mzTolerance: 0.0025,
     rtTolerance: 0.05,
     frequency: 1,
@@ -93,7 +93,7 @@ function assertFile(file: SampleFile, caller: string): void {
  * Parse an mzML file buffer into a {@link SampleFile}.
  *
  * @param data - Raw mzML file bytes.
- * @returns Loaded sample.
+ * @returns Loaded sample file.
  */
 export async function parseMzML(data: BinaryInput): Promise<SampleFile> {
   const b = await backendAsync();
@@ -106,7 +106,7 @@ export async function parseMzML(data: BinaryInput): Promise<SampleFile> {
  *
  * @param data - Raw ion file bytes.
  * @param options.maxCacheSize - Maximum scan cache size. Default 0 (unlimited).
- * @returns Loaded sample.
+ * @returns Loaded sample file.
  */
 export async function parseIon(
   data: BinaryInput,
@@ -126,7 +126,7 @@ export async function parseIon(
 /**
  * Return the sample data as a JSON string.
  *
- * @param file - Loaded sample.
+ * @param file - Loaded sample file.
  * @returns JSON string representation of the sample.
  */
 export function ionToJson(file: SampleFile): string {
@@ -137,7 +137,7 @@ export function ionToJson(file: SampleFile): string {
 /**
  * Serialize a sample back to mzML format.
  *
- * @param file - Loaded sample.
+ * @param file - Loaded sample file.
  * @returns Full mzML file content as a string.
  */
 export function ionToMzml(file: SampleFile): string {
@@ -148,7 +148,7 @@ export function ionToMzml(file: SampleFile): string {
 /**
  * Encode a sample as compressed ion binary bytes.
  *
- * @param file - Loaded sample.
+ * @param file - Loaded sample file.
  * @param options.level - Compression level, 0 (none) to 22 (max). Default 5.
  * @param options.f32Compress - Compress intensity values to 32-bit float. Default false.
  * @returns Raw ion binary bytes.
@@ -177,8 +177,8 @@ export function mzmlToIon(
 /**
  * Extract an extracted ion chromatogram (EIC) for a target m/z.
  *
- * @param file - Loaded sample.
- * @param targetMz - Target m/z value.
+ * @param file - Loaded sample file.
+ * @param mz - Target m/z value.
  * @param fromTo - Retention time range `{ from, to }` in minutes.
  * @param ppmTol - PPM tolerance. Default 20.
  * @param mzTol - Absolute m/z tolerance in Da. Default 0.005.
@@ -186,21 +186,22 @@ export function mzmlToIon(
  */
 export function calculateEic(
   file: SampleFile,
-  targetMz: number,
+  mz: number,
   fromTo: FromTo,
   ppmTol = 20,
   mzTol = 0.005,
 ): { x: Float64Array; y: Float64Array } {
   assertFile(file, "calculateEic");
+  if (typeof mz !== "number" || !Number.isFinite(mz) || mz <= 0) {
+    throw new RangeError(
+      "calculateEic: targetMz must be a positive finite number",
+    );
+  }
   const { from, to } = fromTo;
-  return backend().calculateEic(
-    file._handle!,
-    +targetMz,
-    from,
-    to,
-    ppmTol,
-    mzTol,
-  );
+  if (!Number.isFinite(from) || !Number.isFinite(to)) {
+    throw new RangeError("calculateEic: from and to must be finite numbers");
+  }
+  return backend().calculateEic(file._handle!, mz, from, to, ppmTol, mzTol);
 }
 
 /**
@@ -216,6 +217,12 @@ export function findPeaks(
   y: Float64Array,
   opts?: PeakOptions,
 ): Peak[] {
+  if (!(x instanceof Float64Array) || !(y instanceof Float64Array)) {
+    throw new TypeError("findPeaks: x and y must be Float64Array");
+  }
+  if (x.length !== y.length) {
+    throw new RangeError("findPeaks: x and y must have equal length");
+  }
   return backend().findPeaks(x, y, packPeakOptions(opts));
 }
 
@@ -236,6 +243,18 @@ export function getPeak(
   range: number,
   opts?: PeakOptions,
 ): Peak {
+  if (!(x instanceof Float64Array) || !(y instanceof Float64Array)) {
+    throw new TypeError("getPeak: x and y must be Float64Array");
+  }
+  if (x.length !== y.length) {
+    throw new RangeError("getPeak: x and y must have equal length");
+  }
+  if (!Number.isFinite(rt)) {
+    throw new RangeError("getPeak: rt must be a finite number");
+  }
+  if (!Number.isFinite(range) || range <= 0) {
+    throw new RangeError("getPeak: range must be a positive finite number");
+  }
   return backend().getPeak(x, y, rt, range, packPeakOptions(opts));
 }
 
@@ -270,9 +289,9 @@ export function calculateBaseline(
   );
 }
 
-const QUERY_RT_RANGE   = 0;
+const QUERY_RT_RANGE = 0;
 const QUERY_CLOSEST_RT = 1;
-const QUERY_MZ_RANGE   = 2;
+const QUERY_MZ_RANGE = 2;
 const QUERY_CLOSEST_MZ = 3;
 
 function assertLevel(level: number, caller: string): void {
@@ -290,7 +309,7 @@ function assertLevel(level: number, caller: string): void {
 /**
  * Retrieve centroid scans from a sample by retention time or precursor m/z.
  *
- * @param file - Loaded sample.
+ * @param file - Loaded sample file.
  * @param query - Query by RT range, closest RT, m/z range, or closest m/z.
  * @param level - MS level (1 = MS1, 2 = MS2, etc.). Default 1.
  * @returns Array of scans for range queries, single scan (or null) for closest queries.
@@ -308,7 +327,8 @@ export function getScans(
   let b: number;
 
   const assertFinite = (v: number, label: string) => {
-    if (!Number.isFinite(v)) throw new RangeError(`getScans: ${label} must be finite`);
+    if (!Number.isFinite(v))
+      throw new RangeError(`getScans: ${label} must be finite`);
   };
 
   if ("rt" in query) {
@@ -325,22 +345,25 @@ export function getScans(
       b = NaN;
     }
   } else {
-    if ("from" in query.selectedMz) {
-      assertFinite(query.selectedMz.from, "selectedMz.from");
-      assertFinite(query.selectedMz.to, "selectedMz.to");
+    if ("from" in query.mz) {
+      assertFinite(query.mz.from, "mz.from");
+      assertFinite(query.mz.to, "mz.to");
       queryType = QUERY_MZ_RANGE;
-      a = query.selectedMz.from;
-      b = query.selectedMz.to;
+      a = query.mz.from;
+      b = query.mz.to;
     } else {
-      assertFinite(query.selectedMz.closest, "selectedMz.closest");
-      if (query.selectedMz.closest <= 0) throw new RangeError("getScans: selectedMz.closest must be positive");
+      assertFinite(query.mz.closest, "mz.closest");
+      if (query.mz.closest <= 0)
+        throw new RangeError("getScans: mz.closest must be positive");
       queryType = QUERY_CLOSEST_MZ;
-      a = query.selectedMz.closest;
+      a = query.mz.closest;
       b = NaN;
     }
   }
 
-  const raw = camelizeKeys(backend().getScans(file._handle!, queryType, a, b, level));
+  const raw = camelizeKeys(
+    backend().getScans(file._handle!, queryType, a, b, level),
+  );
   if (queryType === QUERY_CLOSEST_RT || queryType === QUERY_CLOSEST_MZ) {
     return raw?.length ? raw[0] : null;
   }
@@ -350,8 +373,8 @@ export function getScans(
 /**
  * Extract and pick peaks for a list of targets using their EIC traces.
  *
- * @param file - Loaded sample.
- * @param targets - List of targets with `id`, `rt`, `mz`, and `ranges`.
+ * @param file - Loaded sample file.
+ * @param targets - List of targets with `id`, `rt`, `mz`, and `range`.
  * @param fromTo - Retention time range `{ from, to }` in minutes.
  * @param options - Peak detection options.
  * @param cores - Number of CPU cores to use. Default 1.
@@ -388,7 +411,7 @@ export function getPeaksFromEic(
 /**
  * Pick peaks from pre-computed chromatogram traces.
  *
- * @param file - Loaded sample.
+ * @param file - Loaded sample file.
  * @param items - List of chromatogram items with `idx`, `rt`, and `window`.
  * @param options - Peak detection options.
  * @param cores - Number of CPU cores to use. Default 1.
@@ -430,7 +453,7 @@ export function getPeaksFromChrom(
 /**
  * Detect all chromatographic features across an m/z grid.
  *
- * @param file - Loaded sample.
+ * @param file - Loaded sample file.
  * @param fromTo - Retention time range `{ from, to }` in minutes.
  * @param options - Feature detection options (eic, grid, findPeak, cores).
  * @returns Array of detected features.
@@ -493,7 +516,7 @@ export function findFeatures(
 /**
  * Find a feature for each target using its EIC and scan data.
  *
- * @param file - Loaded sample.
+ * @param file - Loaded sample file.
  * @param targets - List of targets with `id`, `rt`, `mz`, and `ranges`.
  * @param options - Detection options including `scanEic`, `eic`, `findPeak`, and `cores`.
  * @returns Array of found features, one per target.

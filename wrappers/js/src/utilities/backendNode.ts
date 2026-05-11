@@ -81,6 +81,7 @@ function unpackIds(
 export class NodeBackend implements Backend {
   private native: any;
   ready = false;
+  readonly handlesAreGcFinalized = true;
 
   constructor(proc: NodeJS.Process) {
     const addonPath = path.join(
