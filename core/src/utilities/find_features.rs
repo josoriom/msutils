@@ -10,16 +10,17 @@ use std::{
     mem,
 };
 
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::{
     calculate_eic::{
         CentroidScan, EicOptions, ScanQuery, TimeUnit, get_eic_for_mz, get_scans, lower_bound,
         with_eic_apex_intensity,
     },
     find_peaks::{FindPeaksOptions, find_peaks},
-    gpu::{GpuContext, processor::GpuBatchOptions},
     structs::{DataXY, FromTo, Peak},
 };
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use crate::utilities::gpu::{GpuContext, processor::GpuBatchOptions};
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::{ThreadPoolBuilder, prelude::*};

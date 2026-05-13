@@ -1,6 +1,5 @@
 use std::{
     cmp::Ordering,
-    collections::HashSet,
     fmt::{Display, Formatter},
     io::Error,
     sync::Arc,
@@ -19,11 +18,10 @@ use ionic::{
 
 use crate::utilities::{
     calculate_eic::{
-        EicOptions, ScanQuery, TimeUnit, get_eic_for_mz, get_scans, lower_bound, upper_bound,
+        CentroidScan, EicOptions, ScanQuery, TimeUnit, get_eic_for_mz, get_scans, lower_bound,
+        mz_tolerance_for, upper_bound,
     },
-    find_features::{
-        Feature, FeatureError, FindFeaturesOptions, MzTolerance, dedup_points, find_features,
-    },
+    find_features::{Feature, FeatureError, FindFeaturesOptions, MzTolerance, find_features},
     find_peaks::FindPeaksOptions,
     get_peak::get_peak,
     structs::{DataXY, FromTo, Roi},
@@ -293,8 +291,10 @@ pub fn get_features(
         alignment_config.peak_options,
     );
 
+    let results = build_results(slots, alignment_config.frequency);
+
     Ok(dedup(
-        build_results(slots, alignment_config.frequency),
+        results,
         &alignment_config.tolerance,
         alignment_config.rt_tolerance,
     ))
@@ -441,15 +441,26 @@ fn fill_sample(
                 peak_options.clone(),
             )
             .filter(|p| p.intensity > 0.0)
-            .map(|p| Feature {
-                mz: bounds.target_mz,
-                rt: p.rt,
-                intensity: p.intensity,
-                from: p.from,
-                to: p.to,
-                np: p.np,
-                integral: p.integral,
-                noise: p.noise,
+            .map(|p| {
+                let measured_mz = weighted_centroid_mz(
+                    &all_scans[start..end],
+                    &all_times[start..end],
+                    bounds.target_mz,
+                    eic_options,
+                    p.from,
+                    p.to,
+                )
+                .unwrap_or(bounds.target_mz);
+                Feature {
+                    mz: measured_mz,
+                    rt: p.rt,
+                    intensity: p.intensity,
+                    from: p.from,
+                    to: p.to,
+                    np: p.np,
+                    integral: p.integral,
+                    noise: p.noise,
+                }
             });
             (ci, feature)
         })
@@ -460,6 +471,37 @@ fn fill_sample(
             slots[ci].0[sample_idx] = Some(f);
         }
     }
+}
+
+pub fn weighted_centroid_mz(
+    scans: &[CentroidScan],
+    times: &[f64],
+    target_mz: f64,
+    options: EicOptions,
+    rt_from: f64,
+    rt_to: f64,
+) -> Option<f64> {
+    if !target_mz.is_finite() || target_mz <= 0.0 {
+        return None;
+    }
+    let tol = mz_tolerance_for(target_mz, options);
+    if !tol.is_finite() || tol <= 0.0 {
+        return None;
+    }
+    let (lo, hi) = (target_mz - tol, target_mz + tol);
+    let (mut wsum, mut isum) = (0.0f64, 0.0f64);
+    for (scan, &rt) in scans.iter().zip(times.iter()) {
+        if rt < rt_from || rt > rt_to {
+            continue;
+        }
+        let start = lower_bound(&scan.mz, lo);
+        let end = upper_bound(&scan.mz, hi);
+        for i in start..end {
+            wsum += scan.mz[i] * scan.intensity[i];
+            isum += scan.intensity[i];
+        }
+    }
+    (isum > 0.0).then(|| wsum / isum)
 }
 
 fn build_results(slots: Vec<ClusterSlot>, frequency: usize) -> Vec<ConsensusFeature> {
@@ -473,21 +515,28 @@ fn build_results(slots: Vec<ClusterSlot>, frequency: usize) -> Vec<ConsensusFeat
         .collect()
 }
 
-fn dedup(
-    results: Vec<ConsensusFeature>,
+pub(crate) fn dedup(
+    mut results: Vec<ConsensusFeature>,
     tolerance: &MzTolerance,
     rt_tol: f64,
 ) -> Vec<ConsensusFeature> {
-    let points: Vec<(f64, f64, f64)> = results.iter().map(|f| (f.rt, f.mz, f.intensity)).collect();
-    let survivors: HashSet<(u64, u64, u64)> =
-        dedup_points(points, tolerance.mz_abs, tolerance.ppm, rt_tol)
-            .into_iter()
-            .map(|(rt, mz, i)| (rt.to_bits(), mz.to_bits(), i.to_bits()))
-            .collect();
-    results
-        .into_iter()
-        .filter(|f| survivors.contains(&(f.rt.to_bits(), f.mz.to_bits(), f.intensity.to_bits())))
-        .collect()
+    results.sort_unstable_by(|a, b| {
+        b.frequency.cmp(&a.frequency).then_with(|| {
+            b.intensity
+                .partial_cmp(&a.intensity)
+                .unwrap_or(Ordering::Equal)
+        })
+    });
+    let mut kept: Vec<ConsensusFeature> = Vec::new();
+    'outer: for f in results {
+        for k in &kept {
+            if tolerance.are_close_to_ref(f.mz, k.mz) && (f.rt - k.rt).abs() <= rt_tol {
+                continue 'outer;
+            }
+        }
+        kept.push(f);
+    }
+    kept
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]

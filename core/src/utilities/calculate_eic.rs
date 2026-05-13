@@ -366,7 +366,7 @@ pub fn upper_bound(values: &[f64], target: f64) -> usize {
 }
 
 #[inline]
-fn mz_tolerance_for(target_mz: f64, options: EicOptions) -> f64 {
+pub(crate) fn mz_tolerance_for(target_mz: f64, options: EicOptions) -> f64 {
     let ppm_window = if options.ppm_tolerance > 0.0 {
         (options.ppm_tolerance * 1e-6) * target_mz.abs()
     } else {
@@ -426,14 +426,22 @@ mod tests {
         }
 
         fn load_scan(&mut self, index: usize, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> bool {
-            let Some((_, m, i)) = self.scans.get(index) else { return false };
+            let Some((_, m, i)) = self.scans.get(index) else {
+                return false;
+            };
             *mz = m.clone();
             *intensity = i.clone();
             !m.is_empty()
         }
     }
 
-    fn make_scan(rt: f64, ms_level: u8, selected_ion_mz: f64, mz: Vec<f64>, intensity: Vec<f64>) -> (ScanSummary, Vec<f64>, Vec<f64>) {
+    fn make_scan(
+        rt: f64,
+        ms_level: u8,
+        selected_ion_mz: f64,
+        mz: Vec<f64>,
+        intensity: Vec<f64>,
+    ) -> (ScanSummary, Vec<f64>, Vec<f64>) {
         (
             ScanSummary {
                 rt,
@@ -512,14 +520,22 @@ mod tests {
 
     #[test]
     fn mz_tolerance_ppm_dominates() {
-        let opts = EicOptions { ppm_tolerance: 10.0, mz_tolerance: 0.001, ..Default::default() };
+        let opts = EicOptions {
+            ppm_tolerance: 10.0,
+            mz_tolerance: 0.001,
+            ..Default::default()
+        };
         let tol = mz_tolerance_for(500.0, opts);
         assert!((tol - 0.005).abs() < 1e-9);
     }
 
     #[test]
     fn mz_tolerance_abs_dominates() {
-        let opts = EicOptions { ppm_tolerance: 1.0, mz_tolerance: 0.1, ..Default::default() };
+        let opts = EicOptions {
+            ppm_tolerance: 1.0,
+            mz_tolerance: 0.1,
+            ..Default::default()
+        };
         let tol = mz_tolerance_for(500.0, opts);
         assert!((tol - 0.1).abs() < 1e-9);
     }
@@ -531,7 +547,12 @@ mod tests {
             make_scan(2.0, 1, f64::NAN, vec![200.0], vec![20.0]),
             make_scan(3.0, 1, f64::NAN, vec![300.0], vec![30.0]),
         ]);
-        let (rts, scans) = get_scans(&mut source, ScanQuery::RtRange(FromTo { from: 1.0, to: 2.5 }), TimeUnit::Minutes, 1);
+        let (rts, scans) = get_scans(
+            &mut source,
+            ScanQuery::RtRange(FromTo { from: 1.0, to: 2.5 }),
+            TimeUnit::Minutes,
+            1,
+        );
         assert_eq!(rts, vec![1.0, 2.0]);
         assert_eq!(scans.len(), 2);
     }
@@ -542,17 +563,26 @@ mod tests {
             make_scan(1.0, 1, f64::NAN, vec![100.0], vec![10.0]),
             make_scan(2.0, 2, f64::NAN, vec![200.0], vec![20.0]),
         ]);
-        let (rts, scans) = get_scans(&mut source, ScanQuery::RtRange(FromTo { from: 0.0, to: 5.0 }), TimeUnit::Minutes, 1);
+        let (rts, scans) = get_scans(
+            &mut source,
+            ScanQuery::RtRange(FromTo { from: 0.0, to: 5.0 }),
+            TimeUnit::Minutes,
+            1,
+        );
         assert_eq!(rts, vec![1.0]);
         assert_eq!(scans.len(), 1);
     }
 
     #[test]
     fn get_by_rt_range_empty_when_no_match() {
-        let mut source = MockSource::new(vec![
-            make_scan(5.0, 1, f64::NAN, vec![100.0], vec![10.0]),
-        ]);
-        let (rts, scans) = get_scans(&mut source, ScanQuery::RtRange(FromTo { from: 0.0, to: 2.0 }), TimeUnit::Minutes, 1);
+        let mut source =
+            MockSource::new(vec![make_scan(5.0, 1, f64::NAN, vec![100.0], vec![10.0])]);
+        let (rts, scans) = get_scans(
+            &mut source,
+            ScanQuery::RtRange(FromTo { from: 0.0, to: 2.0 }),
+            TimeUnit::Minutes,
+            1,
+        );
         assert!(rts.is_empty());
         assert!(scans.is_empty());
     }
@@ -595,7 +625,15 @@ mod tests {
             make_scan(2.0, 2, 600.0, vec![600.0], vec![200.0]),
             make_scan(3.0, 2, 700.0, vec![700.0], vec![300.0]),
         ]);
-        let (rts, scans) = get_scans(&mut source, ScanQuery::MzRange(FromTo { from: 490.0, to: 650.0 }), TimeUnit::Minutes, 2);
+        let (rts, scans) = get_scans(
+            &mut source,
+            ScanQuery::MzRange(FromTo {
+                from: 490.0,
+                to: 650.0,
+            }),
+            TimeUnit::Minutes,
+            2,
+        );
         assert_eq!(rts.len(), 2);
         assert!(rts.contains(&1.0) && rts.contains(&2.0));
         assert_eq!(scans.len(), 2);
@@ -607,7 +645,15 @@ mod tests {
             make_scan(1.0, 2, f64::NAN, vec![100.0], vec![10.0]),
             make_scan(2.0, 2, 600.0, vec![600.0], vec![200.0]),
         ]);
-        let (rts, scans) = get_scans(&mut source, ScanQuery::MzRange(FromTo { from: 0.0, to: 1000.0 }), TimeUnit::Minutes, 2);
+        let (rts, scans) = get_scans(
+            &mut source,
+            ScanQuery::MzRange(FromTo {
+                from: 0.0,
+                to: 1000.0,
+            }),
+            TimeUnit::Minutes,
+            2,
+        );
         assert_eq!(rts, vec![2.0]);
         assert_eq!(scans.len(), 1);
     }
@@ -619,7 +665,12 @@ mod tests {
             make_scan(2.0, 2, 600.0, vec![600.0], vec![200.0]),
             make_scan(3.0, 2, 700.0, vec![700.0], vec![300.0]),
         ]);
-        let (rts, scans) = get_scans(&mut source, ScanQuery::ClosestMz(610.0), TimeUnit::Minutes, 2);
+        let (rts, scans) = get_scans(
+            &mut source,
+            ScanQuery::ClosestMz(610.0),
+            TimeUnit::Minutes,
+            2,
+        );
         assert_eq!(rts, vec![2.0]);
         assert_eq!(scans[0].metadata.selected_ion_mz, 600.0);
     }
@@ -630,17 +681,26 @@ mod tests {
             make_scan(1.0, 2, 500.0, vec![], vec![]),
             make_scan(2.0, 2, 510.0, vec![510.0], vec![200.0]),
         ]);
-        let (rts, scans) = get_scans(&mut source, ScanQuery::ClosestMz(500.0), TimeUnit::Minutes, 2);
+        let (rts, scans) = get_scans(
+            &mut source,
+            ScanQuery::ClosestMz(500.0),
+            TimeUnit::Minutes,
+            2,
+        );
         assert_eq!(rts, vec![2.0]);
         assert_eq!(scans.len(), 1);
     }
 
     #[test]
     fn get_closest_mz_empty_when_no_finite_selected_ion_mz() {
-        let mut source = MockSource::new(vec![
-            make_scan(1.0, 2, f64::NAN, vec![100.0], vec![10.0]),
-        ]);
-        let (rts, scans) = get_scans(&mut source, ScanQuery::ClosestMz(500.0), TimeUnit::Minutes, 2);
+        let mut source =
+            MockSource::new(vec![make_scan(1.0, 2, f64::NAN, vec![100.0], vec![10.0])]);
+        let (rts, scans) = get_scans(
+            &mut source,
+            ScanQuery::ClosestMz(500.0),
+            TimeUnit::Minutes,
+            2,
+        );
         assert!(rts.is_empty());
         assert!(scans.is_empty());
     }
@@ -651,7 +711,12 @@ mod tests {
             make_scan(1.0, 1, f64::NAN, vec![100.0], vec![10.0]),
             make_scan(2.0, 2, f64::NAN, vec![200.0], vec![20.0]),
         ]);
-        let (rts, scans) = get_scans(&mut source, ScanQuery::RtRange(FromTo { from: 0.0, to: 5.0 }), TimeUnit::Minutes, 0);
+        let (rts, scans) = get_scans(
+            &mut source,
+            ScanQuery::RtRange(FromTo { from: 0.0, to: 5.0 }),
+            TimeUnit::Minutes,
+            0,
+        );
         assert_eq!(rts.len(), 2);
         assert_eq!(scans.len(), 2);
     }
