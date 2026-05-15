@@ -11,9 +11,10 @@ use std::{
 };
 
 use ionic::{
-    MzML, ScanMeta, ScanSource, ScanSummary, SpectrumSource, bin_to_mzml as bin_to_mzml_rs,
+    ScanSource, ScanSummary, bin_to_mzml as bin_to_mzml_rs,
     encoder::{WritingMode, encode},
     ion::{DecoderConfig, Ion, OwnedIon},
+    mzml::structs::MzML,
     parse_mzml as parse_mzml_rs,
 };
 
@@ -21,7 +22,8 @@ pub mod utilities;
 use utilities::{
     calculate_baseline::{BaselineOptions, calculate_baseline as calculate_baseline_rs},
     calculate_eic::{
-        EicOptions, ScanQuery, TimeUnit, calculate_eic as calculate_eic_rs, get_scans as get_scans_rs,
+        EicOptions, ScanQuery, TimeUnit, calculate_eic as calculate_eic_rs,
+        get_scans as get_scans_rs,
     },
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
     find_features::{FindFeaturesOptions, find_features as find_features_rs},
@@ -125,21 +127,6 @@ impl ParsedFile {
                 let mzml = file.to_mzml().map_err(|_| ERR_PARSE)?;
                 f(&mzml)
             }
-        }
-    }
-}
-
-impl SpectrumSource for ParsedFile {
-    fn for_each_scan_in_range(
-        &mut self,
-        rt_min: f64,
-        rt_max: f64,
-        ms_level: u8,
-        cb: &mut dyn FnMut(f64, &ScanMeta, &[f64], &[f64]),
-    ) {
-        match self {
-            ParsedFile::Full(mzml) => mzml.for_each_scan_in_range(rt_min, rt_max, ms_level, cb),
-            ParsedFile::Lazy(file) => file.for_each_scan_in_range(rt_min, rt_max, ms_level, cb),
         }
     }
 }
@@ -708,12 +695,7 @@ pub unsafe extern "C" fn get_scans(
         _ => return ERR_INVALID_ARGS,
     };
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let (_, scans) = get_scans_rs(
-            unsafe { &mut *h },
-            query,
-            TimeUnit::Minutes,
-            level,
-        );
+        let (_, scans) = get_scans_rs(unsafe { &mut *h }, query, TimeUnit::Minutes, level);
         write_scans_json(out, &scans).map_err(|_| ERR_PARSE)
     })) {
         Ok(Ok(())) => OK,
@@ -1029,9 +1011,15 @@ pub unsafe extern "C" fn find_feature(
     }
 }
 
-fn write_scans_json(out: *mut Buf, scans: &[utilities::calculate_eic::CentroidScan]) -> Result<(), serde_json::Error> {
+fn write_scans_json(
+    out: *mut Buf,
+    scans: &[utilities::calculate_eic::CentroidScan],
+) -> Result<(), serde_json::Error> {
     let arr: Vec<_> = scans.iter().map(|s| json!({"rt":s.rt,"mz":s.mz.as_ref(),"intensity":s.intensity.as_ref(),"metadata":s.metadata})).collect();
-    write_buf(out, serde_json::to_string(&arr)?.into_bytes().into_boxed_slice());
+    write_buf(
+        out,
+        serde_json::to_string(&arr)?.into_bytes().into_boxed_slice(),
+    );
     Ok(())
 }
 

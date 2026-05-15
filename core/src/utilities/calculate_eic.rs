@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, sync::Arc};
 
-use ionic::{ScanMeta, ScanSource, ScanSummary, SpectrumSource};
+use ionic::{ScanSource, ScanSummary};
 use serde::Serialize;
 
 use crate::utilities::structs::{FromTo, Peak};
@@ -81,19 +81,6 @@ impl SpectrumSummary {
     }
 
     #[inline]
-    pub fn from_scan_meta(rt_seconds: f64, meta: &ScanMeta) -> Self {
-        Self {
-            rt_seconds,
-            base_peak_mz: meta.base_peak_mz,
-            selected_ion_mz: meta.selected_ion_mz,
-            base_peak_int: meta.base_peak_int,
-            total_ion_current: meta.total_ion_current,
-            ms_level: meta.ms_level,
-            polarity: meta.polarity,
-        }
-    }
-
-    #[inline]
     pub fn from_summary(s: &ScanSummary) -> Self {
         Self {
             rt_seconds: s.rt * 60.0,
@@ -116,7 +103,7 @@ pub struct CentroidScan {
 }
 
 pub fn calculate_eic(
-    source: &mut impl SpectrumSource,
+    source: &mut impl ScanSource,
     target_mass: f64,
     time_range: FromTo,
     options: EicOptions,
@@ -138,17 +125,12 @@ pub fn calculate_eic(
         .to_minutes(time_range.from.max(time_range.to));
     let mut x = Vec::new();
     let mut y = Vec::new();
-    source.for_each_scan_in_range(
-        rt_min,
-        rt_max,
-        MS1_LEVEL,
-        &mut |rt, _meta, mz, intensity| {
-            x.push(rt);
-            y.push(summed_intensity_in_window(
-                mz, intensity, mz_lower, mz_upper,
-            ));
-        },
-    );
+    source.for_each_in_range(rt_min, rt_max, MS1_LEVEL, |summary, mz, intensity| {
+        x.push(summary.rt);
+        y.push(summed_intensity_in_window(
+            mz, intensity, mz_lower, mz_upper,
+        ));
+    });
     Eic { x, y }
 }
 

@@ -31,7 +31,7 @@ use crate::utilities::{
 const ION_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use ionic::{MzML, parse_mzml};
+use ionic::{mzml::structs::MzML, parse_mzml};
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use memmap2::Mmap;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
