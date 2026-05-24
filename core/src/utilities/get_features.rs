@@ -80,36 +80,36 @@ impl From<FeatureError> for AlignmentError {
 #[derive(Clone, Debug)]
 pub struct ConsensusFeature {
     pub mz: f64,
-    pub rmz: f64,
-    pub rint: f64,
+    pub mz_rsd: f64,
+    pub integral_rsd: f64,
     pub rt: f64,
     pub intensity: f64,
-    pub rintensity: f64,
+    pub intensity_rsd: f64,
     pub from: f64,
     pub to: f64,
-    pub np: usize,
+    pub n_points: usize,
     pub integral: f64,
-    pub frequency: usize,
+    pub n_samples: usize,
 }
 
 #[derive(Clone, Debug)]
-pub struct ConsensusAlignmentConfig {
-    pub tolerance: MzTolerance,
+pub struct AlignmentOptions {
+    pub mz_tolerance: MzTolerance,
     pub rt_tolerance: f64,
-    pub frequency: usize,
+    pub min_samples: usize,
     pub eic_options: EicOptions,
     pub peak_options: Option<FindPeaksOptions>,
 }
 
-impl Default for ConsensusAlignmentConfig {
+impl Default for AlignmentOptions {
     fn default() -> Self {
         Self {
-            tolerance: MzTolerance {
-                mz_abs: 0.005,
+            mz_tolerance: MzTolerance {
+                mz_absolute: 0.005,
                 ppm: 20.0,
             },
             rt_tolerance: 0.05,
-            frequency: 1,
+            min_samples: 1,
             eic_options: EicOptions {
                 ppm_tolerance: 20.0,
                 mz_tolerance: 0.005,
@@ -143,13 +143,13 @@ type SampleDataset = (String, SampleSourceKind, Vec<Feature>);
 
 pub(crate) struct SearchBounds {
     pub(crate) target_mz: f64,
-    pub(crate) seed_rt: f64,
+    pub(crate) center_rt: f64,
     pub(crate) rt_from: f64,
     pub(crate) rt_to: f64,
 }
 
 #[derive(Debug)]
-pub(crate) struct GrowingCluster {
+pub(crate) struct MzRtCluster {
     items: Vec<TaggedFeature>,
     sorted_mzs: Vec<f64>,
     sorted_rts: Vec<f64>,
@@ -157,7 +157,7 @@ pub(crate) struct GrowingCluster {
     pub(crate) cached_median_rt: f64,
 }
 
-impl GrowingCluster {
+impl MzRtCluster {
     pub(crate) fn new(item: TaggedFeature) -> Self {
         let mz = item.feature.mz;
         let rt = item.feature.rt;
@@ -215,8 +215,8 @@ impl FeatureClusterer {
             .collect()
     }
 
-    fn group_by_mz(&self, items: Vec<TaggedFeature>) -> Vec<GrowingCluster> {
-        let mut groups: Vec<GrowingCluster> = Vec::new();
+    fn group_by_mz(&self, items: Vec<TaggedFeature>) -> Vec<MzRtCluster> {
+        let mut groups: Vec<MzRtCluster> = Vec::new();
         for item in items {
             let belongs = groups.last().is_some_and(|g| {
                 self.tolerance
@@ -225,13 +225,13 @@ impl FeatureClusterer {
             if belongs {
                 groups.last_mut().unwrap().push(item);
             } else {
-                groups.push(GrowingCluster::new(item));
+                groups.push(MzRtCluster::new(item));
             }
         }
         groups
     }
 
-    fn subdivide_by_rt(&self, group: Vec<TaggedFeature>) -> Vec<GrowingCluster> {
+    fn subdivide_by_rt(&self, group: Vec<TaggedFeature>) -> Vec<MzRtCluster> {
         let mut rt_sorted = group;
         rt_sorted.sort_unstable_by(|a, b| {
             a.feature
@@ -239,7 +239,7 @@ impl FeatureClusterer {
                 .partial_cmp(&b.feature.rt)
                 .unwrap_or(Ordering::Equal)
         });
-        let mut clusters: Vec<GrowingCluster> = Vec::new();
+        let mut clusters: Vec<MzRtCluster> = Vec::new();
         for item in rt_sorted {
             let belongs = clusters
                 .last()
@@ -247,7 +247,7 @@ impl FeatureClusterer {
             if belongs {
                 clusters.last_mut().unwrap().push(item);
             } else {
-                clusters.push(GrowingCluster::new(item));
+                clusters.push(MzRtCluster::new(item));
             }
         }
         clusters
@@ -261,7 +261,7 @@ pub fn get_features(
     directory_path: &str,
     time_window: FromTo,
     feature_config: FindFeaturesOptions,
-    alignment_config: ConsensusAlignmentConfig,
+    alignment_config: AlignmentOptions,
     cores: usize,
 ) -> Result<Vec<ConsensusFeature>, AlignmentError> {
     let datasets = load_sample_files(directory_path)?;
@@ -274,7 +274,7 @@ pub fn get_features(
     let mut datasets = detect_features_per_sample(datasets, time_window, &feature_config, cores);
 
     let clusterer = FeatureClusterer {
-        tolerance: alignment_config.tolerance.clone(),
+        tolerance: alignment_config.mz_tolerance.clone(),
         rt_tolerance: alignment_config.rt_tolerance,
     };
 
@@ -291,11 +291,11 @@ pub fn get_features(
         alignment_config.peak_options,
     );
 
-    let results = build_results(slots, alignment_config.frequency);
+    let results = build_results(slots, alignment_config.min_samples);
 
     Ok(dedup(
         results,
-        &alignment_config.tolerance,
+        &alignment_config.mz_tolerance,
         alignment_config.rt_tolerance,
     ))
 }
@@ -435,8 +435,8 @@ fn fill_sample(
                     y: intensities,
                 },
                 &Roi {
-                    rt: bounds.seed_rt,
-                    window: bounds.rt_to - bounds.rt_from,
+                    rt: bounds.center_rt,
+                    half_width: bounds.rt_to - bounds.rt_from,
                 },
                 peak_options.clone(),
             )
@@ -457,7 +457,7 @@ fn fill_sample(
                     intensity: p.intensity,
                     from: p.from,
                     to: p.to,
-                    np: p.np,
+                    n_points: p.n_points,
                     integral: p.integral,
                     noise: p.noise,
                 }
@@ -521,7 +521,7 @@ pub(crate) fn dedup(
     rt_tol: f64,
 ) -> Vec<ConsensusFeature> {
     results.sort_unstable_by(|a, b| {
-        b.frequency.cmp(&a.frequency).then_with(|| {
+        b.n_samples.cmp(&a.n_samples).then_with(|| {
             b.intensity
                 .partial_cmp(&a.intensity)
                 .unwrap_or(Ordering::Equal)
@@ -646,10 +646,11 @@ pub(crate) fn compute_search_bounds(
     let med_rt = rts[rts.len() / 2];
     Some(SearchBounds {
         target_mz: med_mz,
-        seed_rt: med_rt,
+        center_rt: med_rt,
         rt_from: med_rt - rt_tol,
         rt_to: med_rt + rt_tol,
     })
+
 }
 
 pub(crate) fn collect_filled_slots(slots: Vec<Option<Feature>>) -> Vec<Feature> {
@@ -676,21 +677,21 @@ pub(crate) fn aggregate_into_consensus(
     let mut mz_values: Vec<f64> = hits.iter().map(|f| f.mz).collect();
     let mut rt_values: Vec<f64> = hits.iter().map(|f| f.rt).collect();
     let mut intensity_values: Vec<f64> = hits.iter().map(|f| f.intensity).collect();
-    let mut np_values: Vec<f64> = hits.iter().map(|f| f.np as f64).collect();
+    let mut n_points_values: Vec<f64> = hits.iter().map(|f| f.n_points as f64).collect();
     let mut integral_values: Vec<f64> = hits.iter().map(|f| f.integral).collect();
 
     ConsensusFeature {
         mz: median(&mut mz_values),
-        rmz: rsd(&mz_values),
+        mz_rsd: rsd(&mz_values),
         rt: median(&mut rt_values),
         intensity: median(&mut intensity_values),
-        rintensity: rsd(&intensity_values),
+        intensity_rsd: rsd(&intensity_values),
         from: bounds.rt_from,
         to: bounds.rt_to,
-        np: median(&mut np_values) as usize,
+        n_points: median(&mut n_points_values) as usize,
         integral: median(&mut integral_values),
-        rint: rsd(&integral_values),
-        frequency: n,
+        integral_rsd: rsd(&integral_values),
+        n_samples: n,
     }
 }
 

@@ -11,7 +11,7 @@ SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, S
 SEXP C_get_peaks_from_chrom(SEXP bin, SEXP idxs, SEXP rts, SEXP ranges, SEXP options, SEXP cores);
 SEXP C_calculate_eic(SEXP bin, SEXP targets, SEXP from, SEXP to, SEXP ppm_tol, SEXP mz_tol);
 SEXP C_find_peaks(SEXP x, SEXP y, SEXP options);
-SEXP C_calculate_baseline(SEXP y, SEXP baseline_window, SEXP baseline_window_factor);
+SEXP C_calculate_baseline(SEXP y, SEXP lambda, SEXP max_iterations);
 SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol, SEXP grid_start, SEXP grid_end, SEXP grid_step_ppm, SEXP options, SEXP cores, SEXP use_gpu, SEXP batch_size);
 SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan_ppm, SEXP scan_mz, SEXP eic_ppm, SEXP eic_mz, SEXP options, SEXP cores);
 SEXP C_mzml_to_ion(SEXP bin, SEXP level, SEXP f32_compress);

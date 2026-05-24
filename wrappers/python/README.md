@@ -25,7 +25,7 @@ raw = open("sample.mzML", "rb").read()
 
 with msutils.parse_mzml(raw) as sample:
     eic   = msutils.calculate_eic(sample, target_mz=174.112, from_rt=1, to_rt=15)
-    peaks = msutils.find_peaks(eic["x"], eic["y"], options={"auto_noise": True, "sn_ratio": 3.0})
+    peaks = msutils.find_peaks(eic["x"], eic["y"], options={"auto_noise": True, "min_snr": 3.0})
     for p in peaks:
         print(f"rt={p['rt']:.3f}  intensity={p['intensity']:.0f}")
 ```
@@ -113,7 +113,7 @@ scans = msutils.get_scans(sample, rt_range=(1, 15), level=1)
 Estimate a baseline for XY data.
 
 ```python
-baseline = msutils.calculate_baseline(y, baseline_window=0, baseline_window_factor=0)
+baseline = msutils.calculate_baseline(y, lambda_=0, max_iterations=0)
 ```
 
 ### Find noise level
@@ -129,7 +129,7 @@ noise = msutils.find_noise_level(y)
 Find all peaks in XY data.
 
 ```python
-peaks = msutils.find_peaks(x, y, options={"auto_noise": True, "sn_ratio": 3.0})
+peaks = msutils.find_peaks(x, y, options={"auto_noise": True, "min_snr": 3.0})
 ```
 
 ### Get single peak
@@ -204,7 +204,7 @@ features = msutils.find_features(
     from_rt=1, to_rt=15,
     eic={"ppm_tolerance": 10, "mz_tolerance": 0.005},
     grid={"start": 40, "end": 1000, "step_size": 0.005},
-    options={"auto_noise": True, "sn_ratio": 3},
+    options={"auto_noise": True, "min_snr": 3},
     cores=4,
 )
 ```
@@ -230,16 +230,15 @@ Pass peak detection options as a dictionary:
 
 ```python
 options = {
-    "integral_threshold":     0.0,
-    "intensity_threshold":    150.0,
-    "width_threshold":        5,
-    "noise":                  float("nan"),
-    "auto_noise":             True,
-    "auto_baseline":          True,
-    "baseline_window":        0,
-    "baseline_window_factor": 0,
-    "allow_overlap":          False,
-    "window_size":            0,
-    "sn_ratio":               3.0,
+    "min_integral":        0.0,
+    "min_intensity":       150.0,
+    "min_peak_width_points": 5,
+    "noise":               float("nan"),
+    "auto_noise":          True,
+    "auto_baseline":       True,
+    "lambda_":             0,
+    "max_iterations":      0,
+    "allow_overlap":       False,
+    "min_snr":             3.0,
 }
 ```

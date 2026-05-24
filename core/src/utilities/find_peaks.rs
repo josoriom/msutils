@@ -3,47 +3,50 @@ use std::cmp::Ordering;
 use crate::utilities::calculate_baseline::{BaselineOptions, calculate_baseline};
 use crate::utilities::closest_index;
 use crate::utilities::find_noise_level::find_noise_level;
+use crate::utilities::functions::gaussian_fn;
 use crate::utilities::get_boundaries::{Boundaries, BoundariesOptions, get_boundaries};
 use crate::utilities::math::xy_integration;
 use crate::utilities::scan_for_peaks::scan_for_peaks;
 use crate::utilities::structs::{DataXY, Peak};
 
 #[derive(Clone, Copy, Debug)]
-pub struct ArtifactFilterOptions {
-    pub max_variation_index: f64,
+pub struct ArtifactFilter {
+    pub min_gaussian_r2: f64,
+    pub min_apex_to_boundary_ratio: f64,
 }
 
-impl Default for ArtifactFilterOptions {
+impl Default for ArtifactFilter {
     fn default() -> Self {
         Self {
-            max_variation_index: 3.0,
+            min_gaussian_r2: 0.30,
+            min_apex_to_boundary_ratio: 2.0,
         }
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub struct FilterPeaksOptions {
-    pub integral_threshold: Option<f64>,
-    pub width_threshold: Option<usize>,
-    pub intensity_threshold: Option<f64>,
+pub struct PeakFilter {
+    pub min_integral: Option<f64>,
+    pub min_peak_width_points: Option<usize>,
+    pub min_intensity: Option<f64>,
     pub noise: Option<f64>,
     pub auto_noise: Option<bool>,
     pub auto_baseline: Option<bool>,
     pub allow_overlap: Option<bool>,
-    pub sn_ratio: Option<f64>,
+    pub min_snr: Option<f64>,
 }
 
-impl Default for FilterPeaksOptions {
+impl Default for PeakFilter {
     fn default() -> Self {
         Self {
-            integral_threshold: None,
-            width_threshold: Some(5),
-            intensity_threshold: None,
+            min_integral: None,
+            min_peak_width_points: Some(5),
+            min_intensity: None,
             noise: None,
             auto_noise: Some(false),
             auto_baseline: Some(false),
             allow_overlap: Some(false),
-            sn_ratio: Some(1.0),
+            min_snr: Some(1.0),
         }
     }
 }
@@ -57,8 +60,8 @@ struct PeakCandidate {
     rt: f64,
     integral: f64,
     intensity: f64,
-    number_of_points: usize,
-    ratio: f64,
+    n_points: usize,
+    gaussian_r2: f64,
     noise: f64,
 }
 
@@ -70,60 +73,63 @@ impl From<PeakCandidate> for Peak {
             rt: c.rt,
             integral: c.integral,
             intensity: c.intensity,
-            ratio: c.ratio,
-            np: c.number_of_points,
+            gaussian_r2: if c.gaussian_r2.is_finite() { Some(c.gaussian_r2) } else { None },
+            n_points: c.n_points,
             noise: c.noise,
         }
     }
 }
 
+enum ShapeOutcome {
+    Artifact,
+    Skipped,
+    Unfittable,
+    Fit(f64),
+}
+
 #[derive(Clone, Debug)]
 pub struct FindPeaksOptions {
-    pub get_boundaries_options: Option<BoundariesOptions>,
-    pub filter_peaks_options: Option<FilterPeaksOptions>,
-    pub baseline_options: Option<BaselineOptions>,
-    pub artifact_filter_options: Option<ArtifactFilterOptions>,
+    pub boundaries: Option<BoundariesOptions>,
+    pub filter: Option<PeakFilter>,
+    pub baseline: Option<BaselineOptions>,
+    pub artifact_filter: Option<ArtifactFilter>,
 }
 
 impl Default for FindPeaksOptions {
     fn default() -> Self {
         Self {
-            get_boundaries_options: Some(BoundariesOptions::default()),
-            filter_peaks_options: Some(FilterPeaksOptions::default()),
-            baseline_options: Some(BaselineOptions::default()),
-            artifact_filter_options: Some(ArtifactFilterOptions::default()),
+            boundaries: Some(BoundariesOptions::default()),
+            filter: Some(PeakFilter::default()),
+            baseline: Some(BaselineOptions::default()),
+            artifact_filter: Some(ArtifactFilter::default()),
         }
     }
 }
 
 pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak> {
     let o = options.unwrap_or_default();
-    let filter_opts = o.filter_peaks_options.unwrap_or_default();
-    let base_opts = o.baseline_options.unwrap_or_default();
+    let filter = o.filter.unwrap_or_default();
+    let base_opts = o.baseline.unwrap_or_default();
 
     let n = data.y.len();
     if n == 0 {
         return Vec::new();
     }
 
-    let auto_baseline = filter_opts.auto_baseline.unwrap_or(false);
-    let auto_noise = filter_opts.auto_noise.unwrap_or(false);
+    let auto_baseline = filter.auto_baseline.unwrap_or(false);
+    let auto_noise = filter.auto_noise.unwrap_or(false);
 
-    let mut y_center = Vec::with_capacity(n);
-    if auto_baseline {
+    let baseline: Vec<f64> = if auto_baseline {
         let mut b = base_opts;
-        b.level = Some(0);
-        let floor = calculate_baseline(&data.y, b);
-        y_center.extend((0..n).map(|i| {
-            let v = data.y[i] - floor[i];
-            if v > 0.0 { v } else { 0.0 }
-        }));
+        b.edge_slope_level = Some(0);
+        calculate_baseline(&data.y, b)
     } else {
-        y_center.extend((0..n).map(|i| {
-            let v = data.y[i];
-            if v > 0.0 { v } else { 0.0 }
-        }));
-    }
+        vec![0.0; n]
+    };
+
+    let y_center: Vec<f64> = (0..n)
+        .map(|i| (data.y[i] - baseline[i]).max(0.0))
+        .collect();
 
     let normalized_data = DataXY {
         x: data.x.clone(),
@@ -133,7 +139,7 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
     let noise: f64 = if auto_noise {
         find_noise_level(&normalized_data.y).intensity
     } else {
-        filter_opts.noise.unwrap_or_default()
+        filter.noise.unwrap_or_default()
     };
 
     let positions = scan_for_peaks(&normalized_data);
@@ -141,7 +147,7 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
         return Vec::new();
     }
 
-    let mut bopt = o.get_boundaries_options.unwrap_or_default();
+    let mut bopt = o.boundaries.unwrap_or_default();
     bopt.noise = noise;
 
     let mut candidates: Vec<PeakCandidate> = Vec::with_capacity(positions.len());
@@ -169,8 +175,8 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
                     rt,
                     integral,
                     intensity,
-                    number_of_points: ti - fi + 1,
-                    ratio: 0.0,
+                    n_points: ti - fi + 1,
+                    gaussian_r2: f64::NAN,
                     noise,
                 });
             }
@@ -181,15 +187,15 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
         return Vec::new();
     }
 
-    if let Some(artifact_opts) = o.artifact_filter_options {
-        filter_artifacts(&mut candidates, &normalized_data, &artifact_opts);
+    if let Some(artifact_opts) = o.artifact_filter {
+        filter_artifacts(&mut candidates, data, &baseline, &artifact_opts);
     }
 
     if candidates.is_empty() {
         return Vec::new();
     }
 
-    let mut peaks = filter_peak_candidates(candidates, filter_opts);
+    let mut peaks = filter_peak_candidates(candidates, filter);
 
     peaks.sort_by(|a, b| a.rt.partial_cmp(&b.rt).unwrap_or(Ordering::Equal));
     peaks = dedupe_near_identical(peaks);
@@ -197,10 +203,10 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
     if !peaks.is_empty() {
         let mut cutoff = 0.0_f64;
         if noise > 0.0 {
-            let sn_mult = filter_opts.sn_ratio.unwrap_or(1.0);
+            let sn_mult = filter.min_snr.unwrap_or(1.0);
             cutoff = sn_mult * noise;
         }
-        if let Some(user_int) = filter_opts.intensity_threshold
+        if let Some(user_int) = filter.min_intensity
             && user_int > cutoff
         {
             cutoff = user_int;
@@ -261,11 +267,11 @@ pub fn apex_in_window(data: &DataXY, b: &Boundaries) -> Option<(f64, f64)> {
     Some((data.x[i], max_y))
 }
 
-fn filter_peak_candidates(peaks: Vec<PeakCandidate>, opt: FilterPeaksOptions) -> Vec<Peak> {
+fn filter_peak_candidates(peaks: Vec<PeakCandidate>, opt: PeakFilter) -> Vec<Peak> {
     let mut out: Vec<Peak> = Vec::with_capacity(peaks.len());
 
-    let min_intensity = opt.intensity_threshold;
-    let min_width = opt.width_threshold;
+    let min_intensity = opt.min_intensity;
+    let min_width = opt.min_peak_width_points;
 
     for p in peaks {
         let mut pass = true;
@@ -277,7 +283,7 @@ fn filter_peak_candidates(peaks: Vec<PeakCandidate>, opt: FilterPeaksOptions) ->
 
         if pass
             && let Some(w) = min_width
-            && p.number_of_points <= w
+            && p.n_points <= w
         {
             pass = false;
         }
@@ -398,7 +404,7 @@ fn suppress_contained_peaks(data: &DataXY, mut peaks: Vec<Peak>) -> Vec<Peak> {
                             peaks[ia].from = new_from;
                             peaks[ia].to = new_to;
                             peaks[ia].integral = integral;
-                            peaks[ia].np = ridx - lidx + 1;
+                            peaks[ia].n_points = ridx - lidx + 1;
                         }
 
                         keep[ib] = false;
@@ -420,41 +426,187 @@ fn suppress_contained_peaks(data: &DataXY, mut peaks: Vec<Peak>) -> Vec<Peak> {
     out
 }
 
-fn compute_variation_index(y: &[f64]) -> f64 {
-    if y.len() < 2 {
-        return 1.0;
-    }
-    let mut min = y[0];
-    let mut max = y[0];
-    let mut tv = 0.0_f64;
-    for w in y.windows(2) {
-        tv += (w[1] - w[0]).abs();
-        if w[1] < min {
-            min = w[1];
-        }
-        if w[1] > max {
-            max = w[1];
-        }
-    }
-    let amplitude = max - min;
-    if amplitude <= 0.0 {
-        return 1.0;
-    }
-    tv / (2.0 * amplitude)
-}
-
 fn filter_artifacts(
     candidates: &mut Vec<PeakCandidate>,
     data: &DataXY,
-    opts: &ArtifactFilterOptions,
+    baseline: &[f64],
+    opts: &ArtifactFilter,
 ) {
-    candidates.retain(|p| !is_artifact(p, data, opts));
+    candidates.retain_mut(|p| match classify_shape(p, data, baseline, opts) {
+        ShapeOutcome::Artifact => false,
+        ShapeOutcome::Skipped | ShapeOutcome::Unfittable => {
+            p.gaussian_r2 = f64::NAN;
+            true
+        }
+        ShapeOutcome::Fit(r2) => {
+            p.gaussian_r2 = r2;
+            r2 >= opts.min_gaussian_r2
+        }
+    });
 }
 
-fn is_artifact(p: &PeakCandidate, data: &DataXY, opts: &ArtifactFilterOptions) -> bool {
-    if opts.max_variation_index <= 0.0 {
-        return false;
+fn classify_shape(
+    p: &PeakCandidate,
+    data: &DataXY,
+    baseline: &[f64],
+    opts: &ArtifactFilter,
+) -> ShapeOutcome {
+    if p.from_idx >= p.to_idx || p.to_idx >= data.y.len() || baseline.len() != data.y.len() {
+        return ShapeOutcome::Unfittable;
     }
-    let window = &data.y[p.from_idx..=p.to_idx];
-    compute_variation_index(window) > opts.max_variation_index
+    let lo = p.from_idx;
+    let hi = p.to_idx;
+
+    let yc: Vec<f64> = (lo..=hi)
+        .map(|i| (data.y[i] - baseline[i]).max(0.0))
+        .collect();
+
+    let mut apex_off = 0usize;
+    let mut h_raw = data.y[lo];
+    let mut h = yc[0];
+    for (off, &v) in yc.iter().enumerate().skip(1) {
+        if v > h {
+            h = v;
+            h_raw = data.y[lo + off];
+            apex_off = off;
+        }
+    }
+    if h <= 0.0 || !h.is_finite() {
+        return ShapeOutcome::Unfittable;
+    }
+    let apex_idx = lo + apex_off;
+
+    if opts.min_apex_to_boundary_ratio > 0.0 {
+        let raw_base = data.y[lo].max(data.y[hi]);
+        if h_raw < opts.min_apex_to_boundary_ratio * raw_base {
+            return ShapeOutcome::Artifact;
+        }
+    }
+
+    if opts.min_gaussian_r2 <= 0.0 {
+        return ShapeOutcome::Skipped;
+    }
+
+    let floor = 0.05 * h;
+    let trim_lo = yc[..=apex_off]
+        .iter()
+        .rposition(|&v| v < floor)
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let trim_hi_off = yc[apex_off..]
+        .iter()
+        .position(|&v| v < floor)
+        .map(|i| apex_off + i)
+        .unwrap_or(yc.len() - 1);
+
+    if trim_hi_off.saturating_sub(trim_lo) + 1 < 5 {
+        return ShapeOutcome::Unfittable;
+    }
+
+    let trimmed_x = &data.x[lo + trim_lo..=lo + trim_hi_off];
+    let trimmed_yc = &yc[trim_lo..=trim_hi_off];
+    let trimmed_apex_off = apex_off.saturating_sub(trim_lo);
+
+    let sigma = estimate_sigma(trimmed_x, trimmed_yc, trimmed_apex_off, h);
+    if !sigma.is_finite() || sigma <= 0.0 {
+        return ShapeOutcome::Unfittable;
+    }
+
+    let mu = data.x[apex_idx];
+    let r2 = gaussian_r2(trimmed_x, trimmed_yc, mu, h, sigma);
+    if !r2.is_finite() {
+        return ShapeOutcome::Unfittable;
+    }
+
+    ShapeOutcome::Fit(r2)
+}
+
+fn estimate_sigma(x: &[f64], yc: &[f64], apex_off: usize, h: f64) -> f64 {
+    let n = yc.len();
+    if n < 3 {
+        return 0.0;
+    }
+    let half = 0.5 * h;
+
+    let mut left_x: Option<f64> = None;
+    if apex_off > 0 {
+        let mut i = apex_off;
+        while i > 0 {
+            if yc[i] >= half && yc[i - 1] < half {
+                let y1 = yc[i - 1];
+                let y2 = yc[i];
+                let x1 = x[i - 1];
+                let x2 = x[i];
+                let denom = y2 - y1;
+                let t = if denom.abs() > 1e-18 {
+                    (half - y1) / denom
+                } else {
+                    0.5
+                };
+                left_x = Some(x1 + t * (x2 - x1));
+                break;
+            }
+            i -= 1;
+        }
+    }
+    let mut right_x: Option<f64> = None;
+    if apex_off + 1 < n {
+        let mut i = apex_off;
+        while i + 1 < n {
+            if yc[i] >= half && yc[i + 1] < half {
+                let y1 = yc[i];
+                let y2 = yc[i + 1];
+                let x1 = x[i];
+                let x2 = x[i + 1];
+                let denom = y1 - y2;
+                let t = if denom.abs() > 1e-18 {
+                    (y1 - half) / denom
+                } else {
+                    0.5
+                };
+                right_x = Some(x1 + t * (x2 - x1));
+                break;
+            }
+            i += 1;
+        }
+    }
+
+    let fwhm = match (left_x, right_x) {
+        (Some(lx), Some(rx)) => (rx - lx).abs(),
+        (Some(lx), None) => 2.0 * (x[apex_off] - lx).abs(),
+        (None, Some(rx)) => 2.0 * (rx - x[apex_off]).abs(),
+        (None, None) => {
+            let span = (x[n - 1] - x[0]).abs();
+            return span / 6.0;
+        }
+    };
+
+    let c = 2.0 * (2.0_f64 * std::f64::consts::LN_2).sqrt();
+    fwhm / c
+}
+
+fn gaussian_r2(x: &[f64], yc: &[f64], mu: f64, h: f64, sigma: f64) -> f64 {
+    let n = yc.len();
+    if n < 3 {
+        return 0.0;
+    }
+    let mut mean_y = 0.0;
+    for &v in yc.iter() {
+        mean_y += v;
+    }
+    mean_y /= n as f64;
+
+    let mut ss_res = 0.0_f64;
+    let mut ss_tot = 0.0_f64;
+    for i in 0..n {
+        let expected = gaussian_fn(x[i], h, mu, sigma);
+        let r = yc[i] - expected;
+        ss_res += r * r;
+        let d = yc[i] - mean_y;
+        ss_tot += d * d;
+    }
+    if ss_tot <= 1e-18 {
+        return 0.0;
+    }
+    1.0 - ss_res / ss_tot
 }

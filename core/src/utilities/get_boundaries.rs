@@ -14,19 +14,19 @@ pub struct Boundaries {
 
 #[derive(Clone, Copy, Debug)]
 pub struct BoundariesOptions {
-    pub epsilon: f64,
+    pub min_slope_step: f64,
     pub noise: f64,
-    pub n_steps: usize,
-    pub baseline_run: usize,
+    pub min_ascending_steps: usize,
+    pub min_below_noise_run: usize,
 }
 
 impl Default for BoundariesOptions {
     fn default() -> Self {
         Self {
-            epsilon: 1e-5,
+            min_slope_step: 1e-5,
             noise: 0.0,
-            n_steps: 3,
-            baseline_run: 2,
+            min_ascending_steps: 3,
+            min_below_noise_run: 2,
         }
     }
 }
@@ -61,10 +61,10 @@ pub fn get_boundaries(
     }
 
     let config = WalkConfig {
-        epsilon: opts.epsilon,
+        epsilon: opts.min_slope_step,
         noise_value: opts.noise,
-        n_steps: opts.n_steps,
-        baseline_run: opts.baseline_run,
+        n_steps: opts.min_ascending_steps,
+        baseline_run: opts.min_below_noise_run,
         global_min,
     };
 

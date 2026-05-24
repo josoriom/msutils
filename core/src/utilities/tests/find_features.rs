@@ -31,7 +31,7 @@ mod tests {
 
     fn abs_tol(v: f64) -> MzTolerance {
         MzTolerance {
-            mz_abs: v,
+            mz_absolute: v,
             ppm: 0.0,
         }
     }
@@ -119,7 +119,7 @@ mod tests {
     #[test]
     fn test_mz_tolerance_ppm_dominates_abs_at_high_mz() {
         let tol = MzTolerance {
-            mz_abs: 0.001,
+            mz_absolute: 0.001,
             ppm: 10.0,
         };
         let (lo, hi) = tol.window_at(1000.0);
@@ -129,7 +129,7 @@ mod tests {
     #[test]
     fn test_mz_tolerance_abs_dominates_ppm_at_low_mz() {
         let tol = MzTolerance {
-            mz_abs: 0.01,
+            mz_absolute: 0.01,
             ppm: 1.0,
         };
         let (lo, hi) = tol.window_at(1.0);
@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn test_mz_tolerance_zero_ppm_uses_abs_only() {
         let tol = MzTolerance {
-            mz_abs: 0.5,
+            mz_absolute: 0.5,
             ppm: 0.0,
         };
         let (lo, hi) = tol.window_at(100.0);
@@ -379,37 +379,37 @@ mod tests {
     #[test]
     fn test_find_features_config_from_default_options() {
         let opts = FindFeaturesOptions::default();
-        assert_eq!(opts.scan_eic_options.ppm_tolerance, 10.0);
-        assert_eq!(opts.eic_options.ppm_tolerance, 20.0);
-        assert_eq!(opts.scan_width_threshold, 5);
-        assert_eq!(opts.mz_scan_grid.step_size, 0.006);
+        assert_eq!(opts.seed_eic_options.ppm_tolerance, 10.0);
+        assert_eq!(opts.final_eic_options.ppm_tolerance, 20.0);
+        assert_eq!(opts.min_seed_width_points, 5);
+        assert_eq!(opts.mz_scan_grid.step, 0.006);
     }
 
     #[test]
     fn test_find_features_default_values() {
         let opts = FindFeaturesOptions::default();
-        assert_eq!(opts.scan_eic_options.ppm_tolerance, 10.0);
-        assert_eq!(opts.scan_width_threshold, 5);
+        assert_eq!(opts.seed_eic_options.ppm_tolerance, 10.0);
+        assert_eq!(opts.min_seed_width_points, 5);
     }
 
     #[test]
     fn test_find_features_custom_values_passthrough() {
         let opts = FindFeaturesOptions {
-            scan_eic_options: EicOptions {
+            seed_eic_options: EicOptions {
                 ppm_tolerance: 5.0,
                 mz_tolerance: 0.002,
                 ..Default::default()
             },
-            eic_options: EicOptions {
+            final_eic_options: EicOptions {
                 ppm_tolerance: 15.0,
                 mz_tolerance: 0.004,
                 ..Default::default()
             },
-            scan_width_threshold: 3,
+            min_seed_width_points: 3,
             ..Default::default()
         };
-        assert_eq!(opts.scan_eic_options.ppm_tolerance, 5.0);
-        assert_eq!(opts.eic_options.ppm_tolerance, 15.0);
-        assert_eq!(opts.scan_width_threshold, 3);
+        assert_eq!(opts.seed_eic_options.ppm_tolerance, 5.0);
+        assert_eq!(opts.final_eic_options.ppm_tolerance, 15.0);
+        assert_eq!(opts.min_seed_width_points, 3);
     }
 }

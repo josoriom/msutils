@@ -40,18 +40,18 @@ def pack_peak_options(opts: Optional[Dict[str, Any]]) -> Optional[PeakOptions]:
         return 1 if value else 0
 
     options_struct = PeakOptions()
-    options_struct.integral_threshold     = _get_float("integral_threshold")
-    options_struct.intensity_threshold    = _get_float("intensity_threshold")
-    options_struct.width_threshold        = _get_int("width_threshold")
-    options_struct._pad                   = 0
-    options_struct.noise                  = _get_float("noise")
-    options_struct.auto_noise             = _get_bool("auto_noise")
-    options_struct.auto_baseline          = _get_bool("auto_baseline")
-    options_struct.baseline_window        = _get_int("baseline_window")
-    options_struct.baseline_window_factor = _get_int("baseline_window_factor")
-    options_struct.allow_overlap          = _get_bool("allow_overlap")
-    options_struct.window_size            = _get_int("window_size")
-    options_struct.sn_ratio               = _get_float("sn_ratio")
+    options_struct.min_integral          = _get_float("min_integral")
+    options_struct.min_intensity         = _get_float("min_intensity")
+    options_struct.min_peak_width_points = _get_int("min_peak_width_points")
+    options_struct._pad                  = 0
+    options_struct.noise                 = _get_float("noise")
+    options_struct.auto_noise            = _get_bool("auto_noise")
+    options_struct.auto_baseline         = _get_bool("auto_baseline")
+    options_struct.lambda_               = _get_int("lambda_")
+    options_struct.max_iterations        = _get_int("max_iterations")
+    options_struct.allow_overlap         = _get_bool("allow_overlap")
+    options_struct._pad2                 = 0
+    options_struct.min_snr               = _get_float("min_snr")
     return options_struct
 
 

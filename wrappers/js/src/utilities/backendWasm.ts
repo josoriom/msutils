@@ -5,10 +5,12 @@ declare const __WASM_DATA_URL__: string | undefined;
 declare var require: any;
 
 import type { Backend, FileHandle } from "./backend";
+import type { PeakOptions } from "../types/types";
 
 const IS_INLINE_BUILD = typeof __INLINE__ !== "undefined" && __INLINE__;
 const OUTPUT_BUFFER_PAIR_BYTES = 8;
 const PEAK_OPTIONS_STRUCT_BYTES = 64;
+const MSUTILS_ABI_VERSION = 1;
 
 function resolveTextDecoder(): TextDecoder {
   return typeof TextDecoder !== "undefined"
@@ -36,6 +38,23 @@ function writeI32(view: DataView, offset: number, value: unknown): void {
         : 0,
     true,
   );
+}
+
+function packPeakOptions(opts: PeakOptions): Uint8Array {
+  const view = new DataView(new ArrayBuffer(PEAK_OPTIONS_STRUCT_BYTES));
+  writeF64(view, 0, opts.minIntegral);
+  writeF64(view, 8, opts.minIntensity);
+  writeI32(view, 16, opts.minPeakWidthPoints);
+  view.setInt32(20, 0, true);
+  writeF64(view, 24, opts.noise);
+  writeI32(view, 32, opts.autoNoise);
+  writeI32(view, 36, opts.autoBaseline);
+  writeI32(view, 40, opts.lambda);
+  writeI32(view, 44, opts.maxIterations);
+  writeI32(view, 48, opts.allowOverlap);
+  view.setInt32(52, 0, true);
+  writeF64(view, 56, opts.minSnr);
+  return new Uint8Array(view.buffer);
 }
 
 function toUint8View(typed: {
@@ -121,16 +140,6 @@ class WasmHeap {
     return JSON.parse(this.decoder.decode(bytes)) as T;
   }
 
-  writeI32At(ptr: number, offset: number, value: unknown): void {
-    this.refresh();
-    writeI32(this.view, ptr + offset, value);
-  }
-
-  writeF64At(ptr: number, offset: number, value: unknown): void {
-    this.refresh();
-    writeF64(this.view, ptr + offset, value);
-  }
-
   writeBytesAt(ptr: number, data: Uint8Array): void {
     this.refresh();
     this.bytes.set(data, ptr);
@@ -145,6 +154,8 @@ class WasmExports {
   readonly memory: WebAssembly.Memory;
   readonly alloc: (size: number) => number;
   readonly free: (ptr: number, size: number) => void;
+  readonly msutilsAbiVersion: () => number;
+  readonly msutilsSizeofPeakOptions: () => number;
   readonly parseMzml: (
     dataPtr: number,
     dataLen: number,
@@ -221,8 +232,8 @@ class WasmExports {
   readonly calculateBaseline: (
     yPtr: number,
     len: number,
-    window: number,
-    windowFactor: number,
+    lambda: number,
+    maxIterations: number,
     outBuf: number,
   ) => number;
   readonly findFeature: (
@@ -257,6 +268,10 @@ class WasmExports {
     this.memory = ex.memory as WebAssembly.Memory;
     this.alloc = this.resolve(ex, ["alloc"]);
     this.free = this.resolve(ex, ["free_", "free"]);
+    this.msutilsAbiVersion = this.resolve(ex, ["msutils_abi_version"]);
+    this.msutilsSizeofPeakOptions = this.resolve(ex, [
+      "msutils_sizeof_peak_options",
+    ]);
     this.parseMzml = this.resolve(ex, ["parse_mzml"]);
     this.parseBin = this.resolve(ex, ["parse_bin"]);
     this.freeMzml = this.resolve(ex, ["free_mzml"]);
@@ -300,6 +315,26 @@ class WasmApi {
 
   constructor(instance: WebAssembly.Instance) {
     this.fn = new WasmExports(instance);
+
+    // Verify the native binary matches the wrapper. If a developer changes
+    // CPeakOptions in Rust without bumping the ABI version, this catches it
+    // at load time instead of silently corrupting peak detection.
+    const abi = this.fn.msutilsAbiVersion();
+    if (abi !== MSUTILS_ABI_VERSION) {
+      throw new Error(
+        `msutils WASM ABI version mismatch: binary=${abi}, ` +
+          `wrapper=${MSUTILS_ABI_VERSION}. Rebuild the WASM module.`,
+      );
+    }
+    const size = this.fn.msutilsSizeofPeakOptions();
+    if (size !== PEAK_OPTIONS_STRUCT_BYTES) {
+      throw new Error(
+        `msutils WASM PeakOptions size mismatch: binary=${size} bytes, ` +
+          `wrapper=${PEAK_OPTIONS_STRUCT_BYTES} bytes. ` +
+          `Native binary and JS wrapper are out of sync — rebuild.`,
+      );
+    }
+
     this.heap = new WasmHeap(this.fn.memory, this.fn.alloc, this.fn.free);
 
     this.jsonOutputSlot = this.heap.allocPermanent(OUTPUT_BUFFER_PAIR_BYTES);
@@ -411,7 +446,7 @@ class WasmApi {
   findPeaks(
     x: Float64Array,
     y: Float64Array,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
   ): any {
     const [xPtr, xLen] = this.heap.allocAndWrite(toUint8View(x));
     const [yPtr, yLen] = this.heap.allocAndWrite(toUint8View(y));
@@ -419,7 +454,7 @@ class WasmApi {
       xPtr,
       yPtr,
       x.length,
-      this.peakOptsPtr(packedOpts),
+      this.peakOptsPtr(opts),
       this.jsonOutputSlot,
     );
     this.heap.freeMany([
@@ -435,7 +470,7 @@ class WasmApi {
     y: Float64Array,
     rt: number,
     range: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
   ): any {
     const [xPtr, xLen] = this.heap.allocAndWrite(toUint8View(x));
     const [yPtr, yLen] = this.heap.allocAndWrite(toUint8View(y));
@@ -445,7 +480,7 @@ class WasmApi {
       x.length,
       rt,
       range,
-      this.peakOptsPtr(packedOpts),
+      this.peakOptsPtr(opts),
       this.jsonOutputSlot,
     );
     this.heap.freeMany([
@@ -466,15 +501,15 @@ class WasmApi {
 
   calculateBaseline(
     y: Float64Array,
-    baselineWindow: number,
-    baselineWindowFactor: number,
+    lambda: number,
+    maxIterations: number,
   ): Float64Array {
     const [yPtr, yLen] = this.heap.allocAndWrite(toUint8View(y));
     const rc = this.fn.calculateBaseline(
       yPtr,
       y.length,
-      baselineWindow,
-      baselineWindowFactor,
+      lambda,
+      maxIterations,
       this.baselineScratchSlot,
     );
     this.fn.free(yPtr, yLen);
@@ -495,7 +530,7 @@ class WasmApi {
     count: number,
     from: number,
     to: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
     cores: number,
   ): any {
     const emptyU32 = new Uint32Array(count);
@@ -522,7 +557,7 @@ class WasmApi {
       count,
       from,
       to,
-      this.peakOptsPtr(packedOpts),
+      this.peakOptsPtr(opts),
       cores,
       this.jsonOutputSlot,
     );
@@ -544,7 +579,7 @@ class WasmApi {
     rts: Float64Array,
     windows: Float64Array,
     count: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
     cores: number,
   ): any {
     const [idxPtr, idxLen] = this.heap.allocAndWrite(toUint8View(indices));
@@ -556,7 +591,7 @@ class WasmApi {
       rtPtr,
       winPtr,
       count,
-      this.peakOptsPtr(packedOpts),
+      this.peakOptsPtr(opts),
       cores,
       this.jsonOutputSlot,
     );
@@ -585,7 +620,7 @@ class WasmApi {
     scanMz: number,
     eicPpm: number,
     eicMz: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
   ): any {
     const emptyU32 = new Uint32Array(count);
     const emptyBytes = new Uint8Array(0);
@@ -614,7 +649,7 @@ class WasmApi {
       scanMz,
       eicPpm,
       eicMz,
-      this.peakOptsPtr(packedOpts),
+      this.peakOptsPtr(opts),
       this.jsonOutputSlot,
     );
     this.heap.freeMany([
@@ -629,12 +664,9 @@ class WasmApi {
     return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
   }
 
-  private peakOptsPtr(packed: Uint8Array | undefined): number {
-    if (!packed) return 0;
-    if (packed.length !== PEAK_OPTIONS_STRUCT_BYTES)
-      throw new RangeError(
-        `peakOptsPtr: expected ${PEAK_OPTIONS_STRUCT_BYTES} bytes, got ${packed.length}`,
-      );
+  private peakOptsPtr(opts: PeakOptions | undefined): number {
+    if (!opts) return 0;
+    const packed = packPeakOptions(opts);
     this.heap.writeBytesAt(this.peakOptionsSlot, packed);
     return this.peakOptionsSlot;
   }
@@ -749,9 +781,9 @@ export class WasmBackend implements Backend {
   findPeaks(
     x: Float64Array,
     y: Float64Array,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
   ): any {
-    return this.getApi().findPeaks(x, y, packedOpts);
+    return this.getApi().findPeaks(x, y, opts);
   }
 
   getPeak(
@@ -759,9 +791,9 @@ export class WasmBackend implements Backend {
     y: Float64Array,
     rt: number,
     range: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
   ): any {
-    return this.getApi().getPeak(x, y, rt, range, packedOpts);
+    return this.getApi().getPeak(x, y, rt, range, opts);
   }
 
   findNoiseLevel(y: Float64Array | Float32Array): number {
@@ -771,14 +803,10 @@ export class WasmBackend implements Backend {
 
   calculateBaseline(
     y: Float64Array,
-    baselineWindow: number,
-    baselineWindowFactor: number,
+    lambda: number,
+    maxIterations: number,
   ): Float64Array {
-    return this.getApi().calculateBaseline(
-      y,
-      baselineWindow,
-      baselineWindowFactor,
-    );
+    return this.getApi().calculateBaseline(y, lambda, maxIterations);
   }
 
   getPeaksFromEic(
@@ -793,7 +821,7 @@ export class WasmBackend implements Backend {
     count: number,
     from: number,
     to: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
     cores: number,
   ): any {
     return this.getApi().getPeaksFromEic(
@@ -808,7 +836,7 @@ export class WasmBackend implements Backend {
       count,
       from,
       to,
-      packedOpts,
+      opts,
       cores,
     );
   }
@@ -819,7 +847,7 @@ export class WasmBackend implements Backend {
     rts: Float64Array,
     windows: Float64Array,
     count: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
     cores: number,
   ): any {
     return this.getApi().getPeaksFromChrom(
@@ -828,7 +856,7 @@ export class WasmBackend implements Backend {
       rts,
       windows,
       count,
-      packedOpts,
+      opts,
       cores,
     );
   }
@@ -842,7 +870,7 @@ export class WasmBackend implements Backend {
     _gridStart: number,
     _gridEnd: number,
     _gridStep: number,
-    _packedOpts: Uint8Array | undefined,
+    _opts: PeakOptions | undefined,
     _cores: number,
   ): any {
     throw new Error("findFeatures is not supported in the WASM build");
@@ -863,7 +891,7 @@ export class WasmBackend implements Backend {
     scanMz: number,
     eicPpm: number,
     eicMz: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
   ): any {
     return this.getApi().findFeature(
       handle as number,
@@ -880,7 +908,7 @@ export class WasmBackend implements Backend {
       scanMz,
       eicPpm,
       eicMz,
-      packedOpts,
+      opts,
     );
   }
 }

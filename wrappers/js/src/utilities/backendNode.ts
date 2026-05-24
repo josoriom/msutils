@@ -3,6 +3,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { Backend, FileHandle } from "./backend";
+import type { PeakOptions } from "../types/types";
 
 function firstExisting(...candidates: string[]): string {
   for (const p of candidates) if (fs.existsSync(p)) return p;
@@ -162,14 +163,10 @@ export class NodeBackend implements Backend {
   findPeaks(
     x: Float64Array,
     y: Float64Array,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
   ): any {
     return JSON.parse(
-      this.native.findPeaks(
-        x,
-        y,
-        packedOpts ? toNodeBuffer(packedOpts) : undefined,
-      ) as string,
+      this.native.findPeaks(x, y, opts ?? null) as string,
     );
   }
 
@@ -178,16 +175,10 @@ export class NodeBackend implements Backend {
     y: Float64Array,
     rt: number,
     range: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
   ): any {
     return JSON.parse(
-      this.native.getPeak(
-        x,
-        y,
-        rt,
-        range,
-        packedOpts ? toNodeBuffer(packedOpts) : undefined,
-      ) as string,
+      this.native.getPeak(x, y, rt, range, opts ?? null) as string,
     );
   }
 
@@ -198,14 +189,10 @@ export class NodeBackend implements Backend {
 
   calculateBaseline(
     y: Float64Array,
-    baselineWindow: number,
-    baselineWindowFactor: number,
+    lambda: number,
+    maxIterations: number,
   ): Float64Array {
-    return this.native.calculateBaseline(
-      y,
-      baselineWindow,
-      baselineWindowFactor,
-    ) as Float64Array;
+    return this.native.calculateBaseline(y, lambda, maxIterations) as Float64Array;
   }
 
   getPeaksFromEic(
@@ -220,7 +207,7 @@ export class NodeBackend implements Backend {
     count: number,
     from: number,
     to: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
     cores: number,
   ): any {
     const ids = unpackIds(count, offsets, lengths, idBytes);
@@ -233,7 +220,7 @@ export class NodeBackend implements Backend {
         ids,
         from,
         to,
-        packedOpts ? toNodeBuffer(packedOpts) : undefined,
+        opts ?? null,
         cores,
       ) as string,
     );
@@ -245,7 +232,7 @@ export class NodeBackend implements Backend {
     rts: Float64Array,
     windows: Float64Array,
     _count: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
     cores: number,
   ): any {
     return JSON.parse(
@@ -254,7 +241,7 @@ export class NodeBackend implements Backend {
         indices,
         rts,
         windows,
-        packedOpts ? toNodeBuffer(packedOpts) : undefined,
+        opts ?? null,
         cores,
       ) as string,
     );
@@ -269,7 +256,7 @@ export class NodeBackend implements Backend {
     gridStart: number,
     gridEnd: number,
     gridStep: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
     cores: number,
     useGpu: number,
     batchSize: number,
@@ -284,7 +271,7 @@ export class NodeBackend implements Backend {
         gridStart,
         gridEnd,
         gridStep,
-        packedOpts ? toNodeBuffer(packedOpts) : null,
+        opts ?? null,
         cores,
         useGpu,
         batchSize,
@@ -307,7 +294,7 @@ export class NodeBackend implements Backend {
     scanMz: number,
     eicPpm: number,
     eicMz: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
   ): any {
     const ids = unpackIds(count, offsets, lengths, idBytes);
     return JSON.parse(
@@ -322,7 +309,7 @@ export class NodeBackend implements Backend {
         scanMz,
         eicPpm,
         eicMz,
-        packedOpts ? toNodeBuffer(packedOpts) : null,
+        opts ?? null,
       ) as string,
     );
   }
@@ -340,7 +327,7 @@ export class NodeBackend implements Backend {
     groupMz: number,
     groupRt: number,
     prevalence: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
     cores: number,
     useGpu: number,
     batchSize: number,
@@ -359,7 +346,7 @@ export class NodeBackend implements Backend {
         groupMz,
         groupRt,
         prevalence,
-        packedOpts ? toNodeBuffer(packedOpts) : null,
+        opts ?? null,
         cores,
         useGpu,
         batchSize,

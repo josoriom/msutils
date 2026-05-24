@@ -55,11 +55,11 @@ class _GroupingDefaults:
     frequency: int       = 1
 
 class _FindPeakDefaults:
-    intensity_threshold: float = 150.0
-    width_threshold: int       = 5
-    auto_noise: bool           = True
-    auto_baseline: bool        = True
-    sn_ratio: float            = 1.0
+    min_intensity: float        = 150.0
+    min_peak_width_points: int  = 5
+    auto_noise: bool            = True
+    auto_baseline: bool         = True
+    min_snr: float              = 1.0
 
 
 def _as_f64_ptr(array: np.ndarray) -> POINTER(c_double):
@@ -269,15 +269,15 @@ def find_peaks(
         x: Retention-time sequence. Minimum 3 points.
         y: Intensity sequence, same length as x.
         options: Optional dict of peak filter settings. Keys:
-            intensity_threshold (float), 
-            width_threshold (int),
+            min_intensity (float),
+            min_peak_width_points (int),
             noise (float),
-            auto_noise (bool: default: True),
-            auto_baseline (bool: default: True),
-            baseline_window (int),
-            baseline_window_factor (int),
+            auto_noise (bool, default True),
+            auto_baseline (bool, default True),
+            lambda_ (int),
+            max_iterations (int),
             allow_overlap (bool),
-            sn_ratio (float).
+            min_snr (float).
 
     Returns:
         List of dicts, one per peak. Each dict has keys: rt, from, to, intensity and integral.
@@ -353,18 +353,15 @@ def find_noise_level(y: Sequence) -> float:
 
 def calculate_baseline(
     y: Sequence,
-    baseline_window: int = 0,
-    baseline_window_factor: int = 0,
+    lambda_: int = 0,
+    max_iterations: int = 0,
 ) -> np.ndarray:
     """Estimate a signal baseline.
 
-    Fits a rolling baseline to one numeric signal vector.
-
     Args:
         y: Numeric signal sequence.
-        baseline_window: Rolling window size. 0 uses a default.
-        baseline_window_factor: Scales the effective window. Larger values
-            give a smoother baseline. 0 uses a default.
+        lambda_: Smoothness parameter for the asymmetric least-squares baseline. 0 uses a default.
+        max_iterations: Maximum ALS iterations. 0 uses a default.
 
     Returns:
         Numpy array, same length as y, with the estimated baseline values.
@@ -374,7 +371,7 @@ def calculate_baseline(
     buf = _Buf()
     _check("calculate_baseline", abi.calculate_baseline(
         _as_f64_ptr(y_array), c_size_t(len(y_array)),
-        c_int32(int(baseline_window)), c_int32(int(baseline_window_factor)),
+        c_int32(int(lambda_)), c_int32(int(max_iterations)),
         ctypes.byref(buf),
     ))
     return buf_to_f64(abi, buf)
@@ -585,7 +582,7 @@ def find_features(
 
     Returns:
         List of dicts, one per detected feature. Each dict has keys: mz, rt,
-        from, to, intensity, integral, ratio, np (number of points).
+        from, to, intensity, integral, n_points.
     """
     abi = _get_abi()
 
@@ -598,11 +595,11 @@ def find_features(
         g_step = math.nan
 
     peak_defaults = {
-        "intensity_threshold": _FindPeakDefaults.intensity_threshold,
-        "width_threshold":     _FindPeakDefaults.width_threshold,
-        "auto_noise":          _FindPeakDefaults.auto_noise,
-        "auto_baseline":       _FindPeakDefaults.auto_baseline,
-        "sn_ratio":            _FindPeakDefaults.sn_ratio,
+        "min_intensity":        _FindPeakDefaults.min_intensity,
+        "min_peak_width_points": _FindPeakDefaults.min_peak_width_points,
+        "auto_noise":           _FindPeakDefaults.auto_noise,
+        "auto_baseline":        _FindPeakDefaults.auto_baseline,
+        "min_snr":              _FindPeakDefaults.min_snr,
     }
     if options:
         peak_defaults.update(options)
@@ -658,11 +655,11 @@ def find_feature(
     eic_mz   = _get_tolerance(eic,      "mz_tolerance",  0.005)
 
     peak_defaults = {
-        "intensity_threshold": _FindPeakDefaults.intensity_threshold,
-        "width_threshold":     _FindPeakDefaults.width_threshold,
-        "auto_noise":          _FindPeakDefaults.auto_noise,
-        "auto_baseline":       _FindPeakDefaults.auto_baseline,
-        "sn_ratio":            _FindPeakDefaults.sn_ratio,
+        "min_intensity":        _FindPeakDefaults.min_intensity,
+        "min_peak_width_points": _FindPeakDefaults.min_peak_width_points,
+        "auto_noise":           _FindPeakDefaults.auto_noise,
+        "auto_baseline":        _FindPeakDefaults.auto_baseline,
+        "min_snr":              _FindPeakDefaults.min_snr,
     }
     if options:
         peak_defaults.update(options)
@@ -735,7 +732,7 @@ def get_features(
 
     Returns:
         List of dicts, one per consensus feature. Each dict has keys: mz, rt,
-        from, to, intensity, integral, np, frequency, rmz.
+        from, to, intensity, integral, n_points, n_samples, mz_rsd.
     """
     abi = _get_abi()
 
@@ -755,11 +752,11 @@ def get_features(
     ))
 
     peak_defaults = {
-        "intensity_threshold": _FindPeakDefaults.intensity_threshold,
-        "width_threshold":     _FindPeakDefaults.width_threshold,
-        "auto_noise":          _FindPeakDefaults.auto_noise,
-        "auto_baseline":       _FindPeakDefaults.auto_baseline,
-        "sn_ratio":            _FindPeakDefaults.sn_ratio,
+        "min_intensity":        _FindPeakDefaults.min_intensity,
+        "min_peak_width_points": _FindPeakDefaults.min_peak_width_points,
+        "auto_noise":           _FindPeakDefaults.auto_noise,
+        "auto_baseline":        _FindPeakDefaults.auto_baseline,
+        "min_snr":              _FindPeakDefaults.min_snr,
     }
     if options:
         peak_defaults.update(options)

@@ -85,8 +85,8 @@ class MsUtils:
     def find_noise_level(self, y) -> float:
         return find_noise_level(y)
 
-    def calculate_baseline(self, y, baseline_window: int = 0, baseline_window_factor: int = 0):
-        return calculate_baseline(y, baseline_window, baseline_window_factor)
+    def calculate_baseline(self, y, lambda_: int = 0, max_iterations: int = 0):
+        return calculate_baseline(y, lambda_, max_iterations)
 
     def get_peaks_from_eic(self, file: SampleFile, targets, from_rt: float = 0.5, to_rt: float = 5.0, options=None, cores: int = 1):
         return get_peaks_from_eic(file, targets, from_rt, to_rt, options, cores)

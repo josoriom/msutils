@@ -2,17 +2,17 @@ use crate::utilities::cheminfo::air_pls::{AirPlsOptions, air_pls};
 
 #[derive(Clone, Copy, Debug)]
 pub struct BaselineOptions {
-    pub baseline_window: Option<f64>,
-    pub baseline_window_factor: Option<usize>,
-    pub level: Option<u8>,
+    pub lambda: Option<f64>,
+    pub max_iterations: Option<usize>,
+    pub edge_slope_level: Option<u8>,
 }
 
 impl Default for BaselineOptions {
     fn default() -> Self {
         Self {
-            baseline_window: Some(20.0),
-            baseline_window_factor: Some(4),
-            level: Some(5),
+            lambda: Some(20.0),
+            max_iterations: Some(4),
+            edge_slope_level: Some(5),
         }
     }
 }
@@ -28,12 +28,12 @@ pub fn calculate_baseline(y: &[f64], options: BaselineOptions) -> Vec<f64> {
 
     let defaults = BaselineOptions::default();
     let window = options
-        .baseline_window
-        .unwrap_or(defaults.baseline_window.unwrap_or(10.0));
+        .lambda
+        .unwrap_or(defaults.lambda.unwrap_or(10.0));
     let factor = options
-        .baseline_window_factor
-        .unwrap_or(defaults.baseline_window_factor.unwrap_or(100));
-    let level = options.level.unwrap_or(defaults.level.unwrap_or(3));
+        .max_iterations
+        .unwrap_or(defaults.max_iterations.unwrap_or(100));
+    let level = options.edge_slope_level.unwrap_or(defaults.edge_slope_level.unwrap_or(3));
 
     let (ys, weights) = curate_edges(y, level, EDGE_SLOPE_POINTS);
 

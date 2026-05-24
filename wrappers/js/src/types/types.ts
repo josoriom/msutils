@@ -1,22 +1,21 @@
 export type BinaryInput = Uint8Array | ArrayBuffer;
 
 export type PeakOptions = Partial<{
-  integralThreshold: number;
-  intensityThreshold: number;
-  widthThreshold: number;
+  minIntegral: number;
+  minIntensity: number;
+  minPeakWidthPoints: number;
   noise: number;
   autoNoise: boolean | number;
   autoBaseline: boolean | number;
-  baselineWindow: number;
-  baselineWindowFactor: number;
+  lambda: number;
+  maxIterations: number;
   allowOverlap: boolean | number;
-  windowSize: number;
-  snRatio: number;
+  minSnr: number;
 }>;
 
 export type BaselineOptions = Partial<{
-  baselineWindow: number;
-  baselineWindowFactor: number;
+  lambda: number;
+  maxIterations: number;
 }>;
 
 export type Peak = {
@@ -25,8 +24,7 @@ export type Peak = {
   rt: number;
   integral: number;
   intensity: number;
-  ratio: number;
-  np: number;
+  nPoints: number;
 };
 
 export type Target = {
@@ -63,8 +61,7 @@ export type Feature = {
   to: number;
   intensity: number;
   integral: number;
-  ratio: number;
-  np: number;
+  nPoints: number;
 };
 
 export type FoundFeature = {
@@ -75,8 +72,7 @@ export type FoundFeature = {
   to: number;
   intensity: number;
   integral: number;
-  ratio: number;
-  np: number;
+  nPoints: number;
   noise: number;
 };
 
@@ -96,8 +92,9 @@ export type ConsensusFeature = {
   to: number;
   intensity: number;
   integral: number;
-  np: number;
-  frequency: number;
+  nPoints: number;
+  nSamples: number;
+  mzRsd: number;
   mzs: number[];
 };
 

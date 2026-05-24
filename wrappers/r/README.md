@@ -90,7 +90,7 @@ Estimate a baseline for XY data.
 ```r
 xs <- seq(0, 10, length.out = 1000)
 ys <- sin(xs) + 0.1 * xs + 2
-baseline <- msutils::calculate_baseline(ys, baseline_window = 101L, baseline_window_factor = 3L)
+baseline <- msutils::calculate_baseline(ys, lambda = 0L, max_iterations = 0L)
 ```
 
 ### Find peaks
@@ -98,7 +98,7 @@ baseline <- msutils::calculate_baseline(ys, baseline_window = 101L, baseline_win
 Find all peaks in XY data.
 
 ```r
-peaks <- msutils::find_peaks(eic_df$x, eic_df$y, intensity_threshold = 1000, width_threshold = 10L, auto_noise = TRUE, auto_baseline = TRUE)
+peaks <- msutils::find_peaks(eic_df$x, eic_df$y, min_intensity = 1000, min_peak_width_points = 10L, auto_noise = TRUE, auto_baseline = TRUE)
 ```
 
 ### Get single peak
@@ -106,7 +106,7 @@ peaks <- msutils::find_peaks(eic_df$x, eic_df$y, intensity_threshold = 1000, wid
 Find one peak near a target retention time in XY data.
 
 ```r
-peak <- msutils::get_peak(eic_df$x, eic_df$y, rt = 3.4, range = 0.6, intensity_threshold = 1000, width_threshold = 10L, auto_noise = TRUE, auto_baseline = TRUE)
+peak <- msutils::get_peak(eic_df$x, eic_df$y, rt = 3.4, range = 0.6, min_intensity = 1000, min_peak_width_points = 10L, auto_noise = TRUE, auto_baseline = TRUE)
 ```
 
 ## Find peaks from samples
@@ -165,8 +165,8 @@ features <- msutils::find_features(
   cores = 5L,
   auto_noise = TRUE,
   auto_baseline = TRUE,
-  width_threshold = 10L,
-  intensity_threshold = 1000
+  min_peak_width_points = 10L,
+  min_intensity = 1000
 )
 ```
 

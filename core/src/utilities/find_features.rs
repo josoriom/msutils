@@ -27,7 +27,7 @@ use rayon::{ThreadPoolBuilder, prelude::*};
 
 #[derive(Clone, Debug)]
 pub struct MzTolerance {
-    pub mz_abs: f64,
+    pub mz_absolute: f64,
     pub ppm: f64,
 }
 
@@ -51,7 +51,7 @@ impl MzTolerance {
         } else {
             0.0
         };
-        tol_ppm.max(self.mz_abs)
+        tol_ppm.max(self.mz_absolute)
     }
 }
 
@@ -85,7 +85,7 @@ pub struct Feature {
     pub intensity: f64,
     pub from: f64,
     pub to: f64,
-    pub np: usize,
+    pub n_points: usize,
     pub noise: f64,
     pub integral: f64,
 }
@@ -99,28 +99,28 @@ pub struct FeaturePoint {
 
 #[derive(Clone, Debug)]
 pub struct MzScanGrid {
-    pub mz_min: f64,
-    pub mz_max: f64,
-    pub step_size: f64,
+    pub min_mz: f64,
+    pub max_mz: f64,
+    pub step: f64,
 }
 
 impl Default for MzScanGrid {
     fn default() -> Self {
         Self {
-            mz_min: 40.0,
-            mz_max: 1000.0,
-            step_size: 0.006,
+            min_mz: 40.0,
+            max_mz: 1000.0,
+            step: 0.006,
         }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct FindFeaturesOptions {
-    pub scan_eic_options: EicOptions,
-    pub eic_options: EicOptions,
-    pub find_peaks: FindPeaksOptions,
+    pub seed_eic_options: EicOptions,
+    pub final_eic_options: EicOptions,
+    pub peak_options: FindPeaksOptions,
     pub mz_scan_grid: MzScanGrid,
-    pub scan_width_threshold: usize,
+    pub min_seed_width_points: usize,
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     pub gpu_context: Option<Arc<GpuContext>>,
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
@@ -132,19 +132,19 @@ pub struct FindFeaturesOptions {
 impl Default for FindFeaturesOptions {
     fn default() -> Self {
         Self {
-            scan_eic_options: EicOptions {
+            seed_eic_options: EicOptions {
                 ppm_tolerance: 10.0,
                 mz_tolerance: 0.003,
                 ..Default::default()
             },
-            eic_options: EicOptions {
+            final_eic_options: EicOptions {
                 ppm_tolerance: 20.0,
                 mz_tolerance: 0.005,
                 ..Default::default()
             },
-            find_peaks: FindPeaksOptions::default(),
+            peak_options: FindPeaksOptions::default(),
             mz_scan_grid: MzScanGrid::default(),
-            scan_width_threshold: 5,
+            min_seed_width_points: 5,
             #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
             gpu_context: None,
             #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
@@ -178,14 +178,14 @@ pub fn find_features(
         None
     };
 
-    if !opts.mz_scan_grid.step_size.is_finite() || opts.mz_scan_grid.step_size <= 0.0 {
-        return Err(FeatureError::InvalidStepSize(opts.mz_scan_grid.step_size));
+    if !opts.mz_scan_grid.step.is_finite() || opts.mz_scan_grid.step <= 0.0 {
+        return Err(FeatureError::InvalidStepSize(opts.mz_scan_grid.step));
     }
 
     let grid = build_mz_grid(
-        opts.mz_scan_grid.mz_min,
-        opts.mz_scan_grid.mz_max,
-        opts.mz_scan_grid.step_size,
+        opts.mz_scan_grid.min_mz,
+        opts.mz_scan_grid.max_mz,
+        opts.mz_scan_grid.step,
     );
     if grid.is_empty() {
         return Err(FeatureError::EmptyGrid);
@@ -226,11 +226,11 @@ pub fn find_features(
 
         let masses = collect_candidate_masses(&scans, &time, &grid, &opts, gpu_args)?;
 
-        let masses = deduplicate_masses(masses, opts.eic_options);
+        let masses = deduplicate_masses(masses, opts.final_eic_options);
 
         let features = extract_features_from_masses(&masses, &scans, &time, &opts);
 
-        let features = deduplicate_features(features, opts.eic_options, 0.05);
+        let features = deduplicate_features(features, opts.final_eic_options, 0.05);
 
         Ok(sort_features(features))
     })
@@ -263,10 +263,10 @@ where
 }
 
 fn build_coarse_opts(config: &FindFeaturesOptions) -> FindPeaksOptions {
-    let mut coarse = config.find_peaks.clone();
-    let mut filter = coarse.filter_peaks_options.unwrap_or_default();
-    filter.width_threshold = Some(config.scan_width_threshold);
-    coarse.filter_peaks_options = Some(filter);
+    let mut coarse = config.peak_options.clone();
+    let mut filter = coarse.filter.unwrap_or_default();
+    filter.min_peak_width_points = Some(config.min_seed_width_points);
+    coarse.filter = Some(filter);
     coarse
 }
 
@@ -303,10 +303,10 @@ fn collect_candidates_gpu(
 
     let coarse_opts = build_coarse_opts(config);
     let intensity_threshold = config
-        .find_peaks
-        .filter_peaks_options
+        .peak_options
+        .filter
         .as_ref()
-        .and_then(|o| o.intensity_threshold)
+        .and_then(|o| o.min_intensity)
         .unwrap_or(0.0);
 
     let mut processor = GpuGridProcessor::new(ctx, batch_opts.clone());
@@ -315,7 +315,7 @@ fn collect_candidates_gpu(
             let masses: Vec<f64> = survivors
                 .par_iter()
                 .filter_map(|&mz| {
-                    let eic = get_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
+                    let eic = get_eic_for_mz(scans, time.len(), mz, config.seed_eic_options);
                     evaluate_eic_row(
                         &eic,
                         time,
@@ -323,7 +323,7 @@ fn collect_candidates_gpu(
                         mz,
                         intensity_threshold,
                         &coarse_opts,
-                        config.scan_eic_options,
+                        config.seed_eic_options,
                     )
                 })
                 .collect();
@@ -348,17 +348,17 @@ fn collect_candidates_cpu(
 ) -> Result<Vec<f64>, FeatureError> {
     let coarse_opts = build_coarse_opts(config);
     let intensity_threshold = config
-        .find_peaks
-        .filter_peaks_options
+        .peak_options
+        .filter
         .as_ref()
-        .and_then(|o| o.intensity_threshold)
+        .and_then(|o| o.min_intensity)
         .unwrap_or(0.0);
 
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     let masses: Vec<f64> = grid
         .par_iter()
         .filter_map(|&mz| {
-            let eic = get_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
+            let eic = get_eic_for_mz(scans, time.len(), mz, config.seed_eic_options);
             evaluate_eic_row(
                 &eic,
                 time,
@@ -366,7 +366,7 @@ fn collect_candidates_cpu(
                 mz,
                 intensity_threshold,
                 &coarse_opts,
-                config.scan_eic_options,
+                config.seed_eic_options,
             )
         })
         .collect();
@@ -375,7 +375,7 @@ fn collect_candidates_cpu(
     let masses: Vec<f64> = grid
         .iter()
         .filter_map(|&mz| {
-            let eic = get_eic_for_mz(scans, time.len(), mz, config.scan_eic_options);
+            let eic = get_eic_for_mz(scans, time.len(), mz, config.seed_eic_options);
             evaluate_eic_row(
                 &eic,
                 time,
@@ -383,7 +383,7 @@ fn collect_candidates_cpu(
                 mz,
                 intensity_threshold,
                 &coarse_opts,
-                config.scan_eic_options,
+                config.seed_eic_options,
             )
         })
         .collect();
@@ -402,7 +402,7 @@ pub(crate) fn deduplicate_masses(mut masses: Vec<f64>, opts: EicOptions) -> Vec<
     masses.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
     let tolerance = MzTolerance {
-        mz_abs: opts.mz_tolerance.max(0.0),
+        mz_absolute: opts.mz_tolerance.max(0.0),
         ppm: opts.ppm_tolerance,
     };
 
@@ -430,12 +430,12 @@ fn extract_peaks_for_mass(
     config: &FindFeaturesOptions,
     final_w: usize,
 ) -> Vec<Feature> {
-    let y = get_eic_for_mz(scans, time.len(), mz, config.eic_options);
+    let y = get_eic_for_mz(scans, time.len(), mz, config.final_eic_options);
     let data = DataXY {
         x: time.to_vec(),
         y,
     };
-    let mut peaks = find_peaks(&data, Some(config.find_peaks.clone()));
+    let mut peaks = find_peaks(&data, Some(config.peak_options.clone()));
     if peaks.is_empty() {
         return Vec::new();
     }
@@ -446,14 +446,14 @@ fn extract_peaks_for_mass(
     sort_peaks_desc(&mut peaks);
     peaks
         .into_iter()
-        .filter(|p| final_w == 0 || p.np >= final_w)
+        .filter(|p| final_w == 0 || p.n_points >= final_w)
         .map(|p| Feature {
             mz,
             rt: p.rt,
             intensity: p.intensity,
             from: p.from,
             to: p.to,
-            np: p.np,
+            n_points: p.n_points,
             integral: p.integral,
             noise: p.noise,
         })
@@ -467,11 +467,11 @@ fn extract_features_from_masses(
     config: &FindFeaturesOptions,
 ) -> Vec<Feature> {
     let final_w = config
-        .find_peaks
-        .filter_peaks_options
+        .peak_options
+        .filter
         .as_ref()
-        .and_then(|o| o.width_threshold)
-        .unwrap_or(config.scan_width_threshold)
+        .and_then(|o| o.min_peak_width_points)
+        .unwrap_or(config.min_seed_width_points)
         .max(0);
 
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
@@ -536,7 +536,7 @@ pub(crate) fn max_intensity_centroid(
     }
 
     let tolerance = MzTolerance {
-        mz_abs: opts.mz_tolerance,
+        mz_absolute: opts.mz_tolerance,
         ppm: opts.ppm_tolerance,
     };
     let (lo_mz, hi_mz) = tolerance.window_at(approx_mz);

@@ -1,24 +1,4 @@
-import type { PeakOptions, Target } from "../types/types";
-
-const PEAK_OPTIONS_STRUCT_BYTES = 64;
-
-export function packPeakOptions(opts?: PeakOptions): Uint8Array | undefined {
-  if (!opts) return undefined;
-  const view = new DataView(new ArrayBuffer(PEAK_OPTIONS_STRUCT_BYTES));
-  writeF64(view, 0, opts.integralThreshold);
-  writeF64(view, 8, opts.intensityThreshold);
-  writeI32(view, 16, opts.widthThreshold);
-  view.setInt32(20, 0, true);
-  writeF64(view, 24, opts.noise);
-  writeI32(view, 32, opts.autoNoise);
-  writeI32(view, 36, opts.autoBaseline);
-  writeI32(view, 40, opts.baselineWindow);
-  writeI32(view, 44, opts.baselineWindowFactor);
-  writeI32(view, 48, opts.allowOverlap);
-  writeI32(view, 52, opts.windowSize);
-  writeF64(view, 56, opts.snRatio);
-  return new Uint8Array(view.buffer);
-}
+import type { Target } from "../types/types";
 
 export function encodeTargetIds(ids: string[]): {
   packedBytes: Uint8Array;
@@ -61,26 +41,4 @@ export function unpackTargets(
     return t.id ?? "";
   });
   return { rts, mzs, ranges, ids };
-}
-
-function writeF64(view: DataView, offset: number, value: unknown): void {
-  view.setFloat64(
-    offset,
-    Number.isFinite(value as number) ? Number(value) : NaN,
-    true,
-  );
-}
-
-function writeI32(view: DataView, offset: number, value: unknown): void {
-  view.setInt32(
-    offset,
-    typeof value === "boolean"
-      ? value
-        ? 1
-        : 0
-      : Number.isFinite(value as number)
-        ? (value as number) | 0
-        : 0,
-    true,
-  );
 }

@@ -1,3 +1,5 @@
+import type { PeakOptions } from "../types/types";
+
 export type FileHandle = unknown;
 
 export interface Backend {
@@ -38,7 +40,7 @@ export interface Backend {
   findPeaks(
     x: Float64Array,
     y: Float64Array,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
   ): any;
 
   getPeak(
@@ -46,15 +48,15 @@ export interface Backend {
     y: Float64Array,
     rt: number,
     range: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
   ): any;
 
   findNoiseLevel(y: Float64Array | Float32Array): number;
 
   calculateBaseline(
     y: Float64Array,
-    baselineWindow: number,
-    baselineWindowFactor: number,
+    lambda: number,
+    maxIterations: number,
   ): Float64Array;
 
   getPeaksFromEic(
@@ -69,7 +71,7 @@ export interface Backend {
     count: number,
     from: number,
     to: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
     cores: number,
   ): any;
 
@@ -79,7 +81,7 @@ export interface Backend {
     rts: Float64Array,
     windows: Float64Array,
     count: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
     cores: number,
   ): any;
 
@@ -92,7 +94,7 @@ export interface Backend {
     gridStart: number,
     gridEnd: number,
     gridStep: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
     cores: number,
     useGpu: number,
     batchSize: number,
@@ -113,7 +115,7 @@ export interface Backend {
     scanMz: number,
     eicPpm: number,
     eicMz: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
   ): any;
 
   getFeatures?(
@@ -129,7 +131,7 @@ export interface Backend {
     groupMz: number,
     groupRt: number,
     prevalence: number,
-    packedOpts: Uint8Array | undefined,
+    opts: PeakOptions | undefined,
     cores: number,
     useGpu: number,
     batchSize: number,

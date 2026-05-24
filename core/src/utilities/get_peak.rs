@@ -5,12 +5,12 @@ pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> 
     let peaks = find_peaks(data, options);
 
     if peaks.is_empty() {
-        return Some(Peak::default());
+        return None;
     }
 
     let target = roi.rt;
-    let w = if roi.window.is_finite() && roi.window > 0.0 {
-        roi.window
+    let w = if roi.half_width.is_finite() && roi.half_width > 0.0 {
+        roi.half_width
     } else {
         0.0
     };
@@ -35,7 +35,7 @@ pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> 
             }
         }
 
-        return Some(best.copied().unwrap_or_default());
+        return best.copied();
     }
 
     let mut best_any = &peaks[0];

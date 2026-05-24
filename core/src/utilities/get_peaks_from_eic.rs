@@ -9,7 +9,7 @@ use crate::utilities::{
         upper_bound,
     },
     find_noise_level,
-    find_peaks::{FilterPeaksOptions, FindPeaksOptions},
+    find_peaks::{PeakFilter, FindPeaksOptions},
     get_peak::get_peak,
     structs::{DataXY, EicRoi, FromTo, Peak, Roi},
 };
@@ -92,23 +92,23 @@ fn compute_one<'a>(
 
     let mut local_options = options.clone().unwrap_or_default();
     let filter = local_options
-        .filter_peaks_options
+        .filter
         .get_or_insert_with(Default::default);
-    let mut width_threshold = filter.width_threshold.unwrap_or_default();
-    let mut intensity_threshold = filter.intensity_threshold.unwrap_or_default();
+    let mut min_peak_width_points = filter.min_peak_width_points.unwrap_or_default();
+    let mut min_intensity = filter.min_intensity.unwrap_or_default();
     if snr <= 5.0 {
-        width_threshold /= 2;
-        intensity_threshold /= 2.0;
+        min_peak_width_points /= 2;
+        min_intensity /= 2.0;
     }
-    local_options.filter_peaks_options = Some(FilterPeaksOptions {
-        width_threshold: Some(width_threshold),
-        intensity_threshold: Some(intensity_threshold),
-        ..local_options.filter_peaks_options.unwrap_or_default()
+    local_options.filter = Some(PeakFilter {
+        min_peak_width_points: Some(min_peak_width_points),
+        min_intensity: Some(min_intensity),
+        ..local_options.filter.unwrap_or_default()
     });
 
     let roi_hint = Roi {
         rt: roi.rt,
-        window: roi.window,
+        half_width: roi.half_width,
     };
 
     let pk = get_peak(

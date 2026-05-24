@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <math.h>
+#include "include/msutils.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -24,48 +25,31 @@ static const char *last_err = NULL;
 
 typedef struct MzML MzML;
 
-typedef struct
-{
-  unsigned char *ptr;
-  size_t len;
-} Buf;
-
-typedef struct
-{
-  double integral_threshold;
-  double intensity_threshold;
-  int32_t width_threshold;
-  double noise;
-  int32_t auto_noise;
-  int32_t auto_baseline;
-  int32_t baseline_window;
-  int32_t baseline_window_factor;
-  int32_t allow_overlap;
-  int32_t window_size;
-  double sn_ratio;
-} CPeakPOptions;
-
+typedef uint32_t (*fn_msutils_abi_version)(void);
+typedef size_t   (*fn_msutils_sizeof_peak_options)(void);
 typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
 typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *);
 typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *);
-typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakPOptions *, Buf *);
+typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_calculate_eic)(const MzML *, double, double, double, double, double, Buf *, Buf *);
 typedef float (*fn_find_noise_level)(const float *, size_t);
-typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakPOptions *, size_t, Buf *);
-typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakPOptions *, size_t, Buf *);
-typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakPOptions *, Buf *);
+typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakOptions *, size_t, Buf *);
+typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakOptions *, size_t, Buf *);
+typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
+typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
+typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, size_t, MzML **);
-typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakPOptions *, int32_t, int32_t, int32_t, Buf *);
+typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 typedef void (*fn_free_mzml)(MzML *);
 
 typedef struct
 {
+  fn_msutils_abi_version msutils_abi_version;
+  fn_msutils_sizeof_peak_options msutils_sizeof_peak_options;
   fn_parse_mzml parse_mzml;
   fn_bin_to_json bin_to_json;
   fn_bin_to_mzml bin_to_mzml;
@@ -113,6 +97,22 @@ int abi_load(const char *path, const char **err)
     if (err)
       *err = last_err;
     return -1;
+  }
+  if (resolve_required((void **)&ABI.msutils_abi_version, "msutils_abi_version"))
+    goto fail;
+  if (ABI.msutils_abi_version() != MSUTILS_ABI_VERSION)
+  {
+    if (err)
+      *err = "ABI version mismatch: recompile the R wrapper";
+    goto fail;
+  }
+  if (resolve_required((void **)&ABI.msutils_sizeof_peak_options, "msutils_sizeof_peak_options"))
+    goto fail;
+  if (ABI.msutils_sizeof_peak_options() != sizeof(CPeakOptions))
+  {
+    if (err)
+      *err = "PeakOptions size mismatch: native binary and R wrapper are out of sync — reinstall msutils";
+    goto fail;
   }
   if (resolve_required((void **)&ABI.parse_mzml, "parse_mzml"))
     goto fail;
@@ -221,31 +221,30 @@ static SEXP list_get(SEXP lst, const char *name)
   return R_NilValue;
 }
 
-static int fill_options(SEXP opts, CPeakPOptions *out)
+static int fill_options(SEXP opts, CPeakOptions *out)
 {
   if (opts == R_NilValue || TYPEOF(opts) != VECSXP || XLENGTH(opts) == 0)
     return 0;
-  out->integral_threshold = NAN;
-  out->intensity_threshold = NAN;
-  out->width_threshold = 0;
+  out->min_integral = NAN;
+  out->min_intensity = NAN;
+  out->min_peak_width_points = 0;
   out->noise = NAN;
   out->auto_noise = 0;
   out->auto_baseline = 0;
-  out->baseline_window = 0;
-  out->baseline_window_factor = 0;
+  out->lambda = 0;
+  out->max_iterations = 0;
   out->allow_overlap = 0;
-  out->window_size = 0;
-  out->sn_ratio = NAN;
+  out->min_snr = NAN;
   SEXP v = R_NilValue;
-  v = list_get(opts, "integral_threshold");
+  v = list_get(opts, "min_integral");
   if (v != R_NilValue)
-    out->integral_threshold = asReal(v);
-  v = list_get(opts, "intensity_threshold");
+    out->min_integral = asReal(v);
+  v = list_get(opts, "min_intensity");
   if (v != R_NilValue)
-    out->intensity_threshold = asReal(v);
-  v = list_get(opts, "width_threshold");
+    out->min_intensity = asReal(v);
+  v = list_get(opts, "min_peak_width_points");
   if (v != R_NilValue)
-    out->width_threshold = (int32_t)asInteger(v);
+    out->min_peak_width_points = (int32_t)asInteger(v);
   v = list_get(opts, "noise");
   if (v != R_NilValue)
     out->noise = asReal(v);
@@ -255,34 +254,31 @@ static int fill_options(SEXP opts, CPeakPOptions *out)
   v = list_get(opts, "auto_baseline");
   if (v != R_NilValue)
     out->auto_baseline = (int32_t)asLogical(v);
-  v = list_get(opts, "baseline_window");
+  v = list_get(opts, "lambda");
   if (v != R_NilValue)
-    out->baseline_window = (int32_t)asInteger(v);
-  v = list_get(opts, "baseline_window_factor");
+    out->lambda = (int32_t)asInteger(v);
+  v = list_get(opts, "max_iterations");
   if (v != R_NilValue)
-    out->baseline_window_factor = (int32_t)asInteger(v);
+    out->max_iterations = (int32_t)asInteger(v);
   v = list_get(opts, "allow_overlap");
   if (v != R_NilValue)
     out->allow_overlap = (int32_t)asLogical(v);
-  v = list_get(opts, "window_size");
+  v = list_get(opts, "min_snr");
   if (v != R_NilValue)
-    out->window_size = (int32_t)asInteger(v);
-  v = list_get(opts, "sn_ratio");
-  if (v != R_NilValue)
-    out->sn_ratio = asReal(v);
+    out->min_snr = asReal(v);
   return 1;
 }
 
-static int as_opts_ptr(SEXP options, CPeakPOptions *copy, const CPeakPOptions **out_ptr)
+static int as_opts_ptr(SEXP options, CPeakOptions *copy, const CPeakOptions **out_ptr)
 {
   *out_ptr = NULL;
   if (options == R_NilValue)
     return 0;
   if (TYPEOF(options) == RAWSXP)
   {
-    if ((size_t)XLENGTH(options) != sizeof(CPeakPOptions))
-      error("msutils: options raw blob must be length %zu", sizeof(CPeakPOptions));
-    memcpy((void *)copy, (const void *)RAW(options), sizeof(CPeakPOptions));
+    if ((size_t)XLENGTH(options) != sizeof(CPeakOptions))
+      error("msutils: options raw blob must be length %zu", sizeof(CPeakOptions));
+    memcpy((void *)copy, (const void *)RAW(options), sizeof(CPeakOptions));
     *out_ptr = copy;
     return 1;
   }
@@ -413,8 +409,8 @@ SEXP C_get_peak(SEXP x, SEXP y, SEXP rt, SEXP range, SEXP options)
   REQUIRE_BOUND(ABI.get_peak, "get_peak");
   REQUIRE_BOUND(ABI.free_, "free_");
   R_xlen_t n = XLENGTH(y);
-  CPeakPOptions opts;
-  const CPeakPOptions *opt_ptr = NULL;
+  CPeakOptions opts;
+  const CPeakOptions *opt_ptr = NULL;
   (void)as_opts_ptr(options, &opts, &opt_ptr);
   Buf out = (Buf){0};
   int code = ABI.get_peak(REAL(x), REAL(y), (size_t)n, asReal(rt), asReal(range), opt_ptr, &out);
@@ -473,8 +469,8 @@ SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, S
   }
 
   size_t ncores = (cores == R_NilValue) ? 1 : (size_t)asInteger(cores);
-  CPeakPOptions opts;
-  const CPeakPOptions *opt_ptr = NULL;
+  CPeakOptions opts;
+  const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
 
   Buf out = (Buf){0};
@@ -531,8 +527,8 @@ SEXP C_get_peaks_from_chrom(SEXP bin, SEXP idxs, SEXP rts, SEXP ranges, SEXP opt
   if (ncores < 1)
     ncores = 1;
 
-  CPeakPOptions opts;
-  const CPeakPOptions *opt_ptr = NULL;
+  CPeakOptions opts;
+  const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
 
   Buf out = (Buf){0};
@@ -587,8 +583,8 @@ SEXP C_find_peaks(SEXP x, SEXP y, SEXP options)
   REQUIRE_BOUND(ABI.find_peaks, "find_peaks");
   REQUIRE_BOUND(ABI.free_, "free_");
   R_xlen_t n = XLENGTH(y);
-  CPeakPOptions opts;
-  const CPeakPOptions *opt_ptr = NULL;
+  CPeakOptions opts;
+  const CPeakOptions *opt_ptr = NULL;
   (void)as_opts_ptr(options, &opts, &opt_ptr);
   Buf out = (Buf){0};
   int code = ABI.find_peaks(REAL(x), REAL(y), (size_t)n, opt_ptr, &out);
@@ -598,17 +594,17 @@ SEXP C_find_peaks(SEXP x, SEXP y, SEXP options)
   return res;
 }
 
-SEXP C_calculate_baseline(SEXP y, SEXP baseline_window, SEXP baseline_window_factor)
+SEXP C_calculate_baseline(SEXP y, SEXP lambda, SEXP max_iterations)
 {
   if (TYPEOF(y) != REALSXP)
     error("numeric y required");
   REQUIRE_BOUND(ABI.calculate_baseline, "calculate_baseline");
   REQUIRE_BOUND(ABI.free_, "free_");
   R_xlen_t n = XLENGTH(y);
-  int bw = asInteger(baseline_window);
-  int bf = asInteger(baseline_window_factor);
+  int lam = asInteger(lambda);
+  int maxit = asInteger(max_iterations);
   Buf out = (Buf){0};
-  int code = ABI.calculate_baseline(REAL(y), (size_t)n, (int32_t)bw, (int32_t)bf, &out);
+  int code = ABI.calculate_baseline(REAL(y), (size_t)n, (int32_t)lam, (int32_t)maxit, &out);
   die_code("calculate_baseline", code);
   size_t m = out.len / 8;
   SEXP Ry = PROTECT(Rf_allocVector(REALSXP, (R_xlen_t)m));
@@ -631,8 +627,8 @@ SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, 
   int32_t gpu = (use_gpu == R_NilValue) ? 0 : (asLogical(use_gpu) == TRUE ? 1 : 0);
   int32_t bsz = (batch_size == R_NilValue) ? 0 : asInteger(batch_size);
 
-  CPeakPOptions opts;
-  const CPeakPOptions *opt_ptr = NULL;
+  CPeakOptions opts;
+  const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
 
   Buf out = (Buf){0};
@@ -702,8 +698,8 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
   }
 
   size_t ncores = (cores == R_NilValue) ? 1 : (size_t)asInteger(cores);
-  CPeakPOptions opts;
-  const CPeakPOptions *opt_ptr = NULL;
+  CPeakOptions opts;
+  const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
 
   Buf out = (Buf){0};
@@ -776,8 +772,8 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
   int32_t gpu = (use_gpu == R_NilValue) ? 0 : (asLogical(use_gpu) == TRUE ? 1 : 0);
   int32_t bsz = (batch_size == R_NilValue) ? 0 : asInteger(batch_size);
 
-  CPeakPOptions opts;
-  const CPeakPOptions *opt_ptr = NULL;
+  CPeakOptions opts;
+  const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
 
   Buf out = (Buf){0};

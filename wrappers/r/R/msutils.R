@@ -1,62 +1,19 @@
 .DEFAULTS <- list(
-  eic_ppm_tol         = 10.0,
-  eic_mz_tol          = 0.005,
-  grid_start          = 40,
-  grid_end            = 1000,
-  grid_step           = 0.005,
-  group_ppm_tol       = 5.0,
-  group_da_tol        = 0.0025,
-  group_rt_tol        = 0.05,
-  frequency           = 1L,
-  intensity_threshold = 1000,
-  width_threshold     = 5L,
-  auto_noise          = TRUE,
-  auto_baseline       = TRUE,
-  sn_ratio            = 1
+  eic_ppm_tol          = 10.0,
+  eic_mz_tol           = 0.005,
+  grid_start           = 40,
+  grid_end             = 1000,
+  grid_step            = 0.005,
+  group_ppm_tol        = 5.0,
+  group_da_tol         = 0.0025,
+  group_rt_tol         = 0.05,
+  frequency            = 1L,
+  min_intensity        = 1000,
+  min_peak_width_points = 5L,
+  auto_noise           = TRUE,
+  auto_baseline        = TRUE,
+  min_snr              = 1
 )
-
-.pack_opts <- function(options) {
-  if (is.null(options)) return(NULL)
-  if (is.raw(options)) {
-    if (length(options) != 64L) stop("options raw blob must be length 64")
-    return(options)
-  }
-  if (!is.list(options) || is.null(names(options))) stop("options must be a named list in snake_case")
-  allow <- c(
-    "integral_threshold","intensity_threshold","width_threshold","noise",
-    "auto_noise","auto_baseline","baseline_window","baseline_window_factor",
-    "allow_overlap","window_size","sn_ratio"
-  )
-  bad <- setdiff(names(options), allow)
-  if (length(bad)) stop(paste0("unrecognized option(s): ", paste(bad, collapse = ", ")))
-  num <- function(k, d) { v <- options[[k]]; if (is.null(v) || is.na(v[1])) d else as.numeric(v[1]) }
-  int <- function(k, d) { v <- options[[k]]; if (is.null(v) || is.na(v[1])) d else as.integer(v[1]) }
-  lgc <- function(k, d=FALSE) {
-    v <- options[[k]]
-    if (is.null(v)) return(as.logical(d))
-    if (!is.logical(v) || length(v) != 1 || is.na(v)) stop(paste0("option '", k, "' must be logical TRUE/FALSE"))
-    v
-  }
-  raw64 <- raw(64)
-  con <- rawConnection(raw64, "r+"); on.exit(close(con), add=TRUE)
-  w <- function(val, off, what=c("double","int")) {
-    seek(con, off)
-    if (what[1] == "double") writeBin(as.double(val), con, size=8, endian="little")
-    else writeBin(as.integer(val), con, size=4, endian="little")
-  }
-  w(num("integral_threshold",        NaN),  0,  "double")
-  w(num("intensity_threshold",       NaN),  8,  "double")
-  w(int("width_threshold",           0L ), 16, "int")
-  w(num("noise",                     NaN), 24, "double")
-  w(if (lgc("auto_noise",          FALSE)) 1L else 0L, 32, "int")
-  w(if (lgc("auto_baseline",       FALSE)) 1L else 0L, 36, "int")
-  w(int("baseline_window",          0L ), 40, "int")
-  w(int("baseline_window_factor",   0L ), 44, "int")
-  w(if (lgc("allow_overlap",       FALSE)) 1L else 0L, 48, "int")
-  w(int("window_size",              0L ), 52, "int")
-  w(num("sn_ratio",                 NaN), 56, "double")
-  rawConnectionValue(con)
-}
 
 dispose <- function(bin) {
   if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer")
@@ -95,49 +52,47 @@ ion_to_mzml <- function(bin) {
 
 get_peak <- function(
   x, y, rt, range,
-  integral_threshold   = NaN,
-  intensity_threshold  = .DEFAULTS$intensity_threshold,
-  width_threshold      = .DEFAULTS$width_threshold,
-  noise                = NaN,
-  auto_noise           = .DEFAULTS$auto_noise,
-  auto_baseline        = .DEFAULTS$auto_baseline,
-  baseline_window      = 0L,
-  baseline_window_factor = 0L,
-  allow_overlap        = FALSE,
-  window_size          = 0L,
-  sn_ratio             = .DEFAULTS$sn_ratio
+  min_integral          = NaN,
+  min_intensity         = .DEFAULTS$min_intensity,
+  min_peak_width_points = .DEFAULTS$min_peak_width_points,
+  noise                 = NaN,
+  auto_noise            = .DEFAULTS$auto_noise,
+  auto_baseline         = .DEFAULTS$auto_baseline,
+  lambda                = 0L,
+  max_iterations        = 0L,
+  allow_overlap         = FALSE,
+  min_snr               = .DEFAULTS$min_snr
 ) {
   stopifnot(is.numeric(x), is.numeric(y))
   if (length(x) != length(y) || length(x) < 3) stop("x and y must have the same length (>= 3)")
   if (!is.logical(auto_noise) || length(auto_noise) != 1 || is.na(auto_noise)) stop("auto_noise must be logical TRUE/FALSE")
   if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
   if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
-  opt <- .pack_opts(list(
-    integral_threshold=integral_threshold, intensity_threshold=intensity_threshold,
-    width_threshold=width_threshold, noise=noise,
+  opt <- list(
+    min_integral=min_integral, min_intensity=min_intensity,
+    min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
-    baseline_window=baseline_window, baseline_window_factor=baseline_window_factor,
-    allow_overlap=allow_overlap, window_size=window_size, sn_ratio=sn_ratio
-  ))
+    lambda=lambda, max_iterations=max_iterations,
+    allow_overlap=allow_overlap, min_snr=min_snr
+  )
   out_json <- .Call("C_get_peak", as.numeric(x), as.numeric(y), as.numeric(rt), as.numeric(range), opt, PACKAGE="msutils")
   jsonlite::fromJSON(out_json, simplifyVector=TRUE)
 }
 
 get_peaks_from_eic <- function(
   bin, df, from=0.5, to=5, cores=1L,
-  integral_threshold   = NaN,
-  intensity_threshold  = .DEFAULTS$intensity_threshold,
-  width_threshold      = .DEFAULTS$width_threshold,
-  noise                = NaN,
-  auto_noise           = .DEFAULTS$auto_noise,
-  auto_baseline        = .DEFAULTS$auto_baseline,
-  baseline_window      = 0L,
-  baseline_window_factor = 0L,
-  allow_overlap        = FALSE,
-  window_size          = 0L,
-  sn_ratio             = .DEFAULTS$sn_ratio
+  min_integral          = NaN,
+  min_intensity         = .DEFAULTS$min_intensity,
+  min_peak_width_points = .DEFAULTS$min_peak_width_points,
+  noise                 = NaN,
+  auto_noise            = .DEFAULTS$auto_noise,
+  auto_baseline         = .DEFAULTS$auto_baseline,
+  lambda                = 0L,
+  max_iterations        = 0L,
+  allow_overlap         = FALSE,
+  min_snr               = .DEFAULTS$min_snr
 ) {
-  stopifnot(typeof(bin) == "externalptr") 
+  stopifnot(typeof(bin) == "externalptr")
   if (!is.data.frame(df)) stop("`df` must be a data.frame")
   req <- c("id","rt","mz","ranges"); miss <- setdiff(req, names(df))
   if (length(miss)) stop(paste0("missing columns: ", paste(miss, collapse=", ")))
@@ -151,13 +106,13 @@ get_peaks_from_eic <- function(
   if (!is.logical(auto_noise) || length(auto_noise) != 1 || is.na(auto_noise)) stop("auto_noise must be logical TRUE/FALSE")
   if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
   if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
-  opt <- .pack_opts(list(
-    integral_threshold=integral_threshold, intensity_threshold=intensity_threshold,
-    width_threshold=width_threshold, noise=noise,
+  opt <- list(
+    min_integral=min_integral, min_intensity=min_intensity,
+    min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
-    baseline_window=baseline_window, baseline_window_factor=baseline_window_factor,
-    allow_overlap=allow_overlap, window_size=window_size, sn_ratio=sn_ratio
-  ))
+    lambda=lambda, max_iterations=max_iterations,
+    allow_overlap=allow_overlap, min_snr=min_snr
+  )
   cores <- .validate_cores(cores)
   out_json <- .Call("C_get_peaks_from_eic",
     bin, as.numeric(rts), as.numeric(mzs), as.numeric(ranges), as.character(id),
@@ -175,17 +130,16 @@ get_peaks_from_eic <- function(
 
 get_peaks_from_chrom <- function(
   bin, items, cores=1L,
-  integral_threshold   = NaN,
-  intensity_threshold  = .DEFAULTS$intensity_threshold,
-  width_threshold      = .DEFAULTS$width_threshold,
-  noise                = NaN,
-  auto_noise           = FALSE,
-  auto_baseline        = FALSE,
-  baseline_window      = 0L,
-  baseline_window_factor = 0L,
-  allow_overlap        = FALSE,
-  window_size          = 0L,
-  sn_ratio             = .DEFAULTS$sn_ratio
+  min_integral          = NaN,
+  min_intensity         = .DEFAULTS$min_intensity,
+  min_peak_width_points = .DEFAULTS$min_peak_width_points,
+  noise                 = NaN,
+  auto_noise            = FALSE,
+  auto_baseline         = FALSE,
+  lambda                = 0L,
+  max_iterations        = 0L,
+  allow_overlap         = FALSE,
+  min_snr               = .DEFAULTS$min_snr
 ) {
   stopifnot(typeof(bin) == "externalptr")
   if (is.null(items) || !(is.list(items) || is.data.frame(items))) stop("items must be a list/data.frame")
@@ -196,13 +150,13 @@ get_peaks_from_chrom <- function(
   if (!is.logical(auto_noise) || length(auto_noise) != 1 || is.na(auto_noise)) stop("auto_noise must be logical TRUE/FALSE")
   if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
   if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
-  opt <- .pack_opts(list(
-    integral_threshold=integral_threshold, intensity_threshold=intensity_threshold,
-    width_threshold=width_threshold, noise=noise,
+  opt <- list(
+    min_integral=min_integral, min_intensity=min_intensity,
+    min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
-    baseline_window=baseline_window, baseline_window_factor=baseline_window_factor,
-    allow_overlap=allow_overlap, window_size=window_size, sn_ratio=sn_ratio
-  ))
+    lambda=lambda, max_iterations=max_iterations,
+    allow_overlap=allow_overlap, min_snr=min_snr
+  )
   cores <- .validate_cores(cores)
   out_json <- .Call("C_get_peaks_from_chrom",
     bin, idxs, rts, wins, opt, as.integer(cores), PACKAGE="msutils"
@@ -210,7 +164,7 @@ get_peaks_from_chrom <- function(
   df <- jsonlite::fromJSON(out_json, simplifyVector=TRUE)
   if (!is.data.frame(df)) df <- as.data.frame(df)
   if (!"ort" %in% names(df)) stop("internal error: 'ort' missing from result")
-  want <- c("index","id","ort","rt","from","to","intensity","integral", "total_area")
+  want <- c("index","id","ort","rt","from","to","intensity","integral","total_area")
   present <- want[want %in% names(df)]; extras <- setdiff(names(df), present)
   df <- df[, c(present, extras), drop=FALSE]
   if ("index" %in% names(df)) df <- df[order(df$index), , drop=FALSE]
@@ -230,40 +184,39 @@ calculate_eic <- function(bin, targets, from, to, ppm_tolerance=20, mz_tolerance
 
 find_peaks <- function(
   x, y,
-  integral_threshold   = NaN,
-  intensity_threshold  = .DEFAULTS$intensity_threshold,
-  width_threshold      = .DEFAULTS$width_threshold,
-  noise                = NaN,
-  auto_noise           = .DEFAULTS$auto_noise,
-  auto_baseline        = .DEFAULTS$auto_baseline,
-  baseline_window      = 0L,
-  baseline_window_factor = 0L,
-  allow_overlap        = FALSE,
-  window_size          = 0L,
-  sn_ratio             = .DEFAULTS$sn_ratio
+  min_integral          = NaN,
+  min_intensity         = .DEFAULTS$min_intensity,
+  min_peak_width_points = .DEFAULTS$min_peak_width_points,
+  noise                 = NaN,
+  auto_noise            = .DEFAULTS$auto_noise,
+  auto_baseline         = .DEFAULTS$auto_baseline,
+  lambda                = 0L,
+  max_iterations        = 0L,
+  allow_overlap         = FALSE,
+  min_snr               = .DEFAULTS$min_snr
 ) {
   stopifnot(is.numeric(x), is.numeric(y))
   if (length(x) != length(y) || length(x) < 3) stop("x and y must have the same length >= 3")
   if (!is.logical(auto_noise) || length(auto_noise) != 1 || is.na(auto_noise)) stop("auto_noise must be logical TRUE/FALSE")
   if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
   if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
-  opt <- .pack_opts(list(
-    integral_threshold=integral_threshold, intensity_threshold=intensity_threshold,
-    width_threshold=width_threshold, noise=noise,
+  opt <- list(
+    min_integral=min_integral, min_intensity=min_intensity,
+    min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
-    baseline_window=baseline_window, baseline_window_factor=baseline_window_factor,
-    allow_overlap=allow_overlap, window_size=window_size, sn_ratio=sn_ratio
-  ))
+    lambda=lambda, max_iterations=max_iterations,
+    allow_overlap=allow_overlap, min_snr=min_snr
+  )
   out_json <- .Call("C_find_peaks", as.numeric(x), as.numeric(y), opt, PACKAGE="msutils")
   jsonlite::fromJSON(out_json, simplifyVector=TRUE)
 }
 
-calculate_baseline <- function(y, baseline_window=15L, baseline_window_factor=1L) {
+calculate_baseline <- function(y, lambda=0L, max_iterations=0L) {
   stopifnot(is.numeric(y))
   .Call("C_calculate_baseline",
         as.numeric(y),
-        as.integer(baseline_window),
-        as.integer(baseline_window_factor),
+        as.integer(lambda),
+        as.integer(max_iterations),
         PACKAGE="msutils")
 }
 
@@ -271,18 +224,17 @@ find_feature <- function(
   bin,
   rt, mz, window, id = NULL,
   scan_ppm, scan_mz, eic_ppm, eic_mz,
-  cores                = 1L,
-  integral_threshold   = NaN,
-  intensity_threshold  = .DEFAULTS$intensity_threshold,
-  width_threshold      = .DEFAULTS$width_threshold,
-  noise                = NaN,
-  auto_noise           = .DEFAULTS$auto_noise,
-  auto_baseline        = .DEFAULTS$auto_baseline,
-  baseline_window      = 0L,
-  baseline_window_factor = 0L,
-  allow_overlap        = FALSE,
-  window_size          = 0L,
-  sn_ratio             = .DEFAULTS$sn_ratio
+  cores                 = 1L,
+  min_integral          = NaN,
+  min_intensity         = .DEFAULTS$min_intensity,
+  min_peak_width_points = .DEFAULTS$min_peak_width_points,
+  noise                 = NaN,
+  auto_noise            = .DEFAULTS$auto_noise,
+  auto_baseline         = .DEFAULTS$auto_baseline,
+  lambda                = 0L,
+  max_iterations        = 0L,
+  allow_overlap         = FALSE,
+  min_snr               = .DEFAULTS$min_snr
 ) {
   stopifnot(typeof(bin) == "externalptr")
   if (!is.numeric(rt)) stop("rt must be numeric")
@@ -304,19 +256,18 @@ find_feature <- function(
     id <- as.character(id)
   }
 
-  opt <- .pack_opts(list(
-    integral_threshold = integral_threshold,
-    intensity_threshold = intensity_threshold,
-    width_threshold = width_threshold,
-    noise = noise,
-    auto_noise = auto_noise,
-    auto_baseline = auto_baseline,
-    baseline_window = baseline_window,
-    baseline_window_factor = baseline_window_factor,
-    allow_overlap = allow_overlap,
-    window_size = window_size,
-    sn_ratio = sn_ratio
-  ))
+  opt <- list(
+    min_integral=min_integral,
+    min_intensity=min_intensity,
+    min_peak_width_points=min_peak_width_points,
+    noise=noise,
+    auto_noise=auto_noise,
+    auto_baseline=auto_baseline,
+    lambda=lambda,
+    max_iterations=max_iterations,
+    allow_overlap=allow_overlap,
+    min_snr=min_snr
+  )
 
   cores <- .validate_cores(cores)
 
@@ -342,37 +293,36 @@ find_feature <- function(
 
 find_features <- function(
   data, from = 0, to = 10,
-  ppm_tolerance        = .DEFAULTS$eic_ppm_tol,
-  mz_tolerance         = .DEFAULTS$eic_mz_tol,
-  grid_start           = .DEFAULTS$grid_start,
-  grid_end             = .DEFAULTS$grid_end,
-  grid_step_ppm        = .DEFAULTS$grid_step,
-  cores                = 1L,
-  use_gpu              = FALSE,
-  batch_size           = 0L,
-  integral_threshold   = NaN,
-  intensity_threshold  = .DEFAULTS$intensity_threshold,
-  width_threshold      = .DEFAULTS$width_threshold,
-  noise                = NaN,
-  auto_noise           = .DEFAULTS$auto_noise,
-  auto_baseline        = .DEFAULTS$auto_baseline,
-  baseline_window      = 0L,
-  baseline_window_factor = 0L,
-  allow_overlap        = FALSE,
-  window_size          = 0L,
-  sn_ratio             = .DEFAULTS$sn_ratio
+  ppm_tolerance         = .DEFAULTS$eic_ppm_tol,
+  mz_tolerance          = .DEFAULTS$eic_mz_tol,
+  grid_start            = .DEFAULTS$grid_start,
+  grid_end              = .DEFAULTS$grid_end,
+  grid_step_ppm         = .DEFAULTS$grid_step,
+  cores                 = 1L,
+  use_gpu               = FALSE,
+  batch_size            = 0L,
+  min_integral          = NaN,
+  min_intensity         = .DEFAULTS$min_intensity,
+  min_peak_width_points = .DEFAULTS$min_peak_width_points,
+  noise                 = NaN,
+  auto_noise            = .DEFAULTS$auto_noise,
+  auto_baseline         = .DEFAULTS$auto_baseline,
+  lambda                = 0L,
+  max_iterations        = 0L,
+  allow_overlap         = FALSE,
+  min_snr               = .DEFAULTS$min_snr
 ) {
   stopifnot(typeof(data) == "externalptr")
   if (!is.logical(use_gpu) || length(use_gpu) != 1 || is.na(use_gpu)) stop("use_gpu must be logical TRUE/FALSE")
   cores <- .validate_cores(cores)
 
-  opt <- .pack_opts(list(
-    integral_threshold = integral_threshold, intensity_threshold = intensity_threshold,
-    width_threshold = width_threshold, noise = noise,
-    auto_noise = auto_noise, auto_baseline = auto_baseline,
-    baseline_window = baseline_window, baseline_window_factor = baseline_window_factor,
-    allow_overlap = allow_overlap, window_size = window_size, sn_ratio = sn_ratio
-  ))
+  opt <- list(
+    min_integral=min_integral, min_intensity=min_intensity,
+    min_peak_width_points=min_peak_width_points, noise=noise,
+    auto_noise=auto_noise, auto_baseline=auto_baseline,
+    lambda=lambda, max_iterations=max_iterations,
+    allow_overlap=allow_overlap, min_snr=min_snr
+  )
 
   out_json <- .Call(
     "C_find_features", data,
@@ -385,7 +335,7 @@ find_features <- function(
 
   df <- jsonlite::fromJSON(out_json, simplifyVector = TRUE)
   if (!is.data.frame(df)) df <- as.data.frame(df)
-  want <- c("mz","rt","from","to","intensity","integral","ratio","np")
+  want <- c("mz","rt","from","to","intensity","integral","n_points")
   present <- intersect(want, names(df))
   df <- df[, c(present, setdiff(names(df), present)), drop = FALSE]
   rownames(df) <- NULL
@@ -448,41 +398,40 @@ get_scans <- function(bin, rt_from = NULL, rt_to = NULL, rt = NULL,
 
 get_features <- function(
   dir_path, from = 0, to = 10,
-  eic_ppm_tol          = .DEFAULTS$eic_ppm_tol,
-  eic_mz_tol           = .DEFAULTS$eic_mz_tol,
-  grid_start           = .DEFAULTS$grid_start,
-  grid_end             = .DEFAULTS$grid_end,
-  grid_step            = .DEFAULTS$grid_step,
-  group_ppm_tol        = .DEFAULTS$group_ppm_tol,
-  group_da_tol         = .DEFAULTS$group_da_tol,
-  group_rt_tol         = .DEFAULTS$group_rt_tol,
-  frequency            = .DEFAULTS$frequency,
-  cores                = 1L,
-  use_gpu              = FALSE,
-  batch_size           = 0L,
-  integral_threshold   = NaN,
-  intensity_threshold  = .DEFAULTS$intensity_threshold,
-  width_threshold      = .DEFAULTS$width_threshold,
-  noise                = NaN,
-  auto_noise           = .DEFAULTS$auto_noise,
-  auto_baseline        = .DEFAULTS$auto_baseline,
-  baseline_window      = 0L,
-  baseline_window_factor = 0L,
-  allow_overlap        = FALSE,
-  window_size          = 0L,
-  sn_ratio             = .DEFAULTS$sn_ratio
+  eic_ppm_tol           = .DEFAULTS$eic_ppm_tol,
+  eic_mz_tol            = .DEFAULTS$eic_mz_tol,
+  grid_start            = .DEFAULTS$grid_start,
+  grid_end              = .DEFAULTS$grid_end,
+  grid_step             = .DEFAULTS$grid_step,
+  group_ppm_tol         = .DEFAULTS$group_ppm_tol,
+  group_da_tol          = .DEFAULTS$group_da_tol,
+  group_rt_tol          = .DEFAULTS$group_rt_tol,
+  frequency             = .DEFAULTS$frequency,
+  cores                 = 1L,
+  use_gpu               = FALSE,
+  batch_size            = 0L,
+  min_integral          = NaN,
+  min_intensity         = .DEFAULTS$min_intensity,
+  min_peak_width_points = .DEFAULTS$min_peak_width_points,
+  noise                 = NaN,
+  auto_noise            = .DEFAULTS$auto_noise,
+  auto_baseline         = .DEFAULTS$auto_baseline,
+  lambda                = 0L,
+  max_iterations        = 0L,
+  allow_overlap         = FALSE,
+  min_snr               = .DEFAULTS$min_snr
 ) {
   if (!is.character(dir_path) || length(dir_path) != 1) stop("dir_path must be a single string")
   if (!is.logical(use_gpu) || length(use_gpu) != 1 || is.na(use_gpu)) stop("use_gpu must be logical TRUE/FALSE")
   cores <- .validate_cores(cores)
 
-  opt <- .pack_opts(list(
-    integral_threshold = integral_threshold, intensity_threshold = intensity_threshold,
-    width_threshold = width_threshold, noise = noise,
-    auto_noise = auto_noise, auto_baseline = auto_baseline,
-    baseline_window = baseline_window, baseline_window_factor = baseline_window_factor,
-    allow_overlap = allow_overlap, window_size = window_size, sn_ratio = sn_ratio
-  ))
+  opt <- list(
+    min_integral=min_integral, min_intensity=min_intensity,
+    min_peak_width_points=min_peak_width_points, noise=noise,
+    auto_noise=auto_noise, auto_baseline=auto_baseline,
+    lambda=lambda, max_iterations=max_iterations,
+    allow_overlap=allow_overlap, min_snr=min_snr
+  )
 
   out_json <- .Call("C_get_features",
     dir_path,
@@ -497,7 +446,7 @@ get_features <- function(
 
   df <- jsonlite::fromJSON(out_json, simplifyVector = TRUE)
   if (!is.data.frame(df)) df <- as.data.frame(df)
-  want <- c("mz", "rt", "from", "to", "intensity", "integral", "np", "frequency", "rmz")
+  want <- c("mz", "rt", "from", "to", "intensity", "integral", "n_points", "n_samples", "mz_rsd")
   present <- intersect(want, names(df))
   df <- df[, c(present, setdiff(names(df), present)), drop = FALSE]
   rownames(df) <- NULL
@@ -530,7 +479,7 @@ ion_to_df <- function(bin) {
   if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer")
   x <- jsonlite::fromJSON(ion_to_json(bin), simplifyVector = TRUE)
   if (!is.null(x$Err)) stop(x$Err)
-  
+
   root <- if (!is.null(x$Ok)) x$Ok else x
   run <- root$run
   if (is.null(run)) return(root)
@@ -539,7 +488,7 @@ ion_to_df <- function(bin) {
     if (is.null(meta_list$spectra) && is.null(meta_list$chromatograms)) return(data_node)
     meta <- if (!is.null(meta_list$spectra)) meta_list$spectra else meta_list$chromatograms
     df <- as.data.frame(meta, stringsAsFactors = FALSE)
-    
+
     for (col in names(data_node)) {
       if (is.list(data_node[[col]])) df[[col]] <- I(data_node[[col]])
       else df[[col]] <- data_node[[col]]

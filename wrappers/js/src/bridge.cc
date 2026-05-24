@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 #include <atomic>
+#include "include/msutils.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -27,27 +28,6 @@ static const char *last_err = "LoadLibrary/GetProcAddress failed";
 static const char *last_err = NULL;
 #endif
 
-typedef struct
-{
-  unsigned char *ptr;
-  size_t len;
-} Buf;
-
-typedef struct
-{
-  double integral_threshold;
-  double intensity_threshold;
-  int32_t width_threshold;
-  double noise;
-  int32_t auto_noise;
-  int32_t auto_baseline;
-  int32_t baseline_window;
-  int32_t baseline_window_factor;
-  int32_t allow_overlap;
-  int32_t window_size;
-  double sn_ratio;
-} CPeakPOptions;
-
 typedef struct MzML MzML;
 
 struct MzMLWrapper
@@ -56,29 +36,33 @@ struct MzMLWrapper
   size_t estimated_size;
 };
 
-static_assert(sizeof(CPeakPOptions) == 64, "CPeakPOptions must be 64 bytes");
+static_assert(sizeof(CPeakOptions) == 64, "CPeakOptions must be 64 bytes");
 
+typedef uint32_t (*fn_msutils_abi_version)(void);
+typedef size_t   (*fn_msutils_sizeof_peak_options)(void);
 typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, size_t, MzML **);
 typedef void (*fn_free_mzml)(MzML *);
 typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *);
 typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *);
-typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakPOptions *, Buf *);
+typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_calculate_eic)(const MzML *, double, double, double, double, double, Buf *, Buf *);
 typedef double (*fn_find_noise_level)(const double *, size_t);
-typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakPOptions *, size_t, Buf *);
-typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakPOptions *, size_t, Buf *);
-typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakPOptions *, Buf *);
+typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakOptions *, size_t, Buf *);
+typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakOptions *, size_t, Buf *);
+typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakPOptions *, int32_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakPOptions *, Buf *);
+typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
+typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
-typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakPOptions *, int32_t, int32_t, int32_t, Buf *);
+typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 
 typedef struct
 {
+  fn_msutils_abi_version msutils_abi_version;
+  fn_msutils_sizeof_peak_options msutils_sizeof_peak_options;
   fn_parse_mzml parse_mzml;
   fn_bin_to_json bin_to_json;
   fn_bin_to_mzml bin_to_mzml;
@@ -242,6 +226,20 @@ static int abi_load(const char *path, const char **err)
     return -1;
   }
 
+  if (resolve_required((void **)&ABI.msutils_abi_version, "msutils_abi_version"))
+    goto fail;
+  if (ABI.msutils_abi_version() != MSUTILS_ABI_VERSION)
+  {
+    last_err = "ABI version mismatch: rebuild the native addon";
+    goto fail;
+  }
+  if (resolve_required((void **)&ABI.msutils_sizeof_peak_options, "msutils_sizeof_peak_options"))
+    goto fail;
+  if (ABI.msutils_sizeof_peak_options() != sizeof(CPeakOptions))
+  {
+    last_err = "PeakOptions size mismatch: native binary and JS addon are out of sync — rebuild";
+    goto fail;
+  }
   if (resolve_required((void **)&ABI.parse_mzml, "parse_mzml"))
     goto fail;
   if (resolve_required((void **)&ABI.bin_to_json, "bin_to_json"))
@@ -361,16 +359,45 @@ static Napi::String TakeUtf8String(Napi::Env env, Buf *buf)
   return s;
 }
 
-static const CPeakPOptions *ReadOptionsBuf(Napi::Value value, CPeakPOptions *out)
+static double GetF64(const Napi::Object &o, const char *key, double fallback)
+{
+  if (!o.Has(key))
+    return fallback;
+  Napi::Value v = o.Get(key);
+  if (v.IsNumber())
+    return v.As<Napi::Number>().DoubleValue();
+  return fallback;
+}
+
+static int32_t GetI32(const Napi::Object &o, const char *key, int32_t fallback)
+{
+  if (!o.Has(key))
+    return fallback;
+  Napi::Value v = o.Get(key);
+  if (v.IsNumber())
+    return v.As<Napi::Number>().Int32Value();
+  if (v.IsBoolean())
+    return v.As<Napi::Boolean>().Value() ? 1 : 0;
+  return fallback;
+}
+
+static const CPeakOptions *ReadPeakOptionsObject(Napi::Value value, CPeakOptions *out)
 {
   if (value.IsUndefined() || value.IsNull())
     return nullptr;
-  if (!value.IsBuffer())
+  if (!value.IsObject() || value.IsArray() || value.IsBuffer())
     return nullptr;
-  Napi::Buffer<uint8_t> buf = value.As<Napi::Buffer<uint8_t>>();
-  if (buf.Length() != sizeof(CPeakPOptions))
-    return nullptr;
-  memcpy(out, buf.Data(), sizeof(CPeakPOptions));
+  Napi::Object o = value.As<Napi::Object>();
+  out->min_integral          = GetF64(o, "minIntegral",         NAN);
+  out->min_intensity         = GetF64(o, "minIntensity",        NAN);
+  out->min_peak_width_points = GetI32(o, "minPeakWidthPoints",  0);
+  out->noise                 = GetF64(o, "noise",               NAN);
+  out->auto_noise            = GetI32(o, "autoNoise",           0);
+  out->auto_baseline         = GetI32(o, "autoBaseline",        0);
+  out->lambda                = GetI32(o, "lambda",              0);
+  out->max_iterations        = GetI32(o, "maxIterations",       0);
+  out->allow_overlap         = GetI32(o, "allowOverlap",        0);
+  out->min_snr               = GetF64(o, "minSnr",              NAN);
   return out;
 }
 
@@ -554,10 +581,10 @@ static Napi::Value GetPeak(const Napi::CallbackInfo &info)
     return env.Undefined();
   }
 
-  CPeakPOptions opts;
-  const CPeakPOptions *p_opts = nullptr;
+  CPeakOptions opts;
+  const CPeakOptions *p_opts = nullptr;
   if (info.Length() > 4)
-    p_opts = ReadOptionsBuf(info[4], &opts);
+    p_opts = ReadPeakOptionsObject(info[4], &opts);
 
   const double *x_ptr = Float64Ptr(x_arr);
   const double *y_ptr = Float64Ptr(y_arr);
@@ -659,8 +686,8 @@ static Napi::Value GetPeaksFromEic(const Napi::CallbackInfo &info)
   BuildPackedIds(env, info[4], count, &packed);
   double f_l = info[5].As<Napi::Number>().DoubleValue();
   double t_r = info[6].As<Napi::Number>().DoubleValue();
-  CPeakPOptions opts;
-  const CPeakPOptions *p_opts = ReadOptionsBuf(info[7], &opts);
+  CPeakOptions opts;
+  const CPeakOptions *p_opts = ReadPeakOptionsObject(info[7], &opts);
   size_t cores = info.Length() > 8 ? info[8].As<Napi::Number>().Uint32Value() : 1;
   OwnedBuf out;
   int32_t rc = ABI.get_peaks_from_eic(handle, Float64Ptr(rts), Float64Ptr(mzs), Float64Ptr(rng),
@@ -691,8 +718,8 @@ static Napi::Value GetPeaksFromChrom(const Napi::CallbackInfo &info)
   Napi::Float64Array rts = info[2].As<Napi::Float64Array>();
   Napi::Float64Array rng = info[3].As<Napi::Float64Array>();
   size_t count = rts.ElementLength();
-  CPeakPOptions opts;
-  const CPeakPOptions *p_opts = ReadOptionsBuf(info[4], &opts);
+  CPeakOptions opts;
+  const CPeakOptions *p_opts = ReadPeakOptionsObject(info[4], &opts);
   size_t cores = info.Length() > 5 ? info[5].As<Napi::Number>().Uint32Value() : 1;
   OwnedBuf out;
   int32_t rc = ABI.get_peaks_from_chrom(handle, Uint32Ptr(idx), Float64Ptr(rts), Float64Ptr(rng), count, p_opts, cores, out.Out());
@@ -723,10 +750,10 @@ static Napi::Value FindPeaks(const Napi::CallbackInfo &info)
     return env.Undefined();
   }
 
-  CPeakPOptions opts;
-  const CPeakPOptions *p_opts = nullptr;
+  CPeakOptions opts;
+  const CPeakOptions *p_opts = nullptr;
   if (info.Length() > 2)
-    p_opts = ReadOptionsBuf(info[2], &opts);
+    p_opts = ReadPeakOptionsObject(info[2], &opts);
 
   const double *x_ptr = Float64Ptr(x_arr);
   const double *y_ptr = Float64Ptr(y_arr);
@@ -753,29 +780,29 @@ static Napi::Value CalculateBaseline(const Napi::CallbackInfo &info)
   }
 
   Napi::Float64Array y_arr = info[0].As<Napi::Float64Array>();
-  int32_t baseline_window = 0, baseline_window_factor = 0;
+  int32_t lambda = 0, max_iterations = 0;
 
   if (info.Length() >= 2 && info[1].IsObject() && !info[1].IsBuffer() && !info[1].IsTypedArray())
   {
     Napi::Object o = info[1].As<Napi::Object>();
-    if (o.Has("baselineWindow"))
-      baseline_window = o.Get("baselineWindow").ToNumber().Int32Value();
-    if (o.Has("baselineWindowFactor"))
-      baseline_window_factor = o.Get("baselineWindowFactor").ToNumber().Int32Value();
+    if (o.Has("lambda"))
+      lambda = o.Get("lambda").ToNumber().Int32Value();
+    if (o.Has("maxIterations"))
+      max_iterations = o.Get("maxIterations").ToNumber().Int32Value();
   }
   else
   {
     if (info.Length() > 1 && info[1].IsNumber())
-      baseline_window = info[1].As<Napi::Number>().Int32Value();
+      lambda = info[1].As<Napi::Number>().Int32Value();
     if (info.Length() > 2 && info[2].IsNumber())
-      baseline_window_factor = info[2].As<Napi::Number>().Int32Value();
+      max_iterations = info[2].As<Napi::Number>().Int32Value();
   }
 
   const double *y_ptr = Float64Ptr(y_arr);
   size_t n = y_arr.ElementLength();
 
   OwnedBuf out;
-  int32_t rc = ABI.calculate_baseline(y_ptr, n, baseline_window, baseline_window_factor, out.Out());
+  int32_t rc = ABI.calculate_baseline(y_ptr, n, lambda, max_iterations, out.Out());
   if (rc != 0)
     return ThrowRc(env, "calculate_baseline", rc);
 
@@ -801,8 +828,8 @@ static Napi::Value FindFeatures(const Napi::CallbackInfo &info)
   double gs = info[5].As<Napi::Number>().DoubleValue();
   double ge = info[6].As<Napi::Number>().DoubleValue();
   double gst = info[7].As<Napi::Number>().DoubleValue();
-  CPeakPOptions opts;
-  const CPeakPOptions *p_opts = ReadOptionsBuf(info[8], &opts);
+  CPeakOptions opts;
+  const CPeakOptions *p_opts = ReadPeakOptionsObject(info[8], &opts);
   int32_t cores = info[9].As<Napi::Number>().Int32Value();
   int32_t use_gpu = info[10].As<Napi::Number>().Int32Value();
   int32_t batch_size = info[11].As<Napi::Number>().Int32Value();
@@ -840,8 +867,8 @@ static Napi::Value FindFeature(const Napi::CallbackInfo &info)
   double s_mz = info[7].As<Napi::Number>().DoubleValue();
   double e_ppm = info[8].As<Napi::Number>().DoubleValue();
   double e_mz = info[9].As<Napi::Number>().DoubleValue();
-  CPeakPOptions opts;
-  const CPeakPOptions *p_opts = ReadOptionsBuf(info[10], &opts);
+  CPeakOptions opts;
+  const CPeakOptions *p_opts = ReadPeakOptionsObject(info[10], &opts);
   OwnedBuf out;
   int32_t rc = ABI.find_feature(handle, Float64Ptr(rts), Float64Ptr(mzs), Float64Ptr(wins), packed.offs_ptr, packed.lens_ptr, packed.ids_buf_ptr, packed.ids_buf_len, count, cores, s_ppm, s_mz, e_ppm, e_mz, p_opts, out.Out());
   if (rc != 0)
@@ -911,8 +938,8 @@ static Napi::Value GetFeatures(const Napi::CallbackInfo &info)
   double group_da = info[9].As<Napi::Number>().DoubleValue();
   double group_rt = info[10].As<Napi::Number>().DoubleValue();
   int32_t frequency = info[11].As<Napi::Number>().Int32Value();
-  CPeakPOptions opts;
-  const CPeakPOptions *p_opts = ReadOptionsBuf(info[12], &opts);
+  CPeakOptions opts;
+  const CPeakOptions *p_opts = ReadPeakOptionsObject(info[12], &opts);
   int32_t cores = info[13].As<Napi::Number>().Int32Value();
   int32_t use_gpu = info[14].As<Napi::Number>().Int32Value();
   int32_t batch_size = info[15].As<Napi::Number>().Int32Value();

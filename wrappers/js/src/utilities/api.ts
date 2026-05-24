@@ -1,7 +1,7 @@
 import type { Backend } from "./backend";
 import { SampleFile } from "./sampleFile";
 import { camelizeKeys, toCores, toUint8 } from "./shared";
-import { packPeakOptions, encodeTargetIds, unpackTargets } from "./pack";
+import { encodeTargetIds, unpackTargets } from "./pack";
 import type {
   BinaryInput,
   PeakOptions,
@@ -50,11 +50,11 @@ const DEFAULTS = {
     frequency: 1,
   },
   findPeak: {
-    intensityThreshold: 150,
-    widthThreshold: 5,
+    minIntensity: 150,
+    minPeakWidthPoints: 5,
     autoNoise: true,
     autoBaseline: true,
-    snRatio: 1,
+    minSnr: 1,
   },
 } as const;
 
@@ -223,7 +223,7 @@ export function findPeaks(
   if (x.length !== y.length) {
     throw new RangeError("findPeaks: x and y must have equal length");
   }
-  return backend().findPeaks(x, y, packPeakOptions(opts));
+  return backend().findPeaks(x, y, opts);
 }
 
 /**
@@ -255,7 +255,7 @@ export function getPeak(
   if (!Number.isFinite(range) || range <= 0) {
     throw new RangeError("getPeak: range must be a positive finite number");
   }
-  return backend().getPeak(x, y, rt, range, packPeakOptions(opts));
+  return backend().getPeak(x, y, rt, range, opts);
 }
 
 /**
@@ -272,8 +272,8 @@ export function findNoiseLevel(y: Float64Array | Float32Array): number {
  * Compute the rolling baseline of an intensity array.
  *
  * @param y - Intensity array.
- * @param options.baselineWindow - Rolling window size in points. Default auto.
- * @param options.baselineWindowFactor - Window scaling factor. Default auto.
+ * @param options.lambda - airPLS smoothing parameter. Default auto.
+ * @param options.maxIterations - Maximum airPLS iterations. Default auto.
  * @returns Baseline array, same length as `y`.
  */
 export function calculateBaseline(
@@ -284,8 +284,8 @@ export function calculateBaseline(
     y instanceof Float64Array ? y : new Float64Array(y as ArrayLike<number>);
   return backend().calculateBaseline(
     y64,
-    (options?.baselineWindow as any) | 0,
-    (options?.baselineWindowFactor as any) | 0,
+    (options?.lambda as any) | 0,
+    (options?.maxIterations as any) | 0,
   );
 }
 
@@ -403,7 +403,7 @@ export function getPeaksFromEic(
     targets.length,
     from,
     to,
-    packPeakOptions(options),
+    options,
     toCores(cores),
   );
 }
@@ -445,7 +445,7 @@ export function getPeaksFromChrom(
     rts,
     windows,
     n,
-    packPeakOptions(options),
+    options,
     toCores(cores),
   );
 }
@@ -506,7 +506,7 @@ export function findFeatures(
     gridStart,
     gridEnd,
     gridStep,
-    packPeakOptions(findPeak) ?? undefined,
+    findPeak,
     toCores(cores),
     useGpu ? 1 : 0,
     batchSize | 0,
@@ -567,7 +567,7 @@ export function findFeature(
     +scanMz,
     +eicPpm,
     +eicMz,
-    packPeakOptions(options.findPeak),
+    options.findPeak,
   );
 }
 
@@ -630,7 +630,7 @@ export function getFeatures(
     +groupMz,
     +groupRt,
     +prevalence,
-    packPeakOptions(findPeak) ?? undefined,
+    findPeak,
     toCores(cores),
     useGpu ? 1 : 0,
     batchSize | 0,

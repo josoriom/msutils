@@ -55,8 +55,8 @@ pub fn get_peaks_from_chrom(
     let timestamp = run.start_time_stamp.clone().unwrap_or_default();
 
     let mut opts = options.unwrap_or_default();
-    opts.baseline_options = Some(BaselineOptions {
-        baseline_window: Some(50.0),
+    opts.baseline = Some(BaselineOptions {
+        lambda: Some(50.0),
         ..Default::default()
     });
     let opts = Some(opts);
@@ -64,11 +64,12 @@ pub fn get_peaks_from_chrom(
     let make_row = |roi: &ChromRoi| {
         let timestamp = timestamp.clone();
 
-        if roi.window <= 0.0 || !roi.rt.is_finite() {
-            return ChromPeakRow::empty(roi.idx, roi.id.clone(), roi.rt, timestamp);
+        if roi.half_width <= 0.0 || !roi.rt.is_finite() {
+            return ChromPeakRow::empty(roi.sample_index, roi.id.clone(), roi.rt, timestamp);
         }
 
-        let item_index = roi.idx;
+        let item_index = roi.sample_index;
+
         if item_index >= chroms.len() {
             return ChromPeakRow::empty(item_index, roi.id.clone(), roi.rt, timestamp);
         }
@@ -201,7 +202,7 @@ fn compute_one(
             &data,
             &Roi {
                 rt: roi.rt,
-                window: roi.window,
+                half_width: roi.half_width,
             },
             options.clone(),
         ) {

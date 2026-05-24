@@ -19,8 +19,8 @@ pub struct Peak {
     pub rt: f64,
     pub integral: f64,
     pub intensity: f64,
-    pub ratio: f64,
-    pub np: usize,
+    pub gaussian_r2: Option<f64>,
+    pub n_points: usize,
     pub noise: f64,
 }
 
@@ -32,8 +32,8 @@ impl Default for Peak {
             rt: 0.0,
             integral: 0.0,
             intensity: 0.0,
-            ratio: 0.0,
-            np: 0,
+            gaussian_r2: None,
+            n_points: 0,
             noise: 0.0,
         }
     }
@@ -42,30 +42,30 @@ impl Default for Peak {
 #[derive(Clone, Debug)]
 pub struct Roi {
     pub rt: f64,
-    pub window: f64,
+    pub half_width: f64,
 }
 
 impl Roi {
-    pub fn new(rt: f64, window: f64) -> Self {
-        Self { rt, window }
+    pub fn new(rt: f64, half_width: f64) -> Self {
+        Self { rt, half_width }
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct ChromRoi {
     pub id: String,
-    pub idx: usize,
+    pub sample_index: usize,
     pub rt: f64,
-    pub window: f64,
+    pub half_width: f64,
 }
 
 impl ChromRoi {
-    pub fn new(id: impl Into<String>, idx: usize, rt: f64, window: f64) -> Self {
+    pub fn new(id: impl Into<String>, sample_index: usize, rt: f64, half_width: f64) -> Self {
         Self {
             id: id.into(),
-            idx,
+            sample_index,
             rt,
-            window,
+            half_width,
         }
     }
 }
@@ -75,16 +75,16 @@ pub struct EicRoi {
     pub id: String,
     pub rt: f64,
     pub mz: f64,
-    pub window: f64,
+    pub half_width: f64,
 }
 
 impl EicRoi {
-    pub fn new(id: impl Into<String>, rt: f64, mz: f64, window: f64) -> Self {
+    pub fn new(id: impl Into<String>, rt: f64, mz: f64, half_width: f64) -> Self {
         Self {
             id: id.into(),
             rt,
             mz,
-            window,
+            half_width,
         }
     }
 }

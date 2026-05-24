@@ -51,13 +51,13 @@ impl<'a> GpuGridProcessor<'a> {
         let scan_vram = self.kernel.scan_vram_bytes;
         let batch_size = effective_batch_size(self.ctx, scan_count, &self.opts, scan_vram);
 
-        let ppm_tol = config.scan_eic_options.ppm_tolerance as f32;
-        let mz_tol = config.scan_eic_options.mz_tolerance as f32;
+        let ppm_tol = config.seed_eic_options.ppm_tolerance as f32;
+        let mz_tol = config.seed_eic_options.mz_tolerance as f32;
         let intensity_threshold = config
-            .find_peaks
-            .filter_peaks_options
+            .peak_options
+            .filter
             .as_ref()
-            .and_then(|o| o.intensity_threshold)
+            .and_then(|o| o.min_intensity)
             .unwrap_or(0.0);
         let coarse_threshold = relaxed_threshold(intensity_threshold);
 

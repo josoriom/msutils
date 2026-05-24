@@ -1,2 +1,2 @@
-PKG_CFLAGS = -std=gnu2x
+PKG_CFLAGS = -std=gnu2x -I$(srcdir)
 PKG_LIBS   =

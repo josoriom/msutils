@@ -13,4 +13,4 @@ export async function init(): Promise<void> {
 
 export * from "./utilities/api";
 export { SampleFile } from "./utilities/sampleFile";
-export { packPeakOptions } from "./utilities/pack";
+export { encodeTargetIds, unpackTargets } from "./utilities/pack";

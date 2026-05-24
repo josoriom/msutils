@@ -12,7 +12,7 @@ mod tests {
         calculate_eic::{CentroidScan, EicOptions, SpectrumSummary},
         find_features::{Feature, FindFeaturesOptions, MzTolerance},
         get_features::{
-            ConsensusAlignmentConfig, ConsensusFeature, FeatureClusterer, GrowingCluster,
+            AlignmentOptions, ConsensusFeature, FeatureClusterer, MzRtCluster,
             SearchBounds, TaggedFeature, aggregate_into_consensus, assign_best_per_sample,
             collect_filled_slots, compute_search_bounds, dedup, get_features, median,
             require_minimum_frequency, rsd, weighted_centroid_mz,
@@ -37,25 +37,25 @@ mod tests {
         }
     }
 
-    fn make_consensus(mz: f64, rt: f64, intensity: f64, frequency: usize) -> ConsensusFeature {
+    fn make_consensus(mz: f64, rt: f64, intensity: f64, n_samples: usize) -> ConsensusFeature {
         ConsensusFeature {
             mz,
-            rmz: 0.0,
+            mz_rsd: 0.0,
             rt,
             intensity,
-            rintensity: 0.0,
+            intensity_rsd: 0.0,
             from: rt - 0.05,
             to: rt + 0.05,
-            np: 10,
+            n_points: 10,
             integral: intensity * 0.1,
-            rint: 0.0,
-            frequency,
+            integral_rsd: 0.0,
+            n_samples,
         }
     }
 
     fn abs_tol(v: f64) -> MzTolerance {
         MzTolerance {
-            mz_abs: v,
+            mz_absolute: v,
             ppm: 0.0,
         }
     }
@@ -69,12 +69,12 @@ mod tests {
         }
     }
 
-    fn make_feature_full(mz: f64, rt: f64, intensity: f64, np: usize, integral: f64) -> Feature {
+    fn make_feature_full(mz: f64, rt: f64, intensity: f64, n_points: usize, integral: f64) -> Feature {
         Feature {
             mz,
             rt,
             intensity,
-            np,
+            n_points,
             integral,
             ..Default::default()
         }
@@ -90,7 +90,7 @@ mod tests {
     fn default_clusterer() -> FeatureClusterer {
         FeatureClusterer {
             tolerance: MzTolerance {
-                mz_abs: 0.01,
+                mz_absolute: 0.01,
                 ppm: 0.0,
             },
             rt_tolerance: 0.1,
@@ -100,7 +100,7 @@ mod tests {
     fn default_bounds() -> SearchBounds {
         SearchBounds {
             target_mz: 100.0,
-            seed_rt: 1.0,
+            center_rt: 1.0,
             rt_from: 0.9,
             rt_to: 1.1,
         }
@@ -161,21 +161,21 @@ mod tests {
 
     #[test]
     fn test_growing_cluster_single_item() {
-        let gc = GrowingCluster::new(make_tagged(0, 100.0, 1.0, 500.0));
+        let gc = MzRtCluster::new(make_tagged(0, 100.0, 1.0, 500.0));
         assert_eq!(gc.cached_median_mz, 100.0);
         assert_eq!(gc.cached_median_rt, 1.0);
     }
 
     #[test]
     fn test_growing_cluster_median_updates_on_push() {
-        let mut gc = GrowingCluster::new(make_tagged(0, 100.0, 1.0, 500.0));
+        let mut gc = MzRtCluster::new(make_tagged(0, 100.0, 1.0, 500.0));
         gc.push(make_tagged(1, 102.0, 2.0, 300.0));
         assert_eq!(gc.cached_median_mz, 102.0);
     }
 
     #[test]
     fn test_growing_cluster_three_items_median() {
-        let mut gc = GrowingCluster::new(make_tagged(0, 100.0, 1.0, 500.0));
+        let mut gc = MzRtCluster::new(make_tagged(0, 100.0, 1.0, 500.0));
         gc.push(make_tagged(1, 102.0, 2.0, 300.0));
         gc.push(make_tagged(2, 104.0, 3.0, 200.0));
         assert_eq!(gc.cached_median_mz, 102.0);
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn test_growing_cluster_four_items_upper_index() {
-        let mut gc = GrowingCluster::new(make_tagged(0, 100.0, 1.0, 500.0));
+        let mut gc = MzRtCluster::new(make_tagged(0, 100.0, 1.0, 500.0));
         gc.push(make_tagged(1, 102.0, 2.0, 300.0));
         gc.push(make_tagged(2, 104.0, 3.0, 200.0));
         gc.push(make_tagged(3, 106.0, 4.0, 100.0));
@@ -332,7 +332,7 @@ mod tests {
         let slots = vec![Some(make_feature(100.0, 1.0, 500.0))];
         let bounds = compute_search_bounds(&slots, 0.05).unwrap();
         assert_eq!(bounds.target_mz, 100.0);
-        assert_eq!(bounds.seed_rt, 1.0);
+        assert_eq!(bounds.center_rt, 1.0);
         assert_eq!(bounds.rt_from, 0.95);
         assert_eq!(bounds.rt_to, 1.05);
     }
@@ -345,7 +345,7 @@ mod tests {
         ];
         let bounds = compute_search_bounds(&slots, 0.05).unwrap();
         assert_eq!(bounds.target_mz, 102.0);
-        assert_eq!(bounds.seed_rt, 2.0);
+        assert_eq!(bounds.center_rt, 2.0);
     }
 
     #[test]
@@ -419,7 +419,7 @@ mod tests {
             make_feature(100.0, 1.0, 300.0),
         ];
         let result = aggregate_into_consensus(hits, &default_bounds());
-        assert_eq!(result.frequency, 3);
+        assert_eq!(result.n_samples, 3);
     }
 
     #[test]
@@ -427,7 +427,7 @@ mod tests {
         let hits = vec![make_feature(100.0, 1.0, 500.0)];
         let bounds = SearchBounds {
             target_mz: 100.0,
-            seed_rt: 1.0,
+            center_rt: 1.0,
             rt_from: 0.8,
             rt_to: 1.2,
         };
@@ -465,7 +465,7 @@ mod tests {
             make_feature_full(100.0, 1.0, 300.0, 6, 30.0),
         ];
         let result = aggregate_into_consensus(hits, &default_bounds());
-        assert_eq!(result.np, 4);
+        assert_eq!(result.n_points, 4);
     }
 
     #[test]
@@ -487,7 +487,7 @@ mod tests {
             make_feature(99.99, 0.95, 600.0),
         ];
         let result = aggregate_into_consensus(hits, &default_bounds());
-        assert_eq!(result.frequency, 3);
+        assert_eq!(result.n_samples, 3);
         assert!((result.mz - 100.0).abs() < 0.01);
     }
 
@@ -596,7 +596,7 @@ mod tests {
         let input = vec![make_consensus(100.0, 5.0, 1000.0, 5)];
         let result = dedup(input, &abs_tol(0.005), 0.05);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].frequency, 5);
+        assert_eq!(result[0].n_samples, 5);
     }
 
     #[test]
@@ -606,7 +606,7 @@ mod tests {
         let low = make_consensus(100.002, 5.0, 7100.0, 6);
         let result = dedup(vec![high, low], &abs_tol(0.005), 0.05);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].frequency, 9);
+        assert_eq!(result[0].n_samples, 9);
     }
 
     #[test]
@@ -616,7 +616,7 @@ mod tests {
         let low = make_consensus(200.001, 3.0, 600.0, 1);
         let result = dedup(vec![high, low], &abs_tol(0.005), 0.05);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].frequency, 2);
+        assert_eq!(result[0].n_samples, 2);
     }
 
     #[test]
@@ -646,7 +646,7 @@ mod tests {
         let c = make_consensus(100.004, 5.0, 3000.0, 3);
         let result = dedup(vec![a, b, c], &abs_tol(0.005), 0.05);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].frequency, 8);
+        assert_eq!(result[0].n_samples, 8);
     }
 
     #[test]
@@ -673,7 +673,7 @@ mod tests {
         let b = make_consensus(100.004, 5.0, 6000.0, 3);
         let result = dedup(vec![a, b], &abs_tol(0.005), 0.05);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].frequency, 7);
+        assert_eq!(result[0].n_samples, 7);
     }
 
     #[test]
@@ -682,7 +682,7 @@ mod tests {
         let b = make_consensus(100.001, 5.049, 6000.0, 2); // rt diff = 0.049 < 0.05
         let result = dedup(vec![a, b], &abs_tol(0.005), 0.05);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].frequency, 6);
+        assert_eq!(result[0].n_samples, 6);
     }
 
     fn gaussian(rt: f64, mu: f64, sigma: f64, amp: f64) -> f64 {
@@ -831,14 +831,14 @@ mod tests {
         dir
     }
 
-    fn alignment_cfg() -> ConsensusAlignmentConfig {
-        ConsensusAlignmentConfig {
-            tolerance: MzTolerance {
-                mz_abs: 0.005,
+    fn alignment_cfg() -> AlignmentOptions {
+        AlignmentOptions {
+            mz_tolerance: MzTolerance {
+                mz_absolute: 0.005,
                 ppm: 20.0,
             },
             rt_tolerance: 0.15,
-            frequency: 1,
+            min_samples: 1,
             eic_options: EicOptions {
                 ppm_tolerance: 20.0,
                 mz_tolerance: 0.005,
@@ -881,7 +881,7 @@ mod tests {
             !features.is_empty(),
             "should detect at least one feature, got none"
         );
-        let best = features.iter().max_by_key(|f| f.frequency).unwrap();
+        let best = features.iter().max_by_key(|f| f.n_samples).unwrap();
         assert!(
             (best.mz - peak_mz).abs() < 0.01,
             "consensus mz {:.4} should be near {peak_mz}",
@@ -893,7 +893,7 @@ mod tests {
             best.rt
         );
         assert_eq!(
-            best.frequency, n_samples,
+            best.n_samples, n_samples,
             "all {n_samples} samples should be in the cluster"
         );
     }
@@ -927,7 +927,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
 
         assert!(!features.is_empty(), "should detect at least one feature");
-        let best = features.iter().max_by_key(|f| f.frequency).unwrap();
+        let best = features.iter().max_by_key(|f| f.n_samples).unwrap();
         assert!(
             (best.mz - peak_mz).abs() < 0.02,
             "consensus mz {:.4} should be near {peak_mz:.4}",
@@ -961,7 +961,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
 
         assert!(!features.is_empty());
-        let best = features.iter().max_by_key(|f| f.frequency).unwrap();
+        let best = features.iter().max_by_key(|f| f.n_samples).unwrap();
         assert!(
             (best.mz - peak_mz).abs() < 0.01,
             "filled consensus mz {:.4} should be near the real peak mz {peak_mz:.4}",
@@ -994,7 +994,7 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
 
         assert!(!features.is_empty());
-        let best = features.iter().max_by_key(|f| f.frequency).unwrap();
+        let best = features.iter().max_by_key(|f| f.n_samples).unwrap();
         assert!(
             (best.mz - peak_mz).abs() < 0.02,
             "consensus mz {:.4} should be near {peak_mz:.4}",
@@ -1025,7 +1025,7 @@ mod tests {
 
         let dir = write_ion_dir("freq_threshold", &samples);
         let mut cfg = alignment_cfg();
-        cfg.frequency = 3; // require presence in at least 3 samples
+        cfg.min_samples = 3; // require presence in at least 3 samples
 
         let features = get_features(
             dir.to_str().unwrap(),
@@ -1045,7 +1045,7 @@ mod tests {
         assert!(
             !features
                 .iter()
-                .any(|f| (f.mz - rare_mz).abs() < 0.01 && f.frequency < 3),
+                .any(|f| (f.mz - rare_mz).abs() < 0.01 && f.n_samples < 3),
             "rare feature at mz≈{rare_mz} below threshold should be filtered out"
         );
     }
@@ -1065,7 +1065,7 @@ mod tests {
 
         let dir = write_ion_dir("freq_exact", &samples);
         let mut cfg = alignment_cfg();
-        cfg.frequency = n_samples; // threshold = exact count
+        cfg.min_samples = n_samples; // threshold = exact count
 
         let features = get_features(
             dir.to_str().unwrap(),

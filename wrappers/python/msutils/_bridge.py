@@ -28,24 +28,26 @@ class _Buf(ctypes.Structure):
 
 class PeakOptions(ctypes.Structure):
     _fields_ = [
-        ("integral_threshold",     c_double),
-        ("intensity_threshold",    c_double),
-        ("width_threshold",        c_int32),
-        ("_pad",                   c_int32),
-        ("noise",                  c_double),
-        ("auto_noise",             c_int32),
-        ("auto_baseline",          c_int32),
-        ("baseline_window",        c_int32),
-        ("baseline_window_factor", c_int32),
-        ("allow_overlap",          c_int32),
-        ("window_size",            c_int32),
-        ("sn_ratio",               c_double),
+        ("min_integral",          c_double),
+        ("min_intensity",         c_double),
+        ("min_peak_width_points", c_int32),
+        ("_pad",                  c_int32),
+        ("noise",                 c_double),
+        ("auto_noise",            c_int32),
+        ("auto_baseline",         c_int32),
+        ("lambda_",               c_int32),
+        ("max_iterations",        c_int32),
+        ("allow_overlap",         c_int32),
+        ("_pad2",                 c_int32),
+        ("min_snr",               c_double),
     ]
 
 
 assert ctypes.sizeof(PeakOptions) == 64, (
     f"PeakOptions is {ctypes.sizeof(PeakOptions)} bytes — expected 64"
 )
+
+MSUTILS_ABI_VERSION = 1
 
 _CODE_MSG = {
     1: "invalid arguments",
@@ -64,6 +66,8 @@ def _check(name: str, code: int) -> None:
 
 class _ABI:
     _REQUIRED: dict[str, tuple[list, object]] = {
+        "msutils_abi_version": ([], ctypes.c_uint32),
+        "msutils_sizeof_peak_options": ([], c_size_t),
         "parse_mzml": (
             [POINTER(c_uint8), c_size_t, POINTER(c_void_p)], c_int32),
         "parse_bin": ([POINTER(c_uint8), c_size_t, c_size_t, POINTER(c_void_p)], c_int32),
@@ -208,4 +212,22 @@ def load_library(path: Optional[str] = None) -> tuple[ctypes.CDLL, _ABI]:
         lib = ctypes.CDLL(str(path))
     except OSError as exc:
         raise OSError(f"Failed to dlopen '{path}': {exc}") from exc
-    return lib, _ABI(lib)
+    abi = _ABI(lib)
+    actual = abi.msutils_abi_version()
+    if actual != MSUTILS_ABI_VERSION:
+        raise RuntimeError(
+            f"msutils ABI version mismatch: library={actual}, "
+            f"wrapper={MSUTILS_ABI_VERSION}. Rebuild or update the package."
+        )
+    # Defence-in-depth: verify the PeakOptions struct layout matches the binary.
+    # If the Rust struct ever changes without bumping the ABI version, this
+    # catches it at import time instead of silently corrupting peak detection.
+    expected = ctypes.sizeof(PeakOptions)
+    actual_size = abi.msutils_sizeof_peak_options()
+    if actual_size != expected:
+        raise RuntimeError(
+            f"msutils PeakOptions size mismatch: library={actual_size} bytes, "
+            f"wrapper={expected} bytes. The native binary and Python wrapper "
+            f"are out of sync — reinstall msutils."
+        )
+    return lib, abi
