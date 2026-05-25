@@ -3,7 +3,7 @@ use std::{cmp::Ordering, sync::Arc};
 use ionic::{ScanSource, ScanSummary};
 use serde::Serialize;
 
-use crate::utilities::structs::{FromTo, Peak};
+use crate::utilities::structs::{FromTo, Peak, ser_finite_f64};
 
 const MS1_LEVEL: u8 = 1;
 
@@ -57,10 +57,15 @@ impl Eic {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct SpectrumSummary {
+    #[serde(serialize_with = "ser_finite_f64")]
     pub rt_seconds: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
     pub base_peak_mz: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
     pub selected_ion_mz: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
     pub base_peak_int: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
     pub total_ion_current: f64,
     pub ms_level: u8,
     pub polarity: u8,
@@ -94,8 +99,9 @@ impl SpectrumSummary {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct CentroidScan {
+    #[serde(serialize_with = "ser_finite_f64")]
     pub rt: f64,
     pub mz: Arc<[f64]>,
     pub intensity: Arc<[f64]>,

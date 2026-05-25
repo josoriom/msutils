@@ -3,7 +3,8 @@ use core::ffi::c_int;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use core::ffi::{CStr, c_char, c_int};
 
-use serde_json::json;
+use serde::Serialize;
+use utilities::structs::ser_finite_f64;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     ptr, slice,
@@ -41,6 +42,68 @@ use utilities::get_features::{AlignmentOptions, get_features as get_features_rs}
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::find_features::MzTolerance;
+
+#[derive(Serialize)]
+struct EicPeakOut<'a> {
+    id: &'a str,
+    #[serde(serialize_with = "ser_finite_f64")]
+    mz: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    ort: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    rt: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    from: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    to: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    intensity: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    integral: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    noise: f64,
+}
+
+#[derive(Serialize)]
+struct ChromPeakRowOut<'a> {
+    index: usize,
+    id: &'a str,
+    #[serde(serialize_with = "ser_finite_f64")]
+    ort: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    rt: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    from: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    to: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    intensity: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    integral: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    total_area: f64,
+    timestamp: &'a str,
+}
+
+#[derive(Serialize)]
+struct FoundFeatureOut<'a> {
+    id: &'a str,
+    #[serde(serialize_with = "ser_finite_f64")]
+    mz: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    rt: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    from: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    to: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    intensity: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    integral: f64,
+    n_points: usize,
+    #[serde(serialize_with = "ser_finite_f64")]
+    noise: f64,
+}
 
 pub const MSUTILS_ABI_VERSION: u32 = 1;
 
@@ -393,10 +456,8 @@ pub unsafe extern "C" fn get_peak(
             x: unsafe { slice::from_raw_parts(x_ptr, len) }.to_vec(),
             y: unsafe { slice::from_raw_parts(y_ptr, len) }.to_vec(),
         };
-        let s = match get_peak_rs(&data, &Roi { rt, half_width: range }, Some(build_peak_options(options))) {
-            Some(p) => json!({"from":p.from,"to":p.to,"rt":p.rt,"integral":p.integral,"intensity":p.intensity,"n_points":p.n_points}).to_string(),
-            None => r#"{"from":0,"to":0,"rt":0,"integral":0,"intensity":0,"n_points":0}"#.to_string(),
-        };
+        let peak = get_peak_rs(&data, &Roi { rt, half_width: range }, Some(build_peak_options(options)));
+        let s = serde_json::to_string(&peak.unwrap_or_default()).map_err(|_| ERR_ENCODE)?;
         write_buf(out, s.into_bytes().into_boxed_slice());
         Ok(())
     })) {
@@ -460,7 +521,20 @@ pub unsafe extern "C" fn get_peaks_from_eic(
             cores,
         )
         .ok_or(ERR_PARSE)?;
-        let arr: Vec<_> = peaks.iter().map(|(id, ort, mz, p)| json!({"id":id,"mz":mz,"ort":ort,"rt":p.rt,"from":p.from,"to":p.to,"intensity":p.intensity,"integral":p.integral,"noise":p.noise})).collect();
+        let arr: Vec<EicPeakOut> = peaks
+            .iter()
+            .map(|(id, ort, mz, p)| EicPeakOut {
+                id,
+                mz: *mz,
+                ort: *ort,
+                rt: p.rt,
+                from: p.from,
+                to: p.to,
+                intensity: p.intensity,
+                integral: p.integral,
+                noise: p.noise,
+            })
+            .collect();
         write_buf(
             out,
             serde_json::to_string(&arr)
@@ -548,19 +622,17 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
                 .ok_or(ERR_PARSE)?;
             let out_arr: Vec<_> = list
                 .iter()
-                .map(|row| {
-                    json!({
-                        "index": row.index,
-                        "id": &row.id,
-                        "ort": row.target_rt,
-                        "rt": row.peak_rt,
-                        "from": row.from_rt,
-                        "to": row.to_rt,
-                        "intensity": row.intensity,
-                        "integral": row.area,
-                        "total_area": row.total_area,
-                        "timestamp": &row.timestamp,
-                    })
+                .map(|row| ChromPeakRowOut {
+                    index: row.index,
+                    id: &row.id,
+                    ort: row.target_rt,
+                    rt: row.peak_rt,
+                    from: row.from_rt,
+                    to: row.to_rt,
+                    intensity: row.intensity,
+                    integral: row.area,
+                    total_area: row.total_area,
+                    timestamp: &row.timestamp,
                 })
                 .collect();
             write_buf(
@@ -610,10 +682,9 @@ pub unsafe extern "C" fn find_peaks(
             },
             Some(build_peak_options(opts)),
         );
-        let list: Vec<_> = peaks.iter().map(|p| json!({"from":p.from,"to":p.to,"rt":p.rt,"integral":p.integral,"intensity":p.intensity,"n_points":p.n_points,"noise":p.noise})).collect();
         write_buf(
             out,
-            serde_json::to_string(&list)
+            serde_json::to_string(&peaks)
                 .map_err(|_| ERR_PARSE)?
                 .into_bytes()
                 .into_boxed_slice(),
@@ -838,10 +909,9 @@ pub unsafe extern "C" fn get_features(
         )
         .unwrap_or_default();
 
-        let arr: Vec<_> = feats.iter().map(|f| json!({"mz":finite_or_zero(f.mz),"rt":finite_or_zero(f.rt),"intensity":finite_or_zero(f.intensity),"intensity_rsd":finite_or_zero(f.intensity_rsd),"from":finite_or_zero(f.from),"to":finite_or_zero(f.to),"integral":finite_or_zero(f.integral),"n_points":f.n_points,"n_samples":f.n_samples,"mz_rsd":f.mz_rsd,"integral_rsd":f.integral_rsd})).collect();
         write_buf(
             out,
-            serde_json::to_string(&arr)
+            serde_json::to_string(&feats)
                 .map_err(|_| ERR_PARSE)?
                 .into_bytes()
                 .into_boxed_slice(),
@@ -917,10 +987,9 @@ pub unsafe extern "C" fn find_features(
         )
         .unwrap_or_default();
 
-        let arr: Vec<_> = feats.iter().map(|f| json!({"mz":finite_or_zero(f.mz),"rt":finite_or_zero(f.rt),"intensity":finite_or_zero(f.intensity),"from":finite_or_zero(f.from),"to":finite_or_zero(f.to),"integral":finite_or_zero(f.integral),"n_points":f.n_points})).collect();
         write_buf(
             out,
-            serde_json::to_string(&arr)
+            serde_json::to_string(&feats)
                 .map_err(|_| ERR_PARSE)?
                 .into_bytes()
                 .into_boxed_slice(),
@@ -1060,10 +1129,34 @@ pub unsafe extern "C" fn find_feature(
                 peak_options: Some(build_peak_options(peak_opts)),
             }),
         );
-        let arr: Vec<_> = results.iter().enumerate().map(|(i, r)| match r {
-            Some(f) => json!({"id":f.id,"mz":f.mz,"rt":f.rt,"from":f.peak.from,"to":f.peak.to,"intensity":f.peak.intensity,"integral":f.peak.integral,"n_points":f.peak.n_points,"noise":f.peak.noise}),
-            None => json!({"id":&rois[i].id,"mz":0.0,"rt":0.0,"from":0.0,"to":0.0,"intensity":0.0,"integral":0.0,"n_points":0,"noise":0.0}),
-        }).collect();
+        let arr: Vec<FoundFeatureOut> = results
+            .iter()
+            .enumerate()
+            .map(|(i, r)| match r {
+                Some(f) => FoundFeatureOut {
+                    id: &f.id,
+                    mz: f.mz,
+                    rt: f.rt,
+                    from: f.peak.from,
+                    to: f.peak.to,
+                    intensity: f.peak.intensity,
+                    integral: f.peak.integral,
+                    n_points: f.peak.n_points,
+                    noise: f.peak.noise,
+                },
+                None => FoundFeatureOut {
+                    id: &rois[i].id,
+                    mz: 0.0,
+                    rt: 0.0,
+                    from: 0.0,
+                    to: 0.0,
+                    intensity: 0.0,
+                    integral: 0.0,
+                    n_points: 0,
+                    noise: 0.0,
+                },
+            })
+            .collect();
         write_buf(
             out,
             serde_json::to_string(&arr)
@@ -1083,10 +1176,9 @@ fn write_scans_json(
     out: *mut Buf,
     scans: &[utilities::calculate_eic::CentroidScan],
 ) -> Result<(), serde_json::Error> {
-    let arr: Vec<_> = scans.iter().map(|s| json!({"rt":s.rt,"mz":s.mz.as_ref(),"intensity":s.intensity.as_ref(),"metadata":s.metadata})).collect();
     write_buf(
         out,
-        serde_json::to_string(&arr)?.into_bytes().into_boxed_slice(),
+        serde_json::to_string(scans)?.into_bytes().into_boxed_slice(),
     );
     Ok(())
 }
@@ -1148,10 +1240,6 @@ fn build_eic_rois(
 }
 
 #[inline]
-fn finite_or_zero(v: f64) -> f64 {
-    if v.is_finite() { v } else { 0.0 }
-}
-
 fn f64_to_u8(v: &[f64]) -> Box<[u8]> {
     let n = core::mem::size_of_val(v);
     let mut out = vec![0u8; n];

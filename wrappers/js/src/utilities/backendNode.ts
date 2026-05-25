@@ -4,6 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import type { Backend, FileHandle } from "./backend";
 import type { PeakOptions } from "../types/types";
+import { parseAndCamelize } from "./shared";
 
 function firstExisting(...candidates: string[]): string {
   for (const p of candidates) if (fs.existsSync(p)) return p;
@@ -115,7 +116,7 @@ export class NodeBackend implements Backend {
   }
 
   fileToJson(handle: FileHandle): any {
-    return JSON.parse(this.native.binToJson(handle) as string);
+    return parseAndCamelize(this.native.binToJson(handle) as string);
   }
 
   fileToMzml(handle: FileHandle): string {
@@ -155,7 +156,7 @@ export class NodeBackend implements Backend {
     b: number,
     level: number,
   ): any {
-    return JSON.parse(
+    return parseAndCamelize(
       this.native.getScans(handle, queryType, a, b, level) as string,
     );
   }
@@ -165,7 +166,7 @@ export class NodeBackend implements Backend {
     y: Float64Array,
     opts: PeakOptions | undefined,
   ): any {
-    return JSON.parse(
+    return parseAndCamelize(
       this.native.findPeaks(x, y, opts ?? null) as string,
     );
   }
@@ -177,7 +178,7 @@ export class NodeBackend implements Backend {
     range: number,
     opts: PeakOptions | undefined,
   ): any {
-    return JSON.parse(
+    return parseAndCamelize(
       this.native.getPeak(x, y, rt, range, opts ?? null) as string,
     );
   }
@@ -211,7 +212,7 @@ export class NodeBackend implements Backend {
     cores: number,
   ): any {
     const ids = unpackIds(count, offsets, lengths, idBytes);
-    return JSON.parse(
+    return parseAndCamelize(
       this.native.getPeaksFromEic(
         handle,
         rts,
@@ -235,7 +236,7 @@ export class NodeBackend implements Backend {
     opts: PeakOptions | undefined,
     cores: number,
   ): any {
-    return JSON.parse(
+    return parseAndCamelize(
       this.native.getPeaksFromChrom(
         handle,
         indices,
@@ -261,7 +262,7 @@ export class NodeBackend implements Backend {
     useGpu: number,
     batchSize: number,
   ): any {
-    return JSON.parse(
+    return parseAndCamelize(
       this.native.findFeatures(
         handle,
         from,
@@ -297,7 +298,7 @@ export class NodeBackend implements Backend {
     opts: PeakOptions | undefined,
   ): any {
     const ids = unpackIds(count, offsets, lengths, idBytes);
-    return JSON.parse(
+    return parseAndCamelize(
       this.native.findFeature(
         handle,
         rts,
@@ -332,7 +333,7 @@ export class NodeBackend implements Backend {
     useGpu: number,
     batchSize: number,
   ): any {
-    return JSON.parse(
+    return parseAndCamelize(
       this.native.getFeatures(
         dirPath,
         from,

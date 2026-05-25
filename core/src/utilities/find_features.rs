@@ -1,5 +1,7 @@
 use ionic::ScanSource;
 use serde::Serialize;
+
+use crate::utilities::structs::ser_finite_f64;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use std::sync::Arc;
 use std::{
@@ -80,14 +82,21 @@ impl Error for FeatureError {}
 
 #[derive(Clone, Debug, Serialize, Default)]
 pub struct Feature {
+    #[serde(serialize_with = "ser_finite_f64")]
     pub mz: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
     pub rt: f64,
-    pub intensity: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
     pub from: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
     pub to: f64,
-    pub n_points: usize,
-    pub noise: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    pub intensity: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
     pub integral: f64,
+    pub n_points: usize,
+    #[serde(skip)]
+    pub noise: f64,
 }
 
 #[derive(Clone, Copy, Debug)]

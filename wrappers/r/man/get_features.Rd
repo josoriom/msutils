@@ -62,10 +62,17 @@ get_features(
   \item{min_snr}{Minimum signal-to-noise ratio. Default 1.}
 }
 \value{
-A data frame with one row per consensus feature. Columns include \code{mz},
-\code{rt}, \code{from}, \code{to}, \code{intensity}, \code{integral},
-\code{n_points}, \code{n_samples} (number of samples), \code{mz_rsd},
-\code{mzs} (per-sample m/z values).
+A data frame with one row per consensus feature and the following columns:
+\describe{
+  \item{mz}{Median m/z of the feature (Da).}
+  \item{rt}{Median retention time of the feature (minutes).}
+  \item{from}{Start of the retention-time window (minutes).}
+  \item{to}{End of the retention-time window (minutes).}
+  \item{intensity}{Median apex intensity.}
+  \item{integral}{Median peak area.}
+  \item{frequency}{Fraction of input samples in which this feature was
+    detected (\code{n_samples / total_samples}, in \code{[0, 1]}).}
+}
 }
 \examples{
 \donttest{

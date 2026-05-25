@@ -1,6 +1,6 @@
 import type { Backend } from "./backend";
 import { SampleFile } from "./sampleFile";
-import { camelizeKeys, toCores, toUint8 } from "./shared";
+import { toCores, toUint8 } from "./shared";
 import { encodeTargetIds, unpackTargets } from "./pack";
 import type {
   BinaryInput,
@@ -131,7 +131,7 @@ export async function parseIon(
  */
 export function ionToJson(file: SampleFile): string {
   assertFile(file, "ionToJson");
-  return JSON.stringify(camelizeKeys(backend().fileToJson(file._handle!)));
+  return JSON.stringify(backend().fileToJson(file._handle!));
 }
 
 /**
@@ -361,9 +361,7 @@ export function getScans(
     }
   }
 
-  const raw = camelizeKeys(
-    backend().getScans(file._handle!, queryType, a, b, level),
-  );
+  const raw = backend().getScans(file._handle!, queryType, a, b, level);
   if (queryType === QUERY_CLOSEST_RT || queryType === QUERY_CLOSEST_MZ) {
     return raw?.length ? raw[0] : null;
   }

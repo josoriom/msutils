@@ -19,6 +19,10 @@ export function camelizeKeys<T>(value: T): T {
   return value;
 }
 
+export function parseAndCamelize<T>(json: string): T {
+  return camelizeKeys(JSON.parse(json)) as T;
+}
+
 export function toCores(cores: unknown): number {
   const v = typeof cores === "number" && Number.isFinite(cores) ? cores | 0 : 1;
   return v > 0 ? v : 1;

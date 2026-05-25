@@ -6,6 +6,7 @@ declare var require: any;
 
 import type { Backend, FileHandle } from "./backend";
 import type { PeakOptions } from "../types/types";
+import { parseAndCamelize } from "./shared";
 
 const IS_INLINE_BUILD = typeof __INLINE__ !== "undefined" && __INLINE__;
 const OUTPUT_BUFFER_PAIR_BYTES = 8;
@@ -137,7 +138,7 @@ class WasmHeap {
   readJsonFromSlot<T>(slotPtr: number): T {
     const { ptr, len } = this.readOutputSlot(slotPtr);
     const bytes = this.copyOutAndFree(ptr, len);
-    return JSON.parse(this.decoder.decode(bytes)) as T;
+    return parseAndCamelize(this.decoder.decode(bytes)) as T;
   }
 
   writeBytesAt(ptr: number, data: Uint8Array): void {

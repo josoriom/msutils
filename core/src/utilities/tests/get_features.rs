@@ -15,7 +15,7 @@ mod tests {
             AlignmentOptions, ConsensusFeature, FeatureClusterer, MzRtCluster,
             SearchBounds, TaggedFeature, aggregate_into_consensus, assign_best_per_sample,
             collect_filled_slots, compute_search_bounds, dedup, get_features, median,
-            require_minimum_frequency, rsd, weighted_centroid_mz,
+            require_minimum_frequency, weighted_centroid_mz,
         },
         structs::FromTo,
     };
@@ -40,15 +40,12 @@ mod tests {
     fn make_consensus(mz: f64, rt: f64, intensity: f64, n_samples: usize) -> ConsensusFeature {
         ConsensusFeature {
             mz,
-            mz_rsd: 0.0,
             rt,
-            intensity,
-            intensity_rsd: 0.0,
             from: rt - 0.05,
             to: rt + 0.05,
-            n_points: 10,
+            intensity,
             integral: intensity * 0.1,
-            integral_rsd: 0.0,
+            frequency: 0.0,
             n_samples,
         }
     }
@@ -129,34 +126,6 @@ mod tests {
     #[test]
     fn test_median_unsorted_input() {
         assert_eq!(median(&mut [5.0, 1.0, 3.0]), 3.0);
-    }
-
-    #[test]
-    fn test_rsd_uniform_values() {
-        assert_eq!(rsd(&[5.0, 5.0, 5.0]), 0.0);
-    }
-
-    #[test]
-    fn test_rsd_single_value() {
-        assert_eq!(rsd(&[5.0]), 0.0);
-    }
-
-    #[test]
-    fn test_rsd_zero_mean() {
-        assert_eq!(rsd(&[0.0, 0.0]), 0.0);
-    }
-
-    #[test]
-    fn test_rsd_known_values() {
-        let v = rsd(&[1.0, 2.0, 3.0]);
-        assert!((v - 0.5).abs() < 1e-10);
-    }
-
-    #[test]
-    fn test_rsd_two_elements() {
-        let v = rsd(&[1.0, 2.0]);
-        let expected = 0.5f64.sqrt() / 1.5;
-        assert!((v - expected).abs() < 1e-10);
     }
 
     #[test]
@@ -418,7 +387,7 @@ mod tests {
             make_feature(100.0, 1.0, 400.0),
             make_feature(100.0, 1.0, 300.0),
         ];
-        let result = aggregate_into_consensus(hits, &default_bounds());
+        let result = aggregate_into_consensus(hits, &default_bounds(), 3);
         assert_eq!(result.n_samples, 3);
     }
 
@@ -431,7 +400,7 @@ mod tests {
             rt_from: 0.8,
             rt_to: 1.2,
         };
-        let result = aggregate_into_consensus(hits, &bounds);
+        let result = aggregate_into_consensus(hits, &bounds, 1);
         assert_eq!(result.from, 0.8);
         assert_eq!(result.to, 1.2);
     }
@@ -442,7 +411,7 @@ mod tests {
             make_feature(100.0, 1.0, 300.0),
             make_feature(100.0, 1.0, 500.0),
         ];
-        let result = aggregate_into_consensus(hits, &default_bounds());
+        let result = aggregate_into_consensus(hits, &default_bounds(), 3);
         assert_eq!(result.intensity, 400.0);
     }
 
@@ -453,19 +422,20 @@ mod tests {
             make_feature(100.0, 1.0, 400.0),
             make_feature(101.0, 1.0, 300.0),
         ];
-        let result = aggregate_into_consensus(hits, &default_bounds());
+        let result = aggregate_into_consensus(hits, &default_bounds(), 3);
         assert_eq!(result.mz, 100.0);
     }
 
     #[test]
-    fn test_aggregate_np_median() {
+    fn test_aggregate_frequency_ratio() {
+        // 3 hits out of 6 total samples → frequency = 0.5
         let hits = vec![
             make_feature_full(100.0, 1.0, 500.0, 2, 10.0),
             make_feature_full(100.0, 1.0, 400.0, 4, 20.0),
             make_feature_full(100.0, 1.0, 300.0, 6, 30.0),
         ];
-        let result = aggregate_into_consensus(hits, &default_bounds());
-        assert_eq!(result.n_points, 4);
+        let result = aggregate_into_consensus(hits, &default_bounds(), 6);
+        assert!((result.frequency - 0.5).abs() < 1e-10);
     }
 
     #[test]
@@ -475,7 +445,7 @@ mod tests {
             make_feature_full(100.0, 1.0, 400.0, 4, 20.0),
             make_feature_full(100.0, 1.0, 300.0, 6, 30.0),
         ];
-        let result = aggregate_into_consensus(hits, &default_bounds());
+        let result = aggregate_into_consensus(hits, &default_bounds(), 3);
         assert!((result.integral - 20.0).abs() < 1e-10);
     }
 
@@ -486,7 +456,7 @@ mod tests {
             make_feature(100.01, 1.05, 400.0),
             make_feature(99.99, 0.95, 600.0),
         ];
-        let result = aggregate_into_consensus(hits, &default_bounds());
+        let result = aggregate_into_consensus(hits, &default_bounds(), 3);
         assert_eq!(result.n_samples, 3);
         assert!((result.mz - 100.0).abs() < 0.01);
     }
@@ -1146,5 +1116,101 @@ mod tests {
         let has_b = features.iter().any(|f| (f.mz - mz_b).abs() < 0.015);
         assert!(has_a, "compound A at mz≈{mz_a} should be reported");
         assert!(has_b, "compound B at mz≈{mz_b} should be reported");
+    }
+
+    #[test]
+    fn test_nan_f64_serialises_as_zero_in_consensus_feature() {
+        let f = ConsensusFeature {
+            mz: f64::NAN,
+            rt: f64::INFINITY,
+            from: f64::NEG_INFINITY,
+            to: 1.0,
+            intensity: 0.0,
+            integral: 0.0,
+            frequency: 0.5,
+            n_samples: 1,
+        };
+        let json = serde_json::to_string(&f).expect("serialise ok");
+        // Non-finite mz, rt, from must become 0, not null.
+        assert!(
+            !json.contains("null"),
+            "non-finite fields must not produce null: {json}"
+        );
+        assert!(json.contains("\"mz\":0"), "NaN mz → 0: {json}");
+        assert!(json.contains("\"rt\":0"), "+Inf rt → 0: {json}");
+        assert!(json.contains("\"from\":0"), "-Inf from → 0: {json}");
+        assert!(json.contains("\"to\":1.0"), "finite to unchanged: {json}");
+    }
+
+    #[test]
+    fn test_nan_f64_serialises_as_zero_in_feature() {
+        use crate::utilities::find_features::Feature;
+        let f = Feature {
+            mz: f64::NAN,
+            rt: f64::INFINITY,
+            from: 0.0,
+            to: 1.0,
+            intensity: 0.0,
+            integral: 0.0,
+            n_points: 0,
+            noise: 0.0,
+        };
+        let json = serde_json::to_string(&f).expect("serialise ok");
+        assert!(
+            !json.contains("null"),
+            "non-finite fields must not produce null: {json}"
+        );
+        assert!(json.contains("\"mz\":0"), "NaN mz → 0: {json}");
+        assert!(json.contains("\"rt\":0"), "+Inf rt → 0: {json}");
+    }
+
+    #[test]
+    fn test_nan_f64_serialises_as_zero_in_peak() {
+        use crate::utilities::structs::Peak;
+        let p = Peak {
+            from: f64::NAN,
+            to: f64::INFINITY,
+            rt: 1.5,
+            integral: 0.0,
+            intensity: 0.0,
+            n_points: 3,
+            noise: 0.0,
+            gaussian_r2: None,
+        };
+        let json = serde_json::to_string(&p).expect("serialise ok");
+        assert!(
+            !json.contains("null"),
+            "non-finite fields must not produce null: {json}"
+        );
+        assert!(json.contains("\"from\":0"), "NaN from → 0: {json}");
+        assert!(json.contains("\"to\":0"), "+Inf to → 0: {json}");
+        assert!(json.contains("\"rt\":1.5"), "finite rt unchanged: {json}");
+        assert!(!json.contains("gaussian"), "gaussian_r2 must be skipped: {json}");
+    }
+
+    #[test]
+    fn test_peak_default_serialises_as_zero_object() {
+        use crate::utilities::structs::Peak;
+        let json = serde_json::to_string(&Peak::default()).expect("serialise ok");
+        assert!(json.starts_with('{'), "must be an object, not null: {json}");
+        assert!(json.contains("\"from\":0"), "from defaults to 0: {json}");
+        assert!(json.contains("\"to\":0"), "to defaults to 0: {json}");
+        assert!(json.contains("\"rt\":0"), "rt defaults to 0: {json}");
+        assert!(json.contains("\"n_points\":0"), "n_points (snake_case): {json}");
+        assert!(json.contains("\"noise\":0"), "noise field present: {json}");
+        assert!(!json.contains("null"), "no null values: {json}");
+        assert!(!json.contains("gaussian"), "gaussian_r2 is skipped: {json}");
+    }
+
+    #[test]
+    fn test_spectrum_summary_unknown_serialises_without_null() {
+        let s = SpectrumSummary::unknown();
+        let json = serde_json::to_string(&s).expect("serialise ok");
+        assert!(
+            !json.contains("null"),
+            "unknown SpectrumSummary must not produce null: {json}"
+        );
+        assert!(json.contains("\"rt_seconds\":0"), "rt_seconds → 0: {json}");
+        assert!(json.contains("\"base_peak_mz\":0"), "base_peak_mz → 0: {json}");
     }
 }

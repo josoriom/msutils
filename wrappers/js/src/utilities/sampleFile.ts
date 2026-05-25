@@ -1,6 +1,5 @@
 import type { Backend, FileHandle } from "./backend";
 import { fileHandleRegistry } from "./handleRegistry";
-import { camelizeKeys } from "./shared";
 
 type Cell = ReturnType<typeof fileHandleRegistry.register>;
 
@@ -55,7 +54,7 @@ export class SampleFile {
    */
   toJson(): any {
     this.assertValid("toJson");
-    return camelizeKeys(this._backend.fileToJson(this._handle!));
+    return this._backend.fileToJson(this._handle!);
   }
 
   /**

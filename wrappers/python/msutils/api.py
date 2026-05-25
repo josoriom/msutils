@@ -731,8 +731,18 @@ def get_features(
         batch_size: GPU batch size. 0 selects automatically.
 
     Returns:
-        List of dicts, one per consensus feature. Each dict has keys: mz, rt,
-        from, to, intensity, integral, n_points, n_samples, mz_rsd.
+        List of dicts, one per consensus feature. Each dict has the
+        following keys:
+
+        - ``mz`` (float): median m/z of the feature (Da).
+        - ``rt`` (float): median retention time (minutes).
+        - ``from`` (float): start of the retention-time window (minutes).
+        - ``to`` (float): end of the retention-time window (minutes).
+        - ``intensity`` (float): median apex intensity.
+        - ``integral`` (float): median peak area.
+        - ``frequency`` (float): fraction of input samples in which this
+          feature was detected (``n_samples / total_samples``, in
+          ``[0.0, 1.0]``).
     """
     abi = _get_abi()
 

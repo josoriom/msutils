@@ -446,9 +446,6 @@ get_features <- function(
 
   df <- jsonlite::fromJSON(out_json, simplifyVector = TRUE)
   if (!is.data.frame(df)) df <- as.data.frame(df)
-  want <- c("mz", "rt", "from", "to", "intensity", "integral", "n_points", "n_samples", "mz_rsd")
-  present <- intersect(want, names(df))
-  df <- df[, c(present, setdiff(names(df), present)), drop = FALSE]
   rownames(df) <- NULL
   df
 }

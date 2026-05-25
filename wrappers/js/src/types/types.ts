@@ -25,6 +25,7 @@ export type Peak = {
   integral: number;
   intensity: number;
   nPoints: number;
+  noise: number;
 };
 
 export type Target = {
@@ -52,6 +53,8 @@ export type ChromPeak = {
   to: number;
   intensity: number;
   integral: number;
+  totalArea: number;
+  timestamp: string;
 };
 
 export type Feature = {
@@ -92,10 +95,7 @@ export type ConsensusFeature = {
   to: number;
   intensity: number;
   integral: number;
-  nPoints: number;
-  nSamples: number;
-  mzRsd: number;
-  mzs: number[];
+  frequency: number;
 };
 
 export type GetFeaturesOptions = FindFeaturesOptions & {

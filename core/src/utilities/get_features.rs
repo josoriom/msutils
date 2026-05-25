@@ -5,6 +5,10 @@ use std::{
     sync::Arc,
 };
 
+use serde::Serialize;
+
+use crate::utilities::structs::ser_finite_f64;
+
 use rayon::prelude::*;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
@@ -77,18 +81,23 @@ impl From<FeatureError> for AlignmentError {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ConsensusFeature {
+    #[serde(serialize_with = "ser_finite_f64")]
     pub mz: f64,
-    pub mz_rsd: f64,
-    pub integral_rsd: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
     pub rt: f64,
-    pub intensity: f64,
-    pub intensity_rsd: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
     pub from: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
     pub to: f64,
-    pub n_points: usize,
+    #[serde(serialize_with = "ser_finite_f64")]
+    pub intensity: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
     pub integral: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    pub frequency: f64,
+    #[serde(skip)]
     pub n_samples: usize,
 }
 
@@ -291,7 +300,7 @@ pub fn get_features(
         alignment_config.peak_options,
     );
 
-    let results = build_results(slots, alignment_config.min_samples);
+    let results = build_results(slots, alignment_config.min_samples, datasets.len());
 
     Ok(dedup(
         results,
@@ -504,13 +513,17 @@ pub fn weighted_centroid_mz(
     (isum > 0.0).then(|| wsum / isum)
 }
 
-fn build_results(slots: Vec<ClusterSlot>, frequency: usize) -> Vec<ConsensusFeature> {
+fn build_results(
+    slots: Vec<ClusterSlot>,
+    min_samples: usize,
+    total_samples: usize,
+) -> Vec<ConsensusFeature> {
     slots
         .into_iter()
         .filter_map(|(s, bounds)| {
             let hits = collect_filled_slots(s);
-            require_minimum_frequency(hits, frequency)
-                .map(|hits| aggregate_into_consensus(hits, &bounds))
+            require_minimum_frequency(hits, min_samples)
+                .map(|hits| aggregate_into_consensus(hits, &bounds, total_samples))
         })
         .collect()
 }
@@ -671,26 +684,23 @@ pub(crate) fn require_minimum_frequency(
 pub(crate) fn aggregate_into_consensus(
     hits: Vec<Feature>,
     bounds: &SearchBounds,
+    total_samples: usize,
 ) -> ConsensusFeature {
     let n = hits.len();
 
     let mut mz_values: Vec<f64> = hits.iter().map(|f| f.mz).collect();
     let mut rt_values: Vec<f64> = hits.iter().map(|f| f.rt).collect();
     let mut intensity_values: Vec<f64> = hits.iter().map(|f| f.intensity).collect();
-    let mut n_points_values: Vec<f64> = hits.iter().map(|f| f.n_points as f64).collect();
     let mut integral_values: Vec<f64> = hits.iter().map(|f| f.integral).collect();
 
     ConsensusFeature {
         mz: median(&mut mz_values),
-        mz_rsd: rsd(&mz_values),
         rt: median(&mut rt_values),
-        intensity: median(&mut intensity_values),
-        intensity_rsd: rsd(&intensity_values),
         from: bounds.rt_from,
         to: bounds.rt_to,
-        n_points: median(&mut n_points_values) as usize,
+        intensity: median(&mut intensity_values),
         integral: median(&mut integral_values),
-        integral_rsd: rsd(&integral_values),
+        frequency: if total_samples > 0 { n as f64 / total_samples as f64 } else { 0.0 },
         n_samples: n,
     }
 }
@@ -705,18 +715,6 @@ pub(crate) fn median(values: &mut [f64]) -> f64 {
     }
 }
 
-pub(crate) fn rsd(values: &[f64]) -> f64 {
-    if values.len() < 2 {
-        return 0.0;
-    }
-    let n = values.len() as f64;
-    let mean = values.iter().sum::<f64>() / n;
-    if mean == 0.0 {
-        return 0.0;
-    }
-    let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / (n - 1.0);
-    variance.sqrt() / mean
-}
 
 // TODO: Mmap-backed mzML loading is still being tested.
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]

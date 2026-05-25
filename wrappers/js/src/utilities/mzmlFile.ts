@@ -1,5 +1,4 @@
 import type { Backend, FileHandle } from "./backend";
-import { camelizeKeys } from "./shared";
 
 export class MzMlFile {
   /** @internal */
@@ -21,7 +20,7 @@ export class MzMlFile {
 
   toJson(): any {
     this.assertValid("toJson");
-    return camelizeKeys(this._backend.fileToJson(this._handle!));
+    return this._backend.fileToJson(this._handle!);
   }
 
   toMzml(): string {
