@@ -2,6 +2,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { fileURLToPath } from "url";
 import type { Backend, FileHandle } from "./backend";
 import type { PeakOptions } from "../types/types";
 import { parseAndCamelize } from "./shared";
@@ -109,6 +110,21 @@ export class NodeBackend implements Backend {
 
   parseBin(data: Uint8Array, maxCacheSize = 0): FileHandle {
     return this.native.parseBin(toNodeBuffer(data), maxCacheSize);
+  }
+
+  parseIonPath(path: string, cacheSize = 0): FileHandle {
+    return this.native.parseIonPath(path, cacheSize);
+  }
+
+  parseIonUrl(url: URL, cacheSize = 0): FileHandle {
+    if (url.protocol === "file:") {
+      return this.native.parseIonPath(fileURLToPath(url), cacheSize);
+    }
+    return this.native.parseIonUrl(url.href, cacheSize);
+  }
+
+  parseIonBuffer(bytes: Uint8Array, cacheSize = 0): FileHandle {
+    return this.native.parseBin(toNodeBuffer(bytes), cacheSize);
   }
 
   freeFile(handle: FileHandle): void {

@@ -28,3 +28,9 @@ typedef struct Buf {
 } Buf;
 
 extern void js_log(const uint8_t *ptr, uintptr_t len);
+
+extern int32_t range_read(uint32_t source_id,
+                          uint32_t offset_lo,
+                          uint32_t offset_hi,
+                          uint32_t len,
+                          uint8_t *dest_ptr);

@@ -10,7 +10,7 @@ npm install msutils
 
 ## Concepts
 
-**Sample**: A parsed mzML or ion file held in memory. Create samples with `parseMzML()` or `parseIon()`. Samples are automatically garbage collected when no longer referenced.
+**Sample**: A parsed mzML or opened ion source. Create samples with `parseMzML()` or `parseIon()`. Samples are automatically garbage collected when no longer referenced.
 
 **XY data**: A pair of numeric arrays where `x` is retention time and `y` is intensity.
 
@@ -47,12 +47,16 @@ const sample = await msutils.parseMzML(buffer);
 
 ### Load ion
 
-Load an ion binary file into a sample.
+Open an ion binary source into a sample.
 
 ```js
 const sample = await msutils.parseIon(buffer);
 const sample = await msutils.parseIon(buffer, { maxCacheSize: 1000000 });
+const sample = await msutils.parseIon("./data/sample.ion");
+const sample = await msutils.parseIon(new URL("https://example.com/sample.ion"));
 ```
+
+`string` inputs are filesystem paths only. URL inputs must use `new URL(...)`. URL range reads are supported by the Node.js backend.
 
 ## Convert
 

@@ -43,6 +43,8 @@ typedef uint32_t (*fn_msutils_abi_version)(void);
 typedef size_t   (*fn_msutils_sizeof_peak_options)(void);
 typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, size_t, MzML **);
+typedef int32_t (*fn_parse_ion_path)(const char *, size_t, MzML **);
+typedef int32_t (*fn_parse_ion_url)(const char *, size_t, MzML **);
 typedef void (*fn_free_mzml)(MzML *);
 typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *);
 typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *);
@@ -78,6 +80,8 @@ typedef struct
   fn_find_feature find_feature;
   fn_mzml_to_bin mzml_to_bin;
   fn_parse_bin parse_bin;
+  fn_parse_ion_path parse_ion_path;
+  fn_parse_ion_url parse_ion_url;
   fn_free_ free_;
   fn_free_mzml free_mzml;
   fn_get_features get_features;
@@ -270,6 +274,8 @@ static int abi_load(const char *path, const char **err)
     goto fail;
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
     goto fail;
+  ABI.parse_ion_path = (fn_parse_ion_path)DLSYM(LIB_HANDLE, "parse_ion_path");
+  ABI.parse_ion_url = (fn_parse_ion_url)DLSYM(LIB_HANDLE, "parse_ion_url");
   if (resolve_required((void **)&ABI.get_features, "get_features"))
     goto fail;
   if (resolve_required((void **)&ABI.get_scans, "get_scans"))
@@ -918,6 +924,58 @@ static Napi::Value ParseBin(const Napi::CallbackInfo &info)
   return Napi::External<MzMLWrapper>::New(env, w, FinalizeMzML);
 }
 
+static Napi::Value ParseIonPath(const Napi::CallbackInfo &info)
+{
+  Napi::Env env = info.Env();
+  if (!ThrowIfMissing(env, (void *)ABI.parse_ion_path, "parse_ion_path"))
+    return env.Undefined();
+
+  if (info.Length() < 1 || !info[0].IsString())
+  {
+    Napi::TypeError::New(env, "expected: (string path, number maxCacheSize?)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  std::string file_path = info[0].As<Napi::String>().Utf8Value();
+  size_t cache_size = info.Length() > 1 && info[1].IsNumber()
+                          ? (size_t)info[1].As<Napi::Number>().Int64Value()
+                          : 0;
+
+  MzML *file_handle = nullptr;
+  int32_t code = ABI.parse_ion_path(file_path.c_str(), cache_size, &file_handle);
+  if (code != 0)
+    return ThrowRc(env, "parse_ion_path", code);
+
+  MzMLWrapper *file_wrapper = new MzMLWrapper{file_handle, 0};
+  return Napi::External<MzMLWrapper>::New(env, file_wrapper, FinalizeMzML);
+}
+
+static Napi::Value ParseIonUrl(const Napi::CallbackInfo &info)
+{
+  Napi::Env env = info.Env();
+  if (!ThrowIfMissing(env, (void *)ABI.parse_ion_url, "parse_ion_url"))
+    return env.Undefined();
+
+  if (info.Length() < 1 || !info[0].IsString())
+  {
+    Napi::TypeError::New(env, "expected: (string url, number maxCacheSize?)").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  std::string url = info[0].As<Napi::String>().Utf8Value();
+  size_t cache_size = info.Length() > 1 && info[1].IsNumber()
+                          ? (size_t)info[1].As<Napi::Number>().Int64Value()
+                          : 0;
+
+  MzML *file_handle = nullptr;
+  int32_t code = ABI.parse_ion_url(url.c_str(), cache_size, &file_handle);
+  if (code != 0)
+    return ThrowRc(env, "parse_ion_url", code);
+
+  MzMLWrapper *file_wrapper = new MzMLWrapper{file_handle, 0};
+  return Napi::External<MzMLWrapper>::New(env, file_wrapper, FinalizeMzML);
+}
+
 static Napi::Value GetFeatures(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
@@ -1007,6 +1065,8 @@ static Napi::Object Init(Napi::Env env, Napi::Object exports)
   exports.Set("findFeature", Napi::Function::New(env, FindFeature));
   exports.Set("mzmlToBin", Napi::Function::New(env, MzmlToBin));
   exports.Set("parseBin", Napi::Function::New(env, ParseBin));
+  exports.Set("parseIonPath", Napi::Function::New(env, ParseIonPath));
+  exports.Set("parseIonUrl", Napi::Function::New(env, ParseIonUrl));
   exports.Set("dispose", Napi::Function::New(env, DisposeMzML));
   exports.Set("getFeatures", Napi::Function::New(env, GetFeatures));
   exports.Set("getScans", Napi::Function::New(env, GetScans));

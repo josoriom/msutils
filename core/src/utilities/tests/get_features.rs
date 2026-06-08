@@ -3,19 +3,16 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
 
-    use ionic::{
-        ion::{WritingMode, encode},
-        mzml::structs::*,
-    };
+    use ionic::{ion::encode, mzml::structs::*};
 
     use crate::utilities::{
         calculate_eic::{CentroidScan, EicOptions, SpectrumSummary},
         find_features::{Feature, FindFeaturesOptions, MzTolerance},
         get_features::{
-            AlignmentOptions, ConsensusFeature, FeatureClusterer, MzRtCluster,
-            SearchBounds, TaggedFeature, aggregate_into_consensus, assign_best_per_sample,
-            collect_filled_slots, compute_search_bounds, dedup, get_features, median,
-            require_minimum_frequency, weighted_centroid_mz,
+            AlignmentOptions, ConsensusFeature, FeatureClusterer, MzRtCluster, SearchBounds,
+            TaggedFeature, aggregate_into_consensus, assign_best_per_sample, collect_filled_slots,
+            compute_search_bounds, dedup, get_features, median, require_minimum_frequency,
+            weighted_centroid_mz,
         },
         structs::FromTo,
     };
@@ -66,7 +63,13 @@ mod tests {
         }
     }
 
-    fn make_feature_full(mz: f64, rt: f64, intensity: f64, n_points: usize, integral: f64) -> Feature {
+    fn make_feature_full(
+        mz: f64,
+        rt: f64,
+        intensity: f64,
+        n_points: usize,
+        integral: f64,
+    ) -> Feature {
         Feature {
             mz,
             rt,
@@ -785,9 +788,9 @@ mod tests {
     }
 
     fn to_ion_bytes(mzml: &MzML) -> Vec<u8> {
-        let mut buf = Vec::new();
-        encode(mzml, 0, false, WritingMode::Memory, &mut buf).expect("ion encode should succeed");
-        buf
+        let mut bytes = Vec::new();
+        encode(mzml, 0, false, &mut bytes).expect("ion encode should succeed");
+        bytes
     }
 
     fn write_ion_dir(tag: &str, samples: &[Vec<u8>]) -> std::path::PathBuf {
@@ -1185,7 +1188,10 @@ mod tests {
         assert!(json.contains("\"from\":0"), "NaN from → 0: {json}");
         assert!(json.contains("\"to\":0"), "+Inf to → 0: {json}");
         assert!(json.contains("\"rt\":1.5"), "finite rt unchanged: {json}");
-        assert!(!json.contains("gaussian"), "gaussian_r2 must be skipped: {json}");
+        assert!(
+            !json.contains("gaussian"),
+            "gaussian_r2 must be skipped: {json}"
+        );
     }
 
     #[test]
@@ -1196,7 +1202,10 @@ mod tests {
         assert!(json.contains("\"from\":0"), "from defaults to 0: {json}");
         assert!(json.contains("\"to\":0"), "to defaults to 0: {json}");
         assert!(json.contains("\"rt\":0"), "rt defaults to 0: {json}");
-        assert!(json.contains("\"n_points\":0"), "n_points (snake_case): {json}");
+        assert!(
+            json.contains("\"n_points\":0"),
+            "n_points (snake_case): {json}"
+        );
         assert!(json.contains("\"noise\":0"), "noise field present: {json}");
         assert!(!json.contains("null"), "no null values: {json}");
         assert!(!json.contains("gaussian"), "gaussian_r2 is skipped: {json}");
@@ -1211,6 +1220,9 @@ mod tests {
             "unknown SpectrumSummary must not produce null: {json}"
         );
         assert!(json.contains("\"rt_seconds\":0"), "rt_seconds → 0: {json}");
-        assert!(json.contains("\"base_peak_mz\":0"), "base_peak_mz → 0: {json}");
+        assert!(
+            json.contains("\"base_peak_mz\":0"),
+            "base_peak_mz → 0: {json}"
+        );
     }
 }

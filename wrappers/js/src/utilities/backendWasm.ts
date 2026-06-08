@@ -6,12 +6,34 @@ declare var require: any;
 
 import type { Backend, FileHandle } from "./backend";
 import type { PeakOptions } from "../types/types";
-import { parseAndCamelize } from "./shared";
+import { parseAndCamelize, toUint8 } from "./shared";
 
 const IS_INLINE_BUILD = typeof __INLINE__ !== "undefined" && __INLINE__;
 const OUTPUT_BUFFER_PAIR_BYTES = 8;
 const PEAK_OPTIONS_STRUCT_BYTES = 64;
 const MSUTILS_ABI_VERSION = 1;
+
+class RangeSourceRegistry {
+  private urls = new Map<number, string>();
+  private next_id = 1;
+
+  add(url: string): number {
+    const id = this.next_id++;
+    this.urls.set(id, url);
+    return id;
+  }
+
+  get(id: number): string | undefined {
+    return this.urls.get(id);
+  }
+
+  remove(id: number): void {
+    this.urls.delete(id);
+  }
+}
+
+const range_sources = new RangeSourceRegistry();
+let wasm_memory: WebAssembly.Memory | null = null;
 
 function resolveTextDecoder(): TextDecoder {
   return typeof TextDecoder !== "undefined"
@@ -263,6 +285,7 @@ class WasmExports {
     level: number,
     outBuf: number,
   ) => number;
+  readonly parseIonUrl: ((sourceId: number, cacheBytes: number, outHandle: number) => number) | null;
 
   constructor(instance: WebAssembly.Instance) {
     const ex = instance.exports;
@@ -288,6 +311,9 @@ class WasmExports {
     this.calculateBaseline = this.resolve(ex, ["calculate_baseline"]);
     this.findFeature = this.resolve(ex, ["find_feature"]);
     this.getScans = this.resolve(ex, ["get_scans"]);
+    this.parseIonUrl = typeof ex["parse_ion_url"] === "function"
+      ? ex["parse_ion_url"] as unknown as (sourceId: number, cacheBytes: number, outHandle: number) => number
+      : null;
   }
 
   private resolve<T extends Function>(
@@ -313,6 +339,7 @@ class WasmApi {
   private readonly baselineScratchSlot: number;
   private readonly peakOptionsSlot: number;
   private readonly handleScratchSlot: number;
+  private readonly source_id_by_handle = new Map<number, number>();
 
   constructor(instance: WebAssembly.Instance) {
     this.fn = new WasmExports(instance);
@@ -375,8 +402,38 @@ class WasmApi {
     }
   }
 
+  parseIonUrl(url: string, cache_size: number): number {
+    if (!this.fn.parseIonUrl) {
+      throw new Error("URL loading needs a rebuilt WASM binary with parse_ion_url");
+    }
+    const source_id = range_sources.add(url);
+    try {
+      const rc = this.fn.parseIonUrl(source_id, cache_size, this.handleScratchSlot);
+      if (rc !== 0) {
+        throw new Error("parse_ion_url failed with code " + rc);
+      }
+      const handle = this.heap.readU32(this.handleScratchSlot);
+      if (handle === 0) {
+        throw new Error("parse_ion_url returned a null handle");
+      }
+      this.source_id_by_handle.set(handle, source_id);
+      return handle;
+    } catch (error) {
+      range_sources.remove(source_id);
+      throw error;
+    }
+  }
+
   freeRaw(handle: number): void {
-    this.fn.freeMzml(handle);
+    try {
+      this.fn.freeMzml(handle);
+    } finally {
+      const source_id = this.source_id_by_handle.get(handle);
+      if (source_id !== undefined) {
+        range_sources.remove(source_id);
+        this.source_id_by_handle.delete(handle);
+      }
+    }
   }
 
   fileToJson(handle: number): any {
@@ -673,15 +730,114 @@ class WasmApi {
   }
 }
 
-async function loadWasm(): Promise<WasmApi> {
-  const imports = { env: { js_log: (_ptr: number, _len: number) => {} } };
+function allowWorkerOnly(): void {
+  const isMainThread =
+    typeof window !== "undefined" && typeof document !== "undefined";
+  if (isMainThread) {
+    throw new Error(
+      "parseIon(URL) must run inside a Web Worker; sync range reads are blocked on the main thread",
+    );
+  }
+}
 
+const MAX_READ_TRIES = 3;
+
+type RangeOutcome =
+  | { kind: "ok"; bytes: Uint8Array }
+  | { kind: "retry" }
+  | { kind: "fail" };
+
+function get_range_once(
+  url: string,
+  offset: number,
+  last_byte: number,
+  len: number,
+): RangeOutcome {
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", url, false);
+  xhr.responseType = "arraybuffer";
+  xhr.setRequestHeader("Range", `bytes=${offset}-${last_byte}`);
+
+  try {
+    xhr.send();
+  } catch {
+    return { kind: "retry" };
+  }
+
+  if (xhr.status >= 500) return { kind: "retry" };
+  if (xhr.status !== 206) return { kind: "fail" };
+
+  const bytes = new Uint8Array(xhr.response as ArrayBuffer);
+  if (bytes.length !== len) return { kind: "fail" };
+
+  const content_range = xhr.getResponseHeader("Content-Range");
+  if (!content_range) return { kind: "fail" };
+
+  const expected = `bytes ${offset}-${last_byte}/`;
+  if (!content_range.startsWith(expected)) {
+    return { kind: "fail" };
+  }
+
+  return { kind: "ok", bytes };
+}
+
+function read_range_into_memory(
+  url: string,
+  offset_lo: number,
+  offset_hi: number,
+  len: number,
+  dest_ptr: number,
+): number {
+  if (len === 0) return 0;
+
+  const offset = (offset_lo >>> 0) + (offset_hi >>> 0) * 2 ** 32;
+  const last_byte = offset + len - 1;
+
+  for (let attempt = 0; attempt < MAX_READ_TRIES; attempt++) {
+    const outcome = get_range_once(url, offset, last_byte, len);
+    if (outcome.kind === "ok") {
+      new Uint8Array(wasm_memory!.buffer, dest_ptr, len).set(outcome.bytes);
+      return 0;
+    }
+    if (outcome.kind === "fail") return -1;
+  }
+  return -1;
+}
+
+function make_range_read_import(): (source_id: number, offset_lo: number, offset_hi: number, len: number, dest_ptr: number) => number {
+  return (
+    source_id: number,
+    offset_lo: number,
+    offset_hi: number,
+    len: number,
+    dest_ptr: number,
+  ): number => {
+    if (!wasm_memory) return -1;
+    const url = range_sources.get(source_id >>> 0);
+    if (!url) return -1;
+    return read_range_into_memory(url, offset_lo, offset_hi, len >>> 0, dest_ptr >>> 0);
+  };
+}
+
+async function load_and_instantiate(bytes: ArrayBuffer | Uint8Array): Promise<WasmApi> {
+  const imports = {
+    env: {
+      js_log: (_ptr: number, _len: number) => {},
+      range_read: make_range_read_import(),
+    },
+  };
+  const result = await WebAssembly.instantiate(bytes, imports);
+  const instance = (result as any).instance as WebAssembly.Instance;
+  wasm_memory = (instance.exports as any).memory as WebAssembly.Memory;
+  return new WasmApi(instance);
+}
+
+async function loadWasm(): Promise<WasmApi> {
   if (IS_INLINE_BUILD) {
     if (!__WASM_DATA_URL__)
       throw new Error("Inline build is missing __WASM_DATA_URL__");
     const bytes = await fetch(__WASM_DATA_URL__).then((r) => r.arrayBuffer());
-    const { instance } = await WebAssembly.instantiate(bytes, imports);
-    return new WasmApi(instance);
+    return load_and_instantiate(bytes);
   }
 
   if (typeof process !== "undefined" && (process as any).versions?.node) {
@@ -693,8 +849,7 @@ async function loadWasm(): Promise<WasmApi> {
         ? __dirname
         : npath.dirname(nurl.fileURLToPath((0, eval)("import.meta").url));
     const bytes = nfs.readFileSync(npath.join(dir, "msutils.wasm"));
-    const { instance } = await WebAssembly.instantiate(bytes, imports);
-    return new WasmApi(instance);
+    return load_and_instantiate(bytes);
   }
 
   throw new Error(
@@ -725,6 +880,26 @@ export class WasmBackend implements Backend {
 
   parseBin(data: Uint8Array, maxCacheSize = 0): FileHandle {
     return this.getApi().parseBinRaw(data, maxCacheSize);
+  }
+
+  parseIonPath(_path: string, _cacheSize = 0): FileHandle {
+    throw new Error(
+      "parseIon: file paths need the Node backend; pass a URL or a buffer in the browser",
+    );
+  }
+
+  parseIonUrl(url: URL, cacheSize = 0): FileHandle | Promise<FileHandle> {
+    allowWorkerOnly();
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      throw new Error(
+        "parseIon: the browser backend only reads http and https URLs",
+      );
+    }
+    return this.getApi().parseIonUrl(url.href, cacheSize);
+  }
+
+  parseIonBuffer(bytes: Uint8Array, cacheSize = 0): FileHandle {
+    return this.getApi().parseBinRaw(bytes, cacheSize);
   }
 
   freeFile(handle: FileHandle): void {
@@ -913,3 +1088,13 @@ export class WasmBackend implements Backend {
     );
   }
 }
+
+export const test_range_read_internals = {
+  get_range_once,
+  read_range_into_memory,
+  allowWorkerOnly,
+  MAX_READ_TRIES,
+  set_wasm_memory(mem: WebAssembly.Memory | null) {
+    wasm_memory = mem;
+  },
+};

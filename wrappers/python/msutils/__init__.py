@@ -8,6 +8,7 @@ from msutils.api import (
     ion_to_json,
     ion_to_mzml,
     mzml_to_ion,
+    mzml_to_ion_file,
     calculate_eic,
     get_scans,
     find_peaks,
@@ -31,6 +32,7 @@ __all__ = [
     "ion_to_json",
     "ion_to_mzml",
     "mzml_to_ion",
+    "mzml_to_ion_file",
     "calculate_eic",
     "get_scans",
     "find_peaks",
@@ -69,6 +71,9 @@ class MsUtils:
 
     def mzml_to_ion(self, file: SampleFile, level: int = 12, f32_compress: bool = False) -> bytes:
         return mzml_to_ion(file, level, f32_compress)
+
+    def mzml_to_ion_file(self, input_path: str, output_path: str, level: int = 12, f32_compress: bool = False, section_on_disk: bool = False) -> None:
+        return mzml_to_ion_file(input_path, output_path, level, f32_compress, section_on_disk)
 
     def calculate_eic(self, file: SampleFile, target_mz: float, from_rt: float, to_rt: float, ppm_tol: float = 20.0, mz_tol: float = 0.005):
         return calculate_eic(file, target_mz, from_rt, to_rt, ppm_tol, mz_tol)

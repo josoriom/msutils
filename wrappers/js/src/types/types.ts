@@ -1,4 +1,5 @@
 export type BinaryInput = Uint8Array | ArrayBuffer;
+export type IonInput = BinaryInput | URL | string;
 
 export type PeakOptions = Partial<{
   minIntegral: number;

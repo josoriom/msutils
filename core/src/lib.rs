@@ -4,22 +4,33 @@ use core::ffi::c_int;
 use core::ffi::{CStr, c_char, c_int};
 
 use serde::Serialize;
-use utilities::structs::ser_finite_f64;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     ptr, slice,
     sync::Arc,
 };
+use utilities::structs::ser_finite_f64;
 
 use ionic::{
     ScanSource, ScanSummary, bin_to_mzml as bin_to_mzml_rs,
-    encoder::{WritingMode, encode},
+    encoder::encode,
     ion::{DecoderConfig, Ion, OwnedIon},
     mzml::structs::MzML,
     parse_mzml as parse_mzml_rs,
 };
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use ionic::{
+    EncodingConfig, IonWriter, SectionChunkMode, encoder::FileEncoderOutput, mzml::MzmlReader,
+    stream_to_ion,
+};
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub mod url_source;
 pub mod utilities;
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use url_source::UrlSource;
 use utilities::{
     calculate_baseline::{BaselineOptions, calculate_baseline as calculate_baseline_rs},
     calculate_eic::{
@@ -153,10 +164,65 @@ const _: () = assert!(
     "CPeakOptions size drifted — bump MSUTILS_ABI_VERSION and update all wrappers"
 );
 
+pub trait RangeReader {
+    fn read(&self, offset: u64, len: u64, dest: &mut [u8]) -> i32;
+}
+
+pub fn read_range<R: RangeReader>(
+    reader: &R,
+    query: ionic::ion::Query,
+) -> ionic::ion::IonResult<ionic::ion::QueryPayload> {
+    use ionic::ion::{IonError, QueryPayload};
+
+    let len = query.length();
+    if len == 0 {
+        return Ok(QueryPayload::new(Vec::new()));
+    }
+    let len_u32 = u32::try_from(len)
+        .map_err(|_| IonError::from("range read: length exceeds transport limit"))?;
+    let mut buf = vec![0u8; len_u32 as usize];
+    let rc = reader.read(query.offset(), len, &mut buf);
+    if rc != 0 {
+        return Err(IonError::from(format!("range read failed: {rc}")));
+    }
+    Ok(QueryPayload::new(buf))
+}
+
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
 #[link(wasm_import_module = "env")]
 unsafe extern "C" {
     fn js_log(ptr: *const u8, len: usize);
+    fn range_read(
+        source_id: u32,
+        offset_lo: u32,
+        offset_hi: u32,
+        len: u32,
+        dest_ptr: *mut u8,
+    ) -> i32;
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+struct WasmRangeReader {
+    source_id: u32,
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+impl RangeReader for WasmRangeReader {
+    fn read(&self, offset: u64, len: u64, dest: &mut [u8]) -> i32 {
+        let len_u32 = match u32::try_from(len) {
+            Ok(value) => value,
+            Err(_) => return -2,
+        };
+        unsafe {
+            range_read(
+                self.source_id,
+                offset as u32,
+                (offset >> 32) as u32,
+                len_u32,
+                dest.as_mut_ptr(),
+            )
+        }
+    }
 }
 
 #[inline]
@@ -200,6 +266,7 @@ pub unsafe extern "C" fn free_(ptr_raw: *mut u8, size: usize) {
 pub enum ParsedFile {
     Full(Box<MzML>),
     Lazy(Box<OwnedIon>),
+    Remote(Box<Ion>),
 }
 
 impl ParsedFile {
@@ -207,6 +274,10 @@ impl ParsedFile {
         match self {
             ParsedFile::Full(mzml) => f(mzml.as_ref()),
             ParsedFile::Lazy(file) => {
+                let mzml = file.to_mzml().map_err(|_| ERR_PARSE)?;
+                f(&mzml)
+            }
+            ParsedFile::Remote(file) => {
                 let mzml = file.to_mzml().map_err(|_| ERR_PARSE)?;
                 f(&mzml)
             }
@@ -219,6 +290,7 @@ impl ScanSource for ParsedFile {
         match self {
             ParsedFile::Full(mzml) => mzml.for_each_summary(cb),
             ParsedFile::Lazy(file) => file.for_each_summary(cb),
+            ParsedFile::Remote(file) => file.for_each_summary(cb),
         }
     }
 
@@ -226,6 +298,7 @@ impl ScanSource for ParsedFile {
         match self {
             ParsedFile::Full(mzml) => mzml.load_scan(index, mz, intensity),
             ParsedFile::Lazy(file) => file.load_scan(index, mz, intensity),
+            ParsedFile::Remote(file) => file.load_scan(index, mz, intensity),
         }
     }
 }
@@ -299,6 +372,36 @@ pub unsafe extern "C" fn parse_mzml(
     }
 }
 
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn parse_ion_url(
+    source_id: u32,
+    cache_bytes: usize,
+    dest: *mut *mut ParsedFile,
+) -> c_int {
+    if dest.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let reader = WasmRangeReader { source_id };
+        let ion = Ion::open_with_query(
+            move |query| read_range(&reader, query),
+            DecoderConfig {
+                max_cached_bytes: cache_bytes,
+                ..Default::default()
+            },
+        )
+        .map_err(|_| ERR_PARSE)?;
+
+        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Remote(Box::new(ion)))) };
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(c)) => c,
+        Err(_) => ERR_PANIC,
+    }
+}
+
 /// Parse binary data and store the result in `dest`.
 ///
 /// # Safety
@@ -327,6 +430,72 @@ pub unsafe extern "C" fn parse_bin(
         .map_err(|_| ERR_PARSE)?;
 
         unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(owned)))) };
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(c)) => c,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn parse_ion_path(
+    path_ptr: *const c_char,
+    max_cache_size: usize,
+    dest: *mut *mut ParsedFile,
+) -> c_int {
+    if path_ptr.is_null() || dest.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let path_text = unsafe { CStr::from_ptr(path_ptr) }
+            .to_str()
+            .map_err(|_| ERR_INVALID_ARGS)?;
+        let file_path = std::path::Path::new(path_text);
+        let opened_file = Ion::open_file(
+            file_path,
+            DecoderConfig {
+                max_cached_bytes: max_cache_size,
+                ..Default::default()
+            },
+        )
+        .map_err(|_| ERR_PARSE)?;
+        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(opened_file)))) };
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn parse_ion_url(
+    url_ptr: *const c_char,
+    cache_bytes: usize,
+    out: *mut *mut ParsedFile,
+) -> c_int {
+    if url_ptr.is_null() || out.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let url = unsafe { CStr::from_ptr(url_ptr) }
+            .to_str()
+            .map_err(|_| ERR_INVALID_ARGS)?
+            .to_string();
+        let source = UrlSource::new(url).map_err(|_| ERR_PARSE)?;
+        let ion = Ion::open_with_query(
+            move |query| source.read(query),
+            DecoderConfig {
+                max_cached_bytes: cache_bytes,
+                ..Default::default()
+            },
+        )
+        .map_err(|_| ERR_PARSE)?;
+
+        unsafe { *out = Box::into_raw(Box::new(ParsedFile::Remote(Box::new(ion)))) };
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -412,22 +581,71 @@ pub unsafe extern "C" fn mzml_to_bin(
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
         file.with_mzml(|mzml| {
-            let mut buf = Vec::new();
-            encode(
-                mzml,
-                compression_level,
-                f32_compress != 0,
-                WritingMode::Memory,
-                &mut buf,
-            )
-            .map_err(|_| ERR_ENCODE)?;
-            write_buf(out, buf.into_boxed_slice());
+            let mut bytes = Vec::new();
+            encode(mzml, compression_level, f32_compress != 0, &mut bytes)
+                .map_err(|_| ERR_ENCODE)?;
+            write_buf(out, bytes.into_boxed_slice());
             Ok(())
         })?;
         Ok(())
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+const ION_BLOCK_SIZE_BYTES: usize = 1024 * 1024;
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn convert_mzml_file_to_ion_file(
+    input_path: *const c_char,
+    output_path: *const c_char,
+    compression_level: u8,
+    force_f32: u8,
+    section_on_disk: u8,
+) -> c_int {
+    if input_path.is_null() || output_path.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let input_path = unsafe { CStr::from_ptr(input_path) }
+            .to_str()
+            .map_err(|_| ERR_INVALID_ARGS)?;
+        let output_path = unsafe { CStr::from_ptr(output_path) }
+            .to_str()
+            .map_err(|_| ERR_INVALID_ARGS)?;
+
+        let mut reader =
+            MzmlReader::open(std::path::Path::new(input_path)).map_err(|_| ERR_PARSE)?;
+        let mut output =
+            FileEncoderOutput::open_for_writing(output_path).map_err(|_| ERR_ENCODE)?;
+
+        let config = EncodingConfig {
+            compression_level,
+            force_f32: force_f32 != 0,
+            uncompressed_block_size: ION_BLOCK_SIZE_BYTES,
+            parallel: true,
+            section_chunk: if section_on_disk != 0 {
+                SectionChunkMode::Disk
+            } else {
+                SectionChunkMode::Memory
+            },
+            target_piece_bytes: 128 * 1024,
+            min_split_bytes: 512 * 1024,
+        };
+
+        {
+            let mut writer = IonWriter::begin(&mut output, config).map_err(|_| ERR_ENCODE)?;
+            stream_to_ion(&mut reader, &mut writer).map_err(|_| ERR_ENCODE)?;
+        }
+        output.flush().map_err(|_| ERR_ENCODE)?;
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
         Err(_) => ERR_PANIC,
     }
 }
@@ -456,7 +674,14 @@ pub unsafe extern "C" fn get_peak(
             x: unsafe { slice::from_raw_parts(x_ptr, len) }.to_vec(),
             y: unsafe { slice::from_raw_parts(y_ptr, len) }.to_vec(),
         };
-        let peak = get_peak_rs(&data, &Roi { rt, half_width: range }, Some(build_peak_options(options)));
+        let peak = get_peak_rs(
+            &data,
+            &Roi {
+                rt,
+                half_width: range,
+            },
+            Some(build_peak_options(options)),
+        );
         let s = serde_json::to_string(&peak.unwrap_or_default()).map_err(|_| ERR_ENCODE)?;
         write_buf(out, s.into_bytes().into_boxed_slice());
         Ok(())
@@ -1178,7 +1403,9 @@ fn write_scans_json(
 ) -> Result<(), serde_json::Error> {
     write_buf(
         out,
-        serde_json::to_string(scans)?.into_bytes().into_boxed_slice(),
+        serde_json::to_string(scans)?
+            .into_bytes()
+            .into_boxed_slice(),
     );
     Ok(())
 }
@@ -1297,5 +1524,96 @@ fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
             edge_slope_level: Some(1),
         }),
         artifact_filter: Some(Default::default()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FakeReader {
+        data: Vec<u8>,
+        call_count: std::sync::atomic::AtomicUsize,
+        return_code: i32,
+    }
+
+    impl RangeReader for FakeReader {
+        fn read(&self, _offset: u64, len: u64, dest: &mut [u8]) -> i32 {
+            if len == 0 {
+                panic!("read called with len=0");
+            }
+            self.call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let copy_len = std::cmp::min(len as usize, dest.len().min(self.data.len()));
+            dest[..copy_len].copy_from_slice(&self.data[..copy_len]);
+            self.return_code
+        }
+    }
+
+    #[test]
+    fn zero_len_returns_empty_and_never_calls_read() {
+        use ionic::ion::Query;
+
+        let fake = FakeReader {
+            data: vec![1, 2, 3, 4, 5],
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+            return_code: 0,
+        };
+
+        let query = Query::new(100, 0);
+        let result = read_range(&fake, query).unwrap();
+        let value = result.bytes().to_vec();
+
+        assert_eq!(value.len(), 0);
+        assert_eq!(fake.call_count.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn non_zero_read_calls_reader_once() {
+        use ionic::ion::Query;
+
+        let fake = FakeReader {
+            data: vec![10, 20, 30, 40, 50],
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+            return_code: 0,
+        };
+
+        let query = Query::new(0, 3);
+        let _result = read_range(&fake, query).unwrap();
+
+        assert_eq!(fake.call_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn negative_return_code_becomes_error() {
+        use ionic::ion::Query;
+
+        let fake = FakeReader {
+            data: vec![10, 20, 30],
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+            return_code: -1,
+        };
+
+        let query = Query::new(0, 2);
+        let result = read_range(&fake, query);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn len_exceeding_u32_max_returns_error_without_allocation() {
+        use ionic::ion::Query;
+
+        let fake = FakeReader {
+            data: vec![1, 2, 3],
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+            return_code: 0,
+        };
+
+        let query = Query::new(0, u64::from(u32::MAX) + 1);
+        let result = read_range(&fake, query);
+
+        assert!(result.is_err());
+        assert_eq!(fake.call_count.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }

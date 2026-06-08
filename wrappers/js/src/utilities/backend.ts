@@ -10,6 +10,15 @@ export interface Backend {
 
   parseMzML(data: Uint8Array): FileHandle;
   parseBin(data: Uint8Array, maxCacheSize?: number): FileHandle;
+  parseIonPath(
+    path: string,
+    cacheSize: number,
+  ): FileHandle | Promise<FileHandle>;
+  parseIonUrl(url: URL, cacheSize: number): FileHandle | Promise<FileHandle>;
+  parseIonBuffer(
+    bytes: Uint8Array,
+    cacheSize: number,
+  ): FileHandle | Promise<FileHandle>;
   freeFile(handle: FileHandle): void;
 
   fileToJson(handle: FileHandle): any;

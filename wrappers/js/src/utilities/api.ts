@@ -1,9 +1,11 @@
-import type { Backend } from "./backend";
+import type { Backend, FileHandle } from "./backend";
 import { SampleFile } from "./sampleFile";
 import { toCores, toUint8 } from "./shared";
 import { encodeTargetIds, unpackTargets } from "./pack";
+import { getIonSource, type IonSource } from "./ionSource";
 import type {
   BinaryInput,
+  IonInput,
   PeakOptions,
   BaselineOptions,
   Peak,
@@ -23,6 +25,7 @@ import type {
 
 export type {
   BinaryInput,
+  IonInput,
   PeakOptions,
   BaselineOptions,
   Peak,
@@ -89,6 +92,18 @@ function assertFile(file: SampleFile, caller: string): void {
   }
 }
 
+function checkCacheSize(cacheSize: number): void {
+  if (
+    !Number.isFinite(cacheSize) ||
+    !Number.isInteger(cacheSize) ||
+    cacheSize < 0
+  ) {
+    throw new TypeError(
+      "parseIon: maxCacheSize must be a non-negative integer",
+    );
+  }
+}
+
 /**
  * Parse an mzML file buffer into a {@link SampleFile}.
  *
@@ -96,31 +111,40 @@ function assertFile(file: SampleFile, caller: string): void {
  * @returns Loaded sample file.
  */
 export async function parseMzML(data: BinaryInput): Promise<SampleFile> {
-  const b = await backendAsync();
-  const handle = b.parseMzML(toUint8(data));
-  return new SampleFile(handle, b);
+  const selected_backend = await backendAsync();
+  const file_handle = selected_backend.parseMzML(toUint8(data));
+  return new SampleFile(file_handle, selected_backend);
 }
 
-/**
- * Parse an ion binary buffer into a {@link SampleFile}.
- *
- * @param data - Raw ion file bytes.
- * @param options.maxCacheSize - Maximum scan cache size. Default 0 (unlimited).
- * @returns Loaded sample file.
- */
 export async function parseIon(
-  data: BinaryInput,
+  source: IonInput,
   options: { maxCacheSize?: number } = {},
 ): Promise<SampleFile> {
-  const { maxCacheSize = 0 } = options;
-  if (maxCacheSize < 0 || !Number.isFinite(maxCacheSize)) {
-    throw new TypeError(
-      "parseIon: maxCacheSize must be a non-negative integer",
-    );
+  const cacheSize = options.maxCacheSize ?? 0;
+  checkCacheSize(cacheSize);
+  const ionSource = getIonSource(source);
+
+  const selectedBackend = await backendAsync();
+  const fileHandle = await parseIonSource(
+    selectedBackend,
+    ionSource,
+    cacheSize,
+  );
+  return new SampleFile(fileHandle, selectedBackend);
+}
+
+function parseIonSource(
+  backend: Backend,
+  source: IonSource,
+  cacheSize: number,
+): FileHandle | Promise<FileHandle> {
+  if (source.kind === "path") {
+    return backend.parseIonPath(source.path, cacheSize);
   }
-  const b = await backendAsync();
-  const handle = b.parseBin(toUint8(data), maxCacheSize);
-  return new SampleFile(handle, b);
+  if (source.kind === "url") {
+    return backend.parseIonUrl(source.url, cacheSize);
+  }
+  return backend.parseIonBuffer(source.bytes, cacheSize);
 }
 
 /**

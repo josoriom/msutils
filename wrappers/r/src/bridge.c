@@ -40,6 +40,7 @@ typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_
 typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
+typedef int32_t (*fn_convert_mzml_file_to_ion_file)(const char *, const char *, uint8_t, uint8_t, uint8_t);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, size_t, MzML **);
 typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
@@ -64,6 +65,7 @@ typedef struct
   fn_free_ free_;
   fn_find_feature find_feature;
   fn_mzml_to_bin mzml_to_bin;
+  fn_convert_mzml_file_to_ion_file convert_mzml_file_to_ion_file;
   fn_parse_bin parse_bin;
   fn_free_mzml free_mzml;
   fn_get_features get_features;
@@ -140,6 +142,8 @@ int abi_load(const char *path, const char **err)
     goto fail;
   if (resolve_required((void **)&ABI.mzml_to_bin, "mzml_to_bin"))
     goto fail;
+  if (resolve_required((void **)&ABI.convert_mzml_file_to_ion_file, "convert_mzml_file_to_ion_file"))
+    goto fail;
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
     goto fail;
   if (resolve_required((void **)&ABI.free_mzml, "free_mzml"))
@@ -185,6 +189,8 @@ static void die_code(const char *fname, int code)
     msg = "panic inside Rust";
   else if (code == 4)
     msg = "parse error";
+  else if (code == 5)
+    msg = "encode error";
   error("msutils/%s failed: %s (code=%d)", fname, msg, code);
 }
 
@@ -398,6 +404,32 @@ SEXP C_mzml_to_ion(SEXP bin, SEXP level, SEXP f32_compress)
   ABI.free_(out.ptr, out.len);
   UNPROTECT(1);
   return res;
+}
+
+SEXP C_mzml_to_ion_file(SEXP input_path, SEXP output_path, SEXP level, SEXP f32_compress, SEXP section_on_disk)
+{
+  if (TYPEOF(input_path) != STRSXP || LENGTH(input_path) != 1)
+    error("input_path must be a length-1 character string");
+  if (TYPEOF(output_path) != STRSXP || LENGTH(output_path) != 1)
+    error("output_path must be a length-1 character string");
+  if (!(TYPEOF(level) == INTSXP || TYPEOF(level) == REALSXP) || LENGTH(level) != 1)
+    error("level must be a scalar number");
+  int lv = asInteger(level);
+  if (lv < 0 || lv > 22)
+    error("level must be in [0,22]");
+  int fc = asLogical(f32_compress);
+  if (fc == NA_LOGICAL)
+    error("f32_compress must be TRUE/FALSE");
+  int sd = asLogical(section_on_disk);
+  if (sd == NA_LOGICAL)
+    error("section_on_disk must be TRUE/FALSE");
+  REQUIRE_BOUND(ABI.convert_mzml_file_to_ion_file, "convert_mzml_file_to_ion_file");
+  const char *in_path = CHAR(STRING_ELT(input_path, 0));
+  const char *out_path = CHAR(STRING_ELT(output_path, 0));
+  int32_t code = ABI.convert_mzml_file_to_ion_file(
+      in_path, out_path, (uint8_t)lv, (uint8_t)(fc ? 1 : 0), (uint8_t)(sd ? 1 : 0));
+  die_code("convert_mzml_file_to_ion_file", code);
+  return R_NilValue;
 }
 
 SEXP C_get_peak(SEXP x, SEXP y, SEXP rt, SEXP range, SEXP options)
