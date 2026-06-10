@@ -5,7 +5,8 @@ use msutils::utilities::structs::{DataXY, Peak};
 pub fn dump_peaks(peaks: &[Peak]) {
     println!("peaks.len() = {}", peaks.len());
     for (i, p) in peaks.iter().enumerate() {
-        let r2 = p.gaussian_r2
+        let r2 = p
+            .gaussian_r2
             .map(|v| format!("{:.3}", v))
             .unwrap_or_else(|| "N/A".to_string());
         println!(

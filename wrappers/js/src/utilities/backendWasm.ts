@@ -4,31 +4,47 @@ declare const __INLINE__: boolean;
 declare const __WASM_DATA_URL__: string | undefined;
 declare var require: any;
 
-import type { Backend, FileHandle } from "./backend";
+import type { Backend, FileHandle, ByteRangeResult } from "./backend";
 import type { PeakOptions } from "../types/types";
 import { parseAndCamelize, toUint8 } from "./shared";
+import { ContainmentCache } from "./containmentCache";
 
 const IS_INLINE_BUILD = typeof __INLINE__ !== "undefined" && __INLINE__;
 const OUTPUT_BUFFER_PAIR_BYTES = 8;
 const PEAK_OPTIONS_STRUCT_BYTES = 64;
-const MSUTILS_ABI_VERSION = 1;
+const MSUTILS_ABI_VERSION = 2;
+const ERR_FAST_PATH = 6;
+
+function rcError(name: string, rc: number): Error {
+  if (rc === ERR_FAST_PATH) {
+    return new Error(
+      `${name}: fast EIC path unavailable: this .ion file has no usable spectrum bounds (A3); re-encode it with the current Ionic to use the fast EIC path`,
+    );
+  }
+  return new Error(`${name} failed with code ${rc}`);
+}
+
+type RemoteSource = {
+  url: string;
+  cache: ContainmentCache;
+};
 
 class RangeSourceRegistry {
-  private urls = new Map<number, string>();
+  private sources = new Map<number, RemoteSource>();
   private next_id = 1;
 
-  add(url: string): number {
+  add(source: RemoteSource): number {
     const id = this.next_id++;
-    this.urls.set(id, url);
+    this.sources.set(id, source);
     return id;
   }
 
-  get(id: number): string | undefined {
-    return this.urls.get(id);
+  get(id: number): RemoteSource | undefined {
+    return this.sources.get(id);
   }
 
   remove(id: number): void {
-    this.urls.delete(id);
+    this.sources.delete(id);
   }
 }
 
@@ -286,6 +302,18 @@ class WasmExports {
     outBuf: number,
   ) => number;
   readonly parseIonUrl: ((sourceId: number, cacheBytes: number, outHandle: number) => number) | null;
+  readonly planOpen: ((headerPtr: number, headerLen: number, outBuf: number) => number) | null;
+  readonly planEic: (
+    (
+      handle: number,
+      target: number,
+      from: number,
+      to: number,
+      ppm: number,
+      mzTol: number,
+      outBuf: number,
+    ) => number
+  ) | null;
 
   constructor(instance: WebAssembly.Instance) {
     const ex = instance.exports;
@@ -314,6 +342,20 @@ class WasmExports {
     this.parseIonUrl = typeof ex["parse_ion_url"] === "function"
       ? ex["parse_ion_url"] as unknown as (sourceId: number, cacheBytes: number, outHandle: number) => number
       : null;
+    this.planOpen = typeof ex["plan_open"] === "function"
+      ? ex["plan_open"] as unknown as (headerPtr: number, headerLen: number, outBuf: number) => number
+      : null;
+    this.planEic = typeof ex["plan_eic"] === "function"
+      ? ex["plan_eic"] as unknown as (
+          handle: number,
+          target: number,
+          from: number,
+          to: number,
+          ppm: number,
+          mzTol: number,
+          outBuf: number,
+        ) => number
+      : null;
   }
 
   private resolve<T extends Function>(
@@ -327,6 +369,84 @@ class WasmExports {
       `WasmExports: none of [${names.join(", ")}] found in WASM exports`,
     );
   }
+}
+
+async function fetchRange(url: string, range: ByteRangeResult): Promise<Uint8Array> {
+  const start = range.offset;
+  const end = range.offset + range.length - 1n;
+
+  const response = await fetch(url, {
+    headers: {
+      Range: `bytes=${start}-${end}`,
+      "Accept-Encoding": "identity",
+    },
+  });
+
+  if (response.status !== 206) {
+    throw new Error(
+      `range request failed: expected 206 Partial Content, got ${response.status}`
+    );
+  }
+
+  const contentRange = response.headers.get("Content-Range");
+  const expectedPrefix = `bytes ${start}-${end}/`;
+  if (!contentRange?.startsWith(expectedPrefix)) {
+    throw new Error(
+      `range response has wrong Content-Range: got ${contentRange}, expected to start with ${expectedPrefix}`
+    );
+  }
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (BigInt(bytes.length) !== range.length) {
+    throw new Error(
+      `range response length mismatch: got ${bytes.length}, expected ${range.length}`
+    );
+  }
+
+  return bytes;
+}
+
+function coalesceRanges(ranges: ByteRangeResult[]): ByteRangeResult[] {
+  if (ranges.length === 0) return [];
+
+  const sorted = [...ranges].sort((a, b) =>
+    a.offset < b.offset ? -1 : a.offset > b.offset ? 1 : 0
+  );
+
+  const result: ByteRangeResult[] = [];
+  let current = sorted[0];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const next = sorted[i];
+    const gap = next.offset - (current.offset + current.length);
+
+    if (gap <= 65536n) {
+      current = {
+        offset: current.offset,
+        length: next.offset + next.length - current.offset,
+      };
+    } else {
+      result.push(current);
+      current = next;
+    }
+  }
+  result.push(current);
+  return result;
+}
+
+async function prefetchRangesForSource(
+  source: RemoteSource,
+  ranges: ByteRangeResult[]
+): Promise<void> {
+  const missing = source.cache.missing(ranges);
+  const coalesced = coalesceRanges(missing);
+
+  const fetches = coalesced.map(async (range) => {
+    const bytes = await fetchRange(source.url, range);
+    source.cache.add(range, bytes);
+  });
+
+  await Promise.all(fetches);
 }
 
 class WasmApi {
@@ -344,9 +464,6 @@ class WasmApi {
   constructor(instance: WebAssembly.Instance) {
     this.fn = new WasmExports(instance);
 
-    // Verify the native binary matches the wrapper. If a developer changes
-    // CPeakOptions in Rust without bumping the ABI version, this catches it
-    // at load time instead of silently corrupting peak detection.
     const abi = this.fn.msutilsAbiVersion();
     if (abi !== MSUTILS_ABI_VERSION) {
       throw new Error(
@@ -402,24 +519,103 @@ class WasmApi {
     }
   }
 
-  parseIonUrl(url: string, cache_size: number): number {
-    if (!this.fn.parseIonUrl) {
-      throw new Error("URL loading needs a rebuilt WASM binary with parse_ion_url");
+  private readRangesFromSlot(slotPtr: number): ByteRangeResult[] {
+    const { ptr, len } = this.heap.readOutputSlot(slotPtr);
+    const bytes = this.heap.copyOutAndFree(ptr, len);
+
+    if (bytes.length % 16 !== 0) {
+      throw new Error(
+        `planned range buffer length must be divisible by 16, got ${bytes.length}`
+      );
     }
-    const source_id = range_sources.add(url);
+
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const ranges: ByteRangeResult[] = [];
+
+    for (let offset = 0; offset < bytes.length; offset += 16) {
+      ranges.push({
+        offset: view.getBigUint64(offset, true),
+        length: view.getBigUint64(offset + 8, true),
+      });
+    }
+
+    return ranges;
+  }
+
+  planOpen(header: Uint8Array): ByteRangeResult[] {
+    if (!this.fn.planOpen) {
+      throw new Error("planOpen not in WASM exports");
+    }
+
+    const [ptr, len] = this.heap.allocAndWrite(header);
     try {
-      const rc = this.fn.parseIonUrl(source_id, cache_size, this.handleScratchSlot);
+      const rc = this.fn.planOpen(ptr, len, this.blobScratchSlot);
+      if (rc !== 0) throw new Error(`plan_open failed with code ${rc}`);
+      return this.readRangesFromSlot(this.blobScratchSlot);
+    } finally {
+      this.fn.free(ptr, len);
+    }
+  }
+
+  planEic(
+    handle: number,
+    targetMz: number,
+    from: number,
+    to: number,
+    ppmTol: number,
+    mzTol: number
+  ): ByteRangeResult[] {
+    if (!this.fn.planEic) {
+      throw new Error("planEic not in WASM exports");
+    }
+
+    const rc = this.fn.planEic(
+      handle,
+      targetMz,
+      from,
+      to,
+      ppmTol,
+      mzTol,
+      this.blobScratchSlot
+    );
+    if (rc !== 0) throw new Error(`plan_eic failed with code ${rc}`);
+    return this.readRangesFromSlot(this.blobScratchSlot);
+  }
+
+  async parseIonUrl(url: string, cacheSize: number): Promise<number> {
+    if (!this.fn.parseIonUrl) {
+      throw new Error("parse_ion_url not in WASM exports");
+    }
+
+    const source: RemoteSource = {
+      url,
+      cache: new ContainmentCache(),
+    };
+    const sourceId = range_sources.add(source);
+
+    try {
+      const headerRange: ByteRangeResult = { offset: 0n, length: 1024n };
+      const headerBytes = await fetchRange(url, headerRange);
+      source.cache.add(headerRange, headerBytes);
+
+      const plannedRanges = this.planOpen(headerBytes);
+
+      await prefetchRangesForSource(source, plannedRanges);
+
+      const rc = this.fn.parseIonUrl(sourceId, cacheSize, this.handleScratchSlot);
       if (rc !== 0) {
-        throw new Error("parse_ion_url failed with code " + rc);
+        throw new Error(`parse_ion_url failed with code ${rc}`);
       }
+
       const handle = this.heap.readU32(this.handleScratchSlot);
       if (handle === 0) {
         throw new Error("parse_ion_url returned a null handle");
       }
-      this.source_id_by_handle.set(handle, source_id);
+
+      this.source_id_by_handle.set(handle, sourceId);
       return handle;
     } catch (error) {
-      range_sources.remove(source_id);
+      range_sources.remove(sourceId);
       throw error;
     }
   }
@@ -465,7 +661,7 @@ class WasmApi {
     return this.heap.copyOutAndFree(ptr, len);
   }
 
-  calculateEic(
+  private calculateEicNow(
     handle: number,
     targetMz: number,
     from: number,
@@ -483,7 +679,7 @@ class WasmApi {
       this.jsonScratchSlot,
       this.blobScratchSlot,
     );
-    if (rc !== 0) throw new Error("calculate_eic failed with code " + rc);
+    if (rc !== 0) throw rcError("calculate_eic", rc);
     const xSlot = this.heap.readOutputSlot(this.jsonScratchSlot);
     const ySlot = this.heap.readOutputSlot(this.blobScratchSlot);
     const x = new Float64Array(
@@ -493,6 +689,29 @@ class WasmApi {
       this.heap.copyOutAndFree(ySlot.ptr, ySlot.len).buffer,
     );
     return { x, y };
+  }
+
+  async calculateEic(
+    handle: number,
+    targetMz: number,
+    from: number,
+    to: number,
+    ppmTolerance: number,
+    mzTolerance: number,
+  ): Promise<{ x: Float64Array; y: Float64Array }> {
+    const sourceId = this.source_id_by_handle.get(handle);
+
+    if (sourceId !== undefined) {
+      const source = range_sources.get(sourceId);
+      if (!source) {
+        throw new Error("calculateEic: remote source is missing");
+      }
+
+      const ranges = this.planEic(handle, targetMz, from, to, ppmTolerance, mzTolerance);
+      await prefetchRangesForSource(source, ranges);
+    }
+
+    return this.calculateEicNow(handle, targetMz, from, to, ppmTolerance, mzTolerance);
   }
 
   getScans(handle: number, queryType: number, a: number, b: number, level: number): any {
@@ -591,6 +810,11 @@ class WasmApi {
     opts: PeakOptions | undefined,
     cores: number,
   ): any {
+    if (this.source_id_by_handle.has(handle)) {
+      throw new Error(
+        "getPeaksFromEic: remote browser Ion handles need plan_peaks_from_eic; use Node, Python, R, or a local/in-memory file",
+      );
+    }
     const emptyU32 = new Uint32Array(count);
     const emptyBytes = new Uint8Array(0);
     const [rtPtr, rtLen] = this.heap.allocAndWrite(toUint8View(rts));
@@ -627,7 +851,7 @@ class WasmApi {
       [lenPtr, lenLen],
       [idPtr, idLen],
     ]);
-    if (rc !== 0) throw new Error("get_peaks_from_eic failed with code " + rc);
+    if (rc !== 0) throw rcError("get_peaks_from_eic", rc);
     return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
   }
 
@@ -730,80 +954,6 @@ class WasmApi {
   }
 }
 
-function allowWorkerOnly(): void {
-  const isMainThread =
-    typeof window !== "undefined" && typeof document !== "undefined";
-  if (isMainThread) {
-    throw new Error(
-      "parseIon(URL) must run inside a Web Worker; sync range reads are blocked on the main thread",
-    );
-  }
-}
-
-const MAX_READ_TRIES = 3;
-
-type RangeOutcome =
-  | { kind: "ok"; bytes: Uint8Array }
-  | { kind: "retry" }
-  | { kind: "fail" };
-
-function get_range_once(
-  url: string,
-  offset: number,
-  last_byte: number,
-  len: number,
-): RangeOutcome {
-  const xhr = new XMLHttpRequest();
-  xhr.open("GET", url, false);
-  xhr.responseType = "arraybuffer";
-  xhr.setRequestHeader("Range", `bytes=${offset}-${last_byte}`);
-
-  try {
-    xhr.send();
-  } catch {
-    return { kind: "retry" };
-  }
-
-  if (xhr.status >= 500) return { kind: "retry" };
-  if (xhr.status !== 206) return { kind: "fail" };
-
-  const bytes = new Uint8Array(xhr.response as ArrayBuffer);
-  if (bytes.length !== len) return { kind: "fail" };
-
-  const content_range = xhr.getResponseHeader("Content-Range");
-  if (!content_range) return { kind: "fail" };
-
-  const expected = `bytes ${offset}-${last_byte}/`;
-  if (!content_range.startsWith(expected)) {
-    return { kind: "fail" };
-  }
-
-  return { kind: "ok", bytes };
-}
-
-function read_range_into_memory(
-  url: string,
-  offset_lo: number,
-  offset_hi: number,
-  len: number,
-  dest_ptr: number,
-): number {
-  if (len === 0) return 0;
-
-  const offset = (offset_lo >>> 0) + (offset_hi >>> 0) * 2 ** 32;
-  const last_byte = offset + len - 1;
-
-  for (let attempt = 0; attempt < MAX_READ_TRIES; attempt++) {
-    const outcome = get_range_once(url, offset, last_byte, len);
-    if (outcome.kind === "ok") {
-      new Uint8Array(wasm_memory!.buffer, dest_ptr, len).set(outcome.bytes);
-      return 0;
-    }
-    if (outcome.kind === "fail") return -1;
-  }
-  return -1;
-}
-
 function make_range_read_import(): (source_id: number, offset_lo: number, offset_hi: number, len: number, dest_ptr: number) => number {
   return (
     source_id: number,
@@ -813,9 +963,18 @@ function make_range_read_import(): (source_id: number, offset_lo: number, offset
     dest_ptr: number,
   ): number => {
     if (!wasm_memory) return -1;
-    const url = range_sources.get(source_id >>> 0);
-    if (!url) return -1;
-    return read_range_into_memory(url, offset_lo, offset_hi, len >>> 0, dest_ptr >>> 0);
+
+    const source = range_sources.get(source_id >>> 0);
+    if (!source) return -1;
+
+    const offset = BigInt(offset_lo >>> 0) + (BigInt(offset_hi >>> 0) << 32n);
+    const length = BigInt(len >>> 0);
+
+    const bytes = source.cache.read(offset, length);
+    if (!bytes) return -1;
+
+    new Uint8Array(wasm_memory.buffer, dest_ptr >>> 0, len >>> 0).set(bytes);
+    return 0;
   };
 }
 
@@ -888,8 +1047,7 @@ export class WasmBackend implements Backend {
     );
   }
 
-  parseIonUrl(url: URL, cacheSize = 0): FileHandle | Promise<FileHandle> {
-    allowWorkerOnly();
+  async parseIonUrl(url: URL, cacheSize = 0): Promise<FileHandle> {
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       throw new Error(
         "parseIon: the browser backend only reads http and https URLs",
@@ -926,14 +1084,14 @@ export class WasmBackend implements Backend {
     );
   }
 
-  calculateEic(
+  async calculateEic(
     handle: FileHandle,
     targetMz: number,
     from: number,
     to: number,
     ppmTol: number,
     mzTol: number,
-  ): { x: Float64Array; y: Float64Array } {
+  ): Promise<{ x: Float64Array; y: Float64Array }> {
     return this.getApi().calculateEic(
       handle as number,
       targetMz,
@@ -1090,10 +1248,6 @@ export class WasmBackend implements Backend {
 }
 
 export const test_range_read_internals = {
-  get_range_once,
-  read_range_into_memory,
-  allowWorkerOnly,
-  MAX_READ_TRIES,
   set_wasm_memory(mem: WebAssembly.Memory | null) {
     wasm_memory = mem;
   },

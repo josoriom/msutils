@@ -370,6 +370,17 @@ parse_ion <- function(bin, max_cache_size = 0) {
   .Call("C_parse_ion", bin, as.numeric(max_cache_size), PACKAGE = "msutils")
 }
 
+parse_ion_url <- function(url, max_cache_size = 0) {
+  if (!is.character(url) || length(url) != 1 || is.na(url) || nchar(url) == 0)
+    stop("`url` must be a single non-empty string")
+  if (!startsWith(tolower(url), "http://") && !startsWith(tolower(url), "https://"))
+    stop("`url` must start with http:// or https://")
+  if (!is.numeric(max_cache_size) || length(max_cache_size) != 1 || is.na(max_cache_size) || max_cache_size < 0)
+    stop("`max_cache_size` must be a single non-negative number")
+
+  .Call("C_parse_ion_url", url, as.numeric(max_cache_size), PACKAGE = "msutils")
+}
+
 .QUERY_RT_RANGE   <- 0L
 .QUERY_CLOSEST_RT <- 1L
 .QUERY_MZ_RANGE   <- 2L

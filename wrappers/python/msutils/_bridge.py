@@ -47,14 +47,14 @@ assert ctypes.sizeof(PeakOptions) == 64, (
     f"PeakOptions is {ctypes.sizeof(PeakOptions)} bytes — expected 64"
 )
 
-MSUTILS_ABI_VERSION = 1
+MSUTILS_ABI_VERSION = 2
 
 _CODE_MSG = {
     1: "invalid arguments",
     2: "panic inside Rust",
     4: "parse error",
     5: "encode error",
-    6: "not supported for this file type",
+    6: "fast EIC path unavailable: this .ion file has no usable spectrum bounds (A3); re-encode it with the current Ionic to use the fast EIC path",
 }
 
 
@@ -71,6 +71,7 @@ class _ABI:
         "parse_mzml": (
             [POINTER(c_uint8), c_size_t, POINTER(c_void_p)], c_int32),
         "parse_bin": ([POINTER(c_uint8), c_size_t, c_size_t, POINTER(c_void_p)], c_int32),
+        "parse_ion_url": ([ctypes.c_char_p, c_size_t, POINTER(c_void_p)], c_int32),
         "free_mzml": ([c_void_p], None),
         "free_": ([POINTER(c_uint8), c_size_t], None),
         "bin_to_json": ([c_void_p, POINTER(_Buf)], c_int32),

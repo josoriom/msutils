@@ -5,6 +5,7 @@ from msutils import api as _api
 from msutils.api import (
     parse_mzml,
     parse_ion,
+    parse_ion_url,
     ion_to_json,
     ion_to_mzml,
     mzml_to_ion,
@@ -29,6 +30,7 @@ __all__ = [
     "MsUtils",
     "parse_mzml",
     "parse_ion",
+    "parse_ion_url",
     "ion_to_json",
     "ion_to_mzml",
     "mzml_to_ion",
@@ -62,6 +64,9 @@ class MsUtils:
 
     def parse_ion(self, data: bytes) -> SampleFile:
         return parse_ion(data)
+
+    def parse_ion_url(self, url: str, max_cache_size: int = 0) -> SampleFile:
+        return parse_ion_url(url, max_cache_size)
 
     def ion_to_json(self, file: SampleFile):
         return ion_to_json(file)

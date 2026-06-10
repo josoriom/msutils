@@ -179,6 +179,41 @@ def parse_ion(data: bytes, max_cache_size: int = 0) -> SampleFile:
     return SampleFile(ptr, abi)
 
 
+def parse_ion_url(url: str, max_cache_size: int = 0) -> SampleFile:
+    """Load an ion file from a URL.
+
+    Opens an ion file from a remote HTTP/HTTPS URL using native range requests.
+    The native UrlSource handles HTTP range requests efficiently.
+
+    Args:
+        url: HTTP or HTTPS URL pointing to an ion file.
+        max_cache_size: Cache size in bytes. 0 sets no limit. Larger values speed up repeated reads at the cost of RAM (default 0).
+
+    Returns: A SampleFile for use in other msutils functions.
+
+    Raises:
+        ValueError: If url or max_cache_size is invalid.
+    """
+    if not isinstance(url, str) or not url:
+        raise ValueError("parse_ion_url: url must be a non-empty string")
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise ValueError("parse_ion_url: url must start with http:// or https://")
+    if not isinstance(max_cache_size, int) or max_cache_size < 0:
+        raise ValueError("parse_ion_url: max_cache_size must be a non-negative integer")
+
+    abi = _get_abi()
+    ptr = ctypes.c_void_p()
+    _check(
+        "parse_ion_url",
+        abi.parse_ion_url(
+            url.encode("utf-8"),
+            c_size_t(max_cache_size),
+            ctypes.byref(ptr),
+        ),
+    )
+    return SampleFile(ptr, abi)
+
+
 def ion_to_json(file: SampleFile) -> Any:
     """Get JSON from a sample.
 

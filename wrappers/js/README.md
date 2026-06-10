@@ -24,7 +24,7 @@ import * as msutils from "msutils";
 const raw = await fetch("sample.mzML").then((r) => r.arrayBuffer());
 
 const sample = await msutils.parseMzML(raw);
-const eic = msutils.calculateEic(sample, 174.112, { from: 1, to: 15 });
+const eic = await msutils.calculateEic(sample, 174.112, { from: 1, to: 15 });
 const peaks = msutils.findPeaks(eic.x, eic.y, {
   autoNoise: true,
   snRatio: 3.0,
@@ -91,7 +91,7 @@ const ionBytes = msutils.mzmlToIon(sample, { level: 12, f32Compress: false });
 Get an extracted ion chromatogram for one m/z from a sample.
 
 ```js
-const eic = msutils.calculateEic(
+const eic = await msutils.calculateEic(
   sample,
   174.112,
   { from: 1, to: 15 },

@@ -821,8 +821,18 @@ mod tests {
         }
     }
 
-    fn feature_cfg() -> FindFeaturesOptions {
-        FindFeaturesOptions::default()
+    fn feature_cfg_for_mz(mz: f64) -> FindFeaturesOptions {
+        let mut cfg = FindFeaturesOptions::default();
+        cfg.mz_scan_grid.min_mz = (mz - 2.0).max(40.0);
+        cfg.mz_scan_grid.max_mz = (mz + 2.0).min(1000.0);
+        cfg
+    }
+
+    fn feature_cfg_for_mz_range(low: f64, high: f64) -> FindFeaturesOptions {
+        let mut cfg = FindFeaturesOptions::default();
+        cfg.mz_scan_grid.min_mz = (low - 2.0).max(40.0);
+        cfg.mz_scan_grid.max_mz = (high + 2.0).min(1000.0);
+        cfg
     }
 
     #[test]
@@ -842,7 +852,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 3.0, to: 7.0 },
-            feature_cfg(),
+            feature_cfg_for_mz(peak_mz),
             alignment_cfg(),
             1,
         )
@@ -891,7 +901,7 @@ mod tests {
                 from: 7.0,
                 to: 11.0,
             },
-            feature_cfg(),
+            feature_cfg_for_mz(peak_mz),
             alignment_cfg(),
             1,
         )
@@ -925,7 +935,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 3.5, to: 6.5 },
-            feature_cfg(),
+            feature_cfg_for_mz(peak_mz),
             alignment_cfg(),
             1,
         )
@@ -958,7 +968,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 6.0, to: 9.0 },
-            feature_cfg(),
+            feature_cfg_for_mz(peak_mz),
             alignment_cfg(),
             1,
         )
@@ -1003,7 +1013,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 3.0, to: 7.0 },
-            feature_cfg(),
+            feature_cfg_for_mz_range(common_mz, rare_mz),
             cfg,
             1,
         )
@@ -1043,7 +1053,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 2.5, to: 5.5 },
-            feature_cfg(),
+            feature_cfg_for_mz(peak_mz),
             cfg,
             1,
         )
@@ -1075,7 +1085,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 3.0, to: 7.0 },
-            feature_cfg(),
+            feature_cfg_for_mz_range(mz_a, mz_b),
             alignment_cfg(),
             1,
         )
@@ -1107,7 +1117,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 4.0, to: 8.0 },
-            feature_cfg(),
+            feature_cfg_for_mz_range(mz_a, mz_b),
             alignment_cfg(),
             1,
         )

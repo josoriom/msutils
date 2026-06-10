@@ -3,7 +3,13 @@ include_version = true
 pragma_once = true
 
 [export]
-include = ["CPeakOptions", "Buf", "MSUTILS_ABI_VERSION"]
+include = [
+  "CPeakOptions",
+  "Buf",
+  "MSUTILS_ABI_VERSION",
+  "plan_open",
+  "plan_eic",
+]
 
 [parse]
 parse_deps = false

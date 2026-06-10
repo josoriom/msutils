@@ -1,6 +1,12 @@
 import type { PeakOptions } from "../types/types";
 
 export type FileHandle = unknown;
+export type MaybePromise<T> = T | Promise<T>;
+
+export interface ByteRangeResult {
+  offset: bigint;
+  length: bigint;
+}
 
 export interface Backend {
   readonly ready: boolean;
@@ -36,7 +42,7 @@ export interface Backend {
     to: number,
     ppmTol: number,
     mzTol: number,
-  ): { x: Float64Array; y: Float64Array };
+  ): MaybePromise<{ x: Float64Array; y: Float64Array }>;
 
   getScans(
     handle: FileHandle,

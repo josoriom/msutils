@@ -73,7 +73,11 @@ impl From<PeakCandidate> for Peak {
             rt: c.rt,
             integral: c.integral,
             intensity: c.intensity,
-            gaussian_r2: if c.gaussian_r2.is_finite() { Some(c.gaussian_r2) } else { None },
+            gaussian_r2: if c.gaussian_r2.is_finite() {
+                Some(c.gaussian_r2)
+            } else {
+                None
+            },
             n_points: c.n_points,
             noise: c.noise,
         }
@@ -127,9 +131,7 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
         vec![0.0; n]
     };
 
-    let y_center: Vec<f64> = (0..n)
-        .map(|i| (data.y[i] - baseline[i]).max(0.0))
-        .collect();
+    let y_center: Vec<f64> = (0..n).map(|i| (data.y[i] - baseline[i]).max(0.0)).collect();
 
     let normalized_data = DataXY {
         x: data.x.clone(),

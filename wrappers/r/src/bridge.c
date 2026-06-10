@@ -42,6 +42,7 @@ typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *,
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_convert_mzml_file_to_ion_file)(const char *, const char *, uint8_t, uint8_t, uint8_t);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, size_t, MzML **);
+typedef int32_t (*fn_parse_ion_url)(const char *, size_t, MzML **);
 typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
@@ -67,6 +68,7 @@ typedef struct
   fn_mzml_to_bin mzml_to_bin;
   fn_convert_mzml_file_to_ion_file convert_mzml_file_to_ion_file;
   fn_parse_bin parse_bin;
+  fn_parse_ion_url parse_ion_url;
   fn_free_mzml free_mzml;
   fn_get_features get_features;
   fn_get_scans get_scans;
@@ -146,6 +148,8 @@ int abi_load(const char *path, const char **err)
     goto fail;
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
     goto fail;
+  if (resolve_required((void **)&ABI.parse_ion_url, "parse_ion_url"))
+    goto fail;
   if (resolve_required((void **)&ABI.free_mzml, "free_mzml"))
     goto fail;
   if (resolve_required((void **)&ABI.get_features, "get_features"))
@@ -191,6 +195,8 @@ static void die_code(const char *fname, int code)
     msg = "parse error";
   else if (code == 5)
     msg = "encode error";
+  else if (code == 6)
+    msg = "fast EIC path unavailable: this .ion file has no usable spectrum bounds (A3); re-encode it with the current Ionic to use the fast EIC path";
   error("msutils/%s failed: %s (code=%d)", fname, msg, code);
 }
 
@@ -763,6 +769,26 @@ SEXP C_parse_ion(SEXP bin, SEXP max_cache_size)
       cache,
       &handle);
   die_code("parse_bin", code);
+
+  SEXP ptr = PROTECT(R_MakeExternalPtr(handle, R_NilValue, R_NilValue));
+  R_RegisterCFinalizerEx(ptr, finalize_mzml, TRUE);
+  UNPROTECT(1);
+  return ptr;
+}
+
+SEXP C_parse_ion_url(SEXP url, SEXP max_cache_size)
+{
+  if (TYPEOF(url) != STRSXP || LENGTH(url) != 1)
+    error("msutils: url must be a single string");
+
+  const char *value = CHAR(STRING_ELT(url, 0));
+  size_t cache = (max_cache_size == R_NilValue) ? 0 : (size_t)asReal(max_cache_size);
+
+  REQUIRE_BOUND(ABI.parse_ion_url, "parse_ion_url");
+
+  MzML *handle = NULL;
+  int code = ABI.parse_ion_url(value, cache, &handle);
+  die_code("parse_ion_url", code);
 
   SEXP ptr = PROTECT(R_MakeExternalPtr(handle, R_NilValue, R_NilValue));
   R_RegisterCFinalizerEx(ptr, finalize_mzml, TRUE);

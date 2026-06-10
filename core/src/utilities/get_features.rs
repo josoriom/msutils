@@ -9,21 +9,16 @@ use serde::Serialize;
 
 use crate::utilities::structs::ser_finite_f64;
 
-use rayon::prelude::*;
-
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::gpu::GpuContext;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use ionic::{
-    ScanSource,
-    ion::{DecoderConfig, Ion, OwnedIon},
-};
+use ionic::ion::{DecoderConfig, Ion, OwnedIon};
 
 use crate::utilities::{
     calculate_eic::{
-        CentroidScan, EicOptions, ScanQuery, TimeUnit, get_eic_for_mz, get_scans, lower_bound,
-        mz_tolerance_for, upper_bound,
+        CentroidScan, EicOptions, EicReader, MS1_LEVEL, get_scan_times, lower_bound,
+        mz_tolerance_for, read_mz_window, upper_bound,
     },
     find_features::{Feature, FeatureError, FindFeaturesOptions, MzTolerance, find_features},
     find_peaks::FindPeaksOptions,
@@ -49,10 +44,20 @@ use std::{
 #[derive(Debug)]
 pub enum AlignmentError {
     Io(Error),
-    Parse { path: String, source: String },
+    Parse {
+        path: String,
+        source: String,
+    },
     UnsupportedFormat(String),
     NoFiles,
-    FeatureDetection(FeatureError),
+    FeatureDetection {
+        path: String,
+        source: FeatureError,
+    },
+    FastPath {
+        path: String,
+        source: crate::utilities::calculate_eic::FastError,
+    },
 }
 
 impl Display for AlignmentError {
@@ -62,7 +67,12 @@ impl Display for AlignmentError {
             Self::Parse { path, source } => write!(f, "parse error for {}: {}", path, source),
             Self::UnsupportedFormat(s) => write!(f, "unsupported file format: {}", s),
             Self::NoFiles => write!(f, "no valid files found in directory"),
-            Self::FeatureDetection(e) => write!(f, "feature detection error: {}", e),
+            Self::FeatureDetection { path, source } => {
+                write!(f, "feature detection error in {}: {}", path, source)
+            }
+            Self::FastPath { path, source } => {
+                write!(f, "fast path error in {}: {}", path, source)
+            }
         }
     }
 }
@@ -72,12 +82,6 @@ impl std::error::Error for AlignmentError {}
 impl From<Error> for AlignmentError {
     fn from(e: Error) -> Self {
         Self::Io(e)
-    }
-}
-
-impl From<FeatureError> for AlignmentError {
-    fn from(e: FeatureError) -> Self {
-        Self::FeatureDetection(e)
     }
 }
 
@@ -280,7 +284,7 @@ pub fn get_features(
         feature_config.gpu_context = GpuContext::try_init().map(Arc::new);
     }
 
-    let mut datasets = detect_features_per_sample(datasets, time_window, &feature_config, cores);
+    let mut datasets = detect_features_per_sample(datasets, time_window, &feature_config, cores)?;
 
     let clusterer = FeatureClusterer {
         tolerance: alignment_config.mz_tolerance.clone(),
@@ -298,7 +302,7 @@ pub fn get_features(
         &mut datasets,
         alignment_config.eic_options,
         alignment_config.peak_options,
-    );
+    )?;
 
     let results = build_results(slots, alignment_config.min_samples, datasets.len());
 
@@ -341,48 +345,49 @@ fn fill_all_missing(
     datasets: &mut [SampleDataset],
     eic_options: EicOptions,
     peak_options: Option<FindPeaksOptions>,
-) {
-    for (sample_idx, (name, source, _)) in datasets.iter_mut().enumerate() {
+) -> Result<(), AlignmentError> {
+    for (sample_idx, (_, source, _)) in datasets.iter_mut().enumerate() {
         match source {
-            SampleSourceKind::Mzml(path) => match open_mzml(path) {
-                Ok(mut mzml) => {
-                    fill_sample(
-                        slots,
-                        sample_idx,
-                        &mut mzml,
-                        eic_options,
-                        peak_options.clone(),
-                    );
-                }
-                Err(e) => {
-                    eprintln!("[Sample {}] {} failed to reopen: {}", sample_idx, name, e);
-                }
-            },
-            SampleSourceKind::Ion(path) => match open_ion(path) {
-                Ok(mut owned) => {
-                    fill_sample(
-                        slots,
-                        sample_idx,
-                        &mut *owned,
-                        eic_options,
-                        peak_options.clone(),
-                    );
-                }
-                Err(e) => {
-                    eprintln!("[Sample {}] {} failed to reopen: {}", sample_idx, name, e);
-                }
-            },
+            SampleSourceKind::Mzml(path) => {
+                let mut mzml = open_mzml(path).map_err(|e| AlignmentError::Parse {
+                    path: path.to_string_lossy().to_string(),
+                    source: e.to_string(),
+                })?;
+                let mut reader = EicReader::Mzml(&mut mzml);
+                fill_sample(
+                    slots,
+                    sample_idx,
+                    &mut reader,
+                    eic_options,
+                    peak_options.clone(),
+                )?;
+            }
+            SampleSourceKind::Ion(path) => {
+                let mut owned = open_ion(path).map_err(|e| AlignmentError::Parse {
+                    path: path.to_string_lossy().to_string(),
+                    source: e.to_string(),
+                })?;
+                let mut reader = EicReader::Ion(&mut *owned);
+                fill_sample(
+                    slots,
+                    sample_idx,
+                    &mut reader,
+                    eic_options,
+                    peak_options.clone(),
+                )?;
+            }
         }
     }
+    Ok(())
 }
 
 fn fill_sample(
     slots: &mut [ClusterSlot],
     sample_idx: usize,
-    source: &mut impl ScanSource,
+    reader: &mut EicReader,
     eic_options: EicOptions,
     peak_options: Option<FindPeaksOptions>,
-) {
+) -> Result<(), AlignmentError> {
     let missing: Vec<usize> = slots
         .iter()
         .enumerate()
@@ -396,7 +401,7 @@ fn fill_sample(
         .collect();
 
     if missing.is_empty() {
-        return;
+        return Ok(());
     }
 
     let rt_min = missing
@@ -408,36 +413,98 @@ fn fill_sample(
         .map(|&ci| slots[ci].1.rt_to)
         .fold(f64::NEG_INFINITY, f64::max);
 
-    let (all_times, all_scans) = get_scans(
-        source,
-        ScanQuery::RtRange(FromTo {
-            from: rt_min,
-            to: rt_max,
-        }),
-        TimeUnit::Minutes,
-        1,
-    );
+    let scan_times = get_scan_times(reader, rt_min, rt_max, MS1_LEVEL);
 
-    if all_scans.is_empty() {
-        return;
+    if scan_times.is_empty() {
+        return Ok(());
     }
 
-    let filled: Vec<(usize, Option<Feature>)> = missing
-        .par_iter()
-        .map(|&ci| {
+    let all_times: Vec<f64> = scan_times.iter().map(|s| s.rt).collect();
+
+    let mut jobs = missing;
+    jobs.sort_unstable_by(|&a, &b| {
+        slots[a]
+            .1
+            .target_mz
+            .partial_cmp(&slots[b].1.target_mz)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut job_idx = 0;
+    while job_idx < jobs.len() {
+        let tile_center_mz = slots[jobs[job_idx]].1.target_mz;
+        let tile_tolerance = mz_tolerance_for(tile_center_mz, eic_options);
+
+        let mut tile_jobs = vec![jobs[job_idx]];
+        job_idx += 1;
+        while job_idx < jobs.len()
+            && (slots[jobs[job_idx]].1.target_mz - tile_center_mz).abs() <= tile_tolerance * 2.0
+        {
+            tile_jobs.push(jobs[job_idx]);
+            job_idx += 1;
+        }
+
+        let tile_rt_min = tile_jobs
+            .iter()
+            .map(|&ci| slots[ci].1.rt_from)
+            .fold(f64::INFINITY, f64::min);
+        let tile_rt_max = tile_jobs
+            .iter()
+            .map(|&ci| slots[ci].1.rt_to)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let start = lower_bound(&all_times, tile_rt_min);
+        let end = upper_bound(&all_times, tile_rt_max);
+
+        if start >= end {
+            continue;
+        }
+
+        let tile_mz_lo = tile_center_mz - tile_tolerance;
+        let tile_mz_hi = tile_jobs
+            .iter()
+            .map(|&ci| slots[ci].1.target_mz)
+            .fold(f64::NEG_INFINITY, f64::max)
+            + tile_tolerance;
+
+        let mut tile_scans: Vec<(f64, Vec<f64>, Vec<f64>)> = Vec::new();
+        for scan_time in scan_times[start..end].iter() {
+            let mut mz = Vec::new();
+            let mut intensity = Vec::new();
+            read_mz_window(
+                reader,
+                scan_time.index,
+                tile_mz_lo,
+                tile_mz_hi,
+                &mut mz,
+                &mut intensity,
+            )
+            .map_err(|e| AlignmentError::FastPath {
+                path: format!("scan {}", scan_time.index),
+                source: e,
+            })?;
+            tile_scans.push((scan_time.rt, mz, intensity));
+        }
+
+        for &ci in &tile_jobs {
             let bounds = &slots[ci].1;
-            let start = lower_bound(&all_times, bounds.rt_from);
-            let end = upper_bound(&all_times, bounds.rt_to);
-            if start >= end {
-                return (ci, None);
+            let tolerance = mz_tolerance_for(bounds.target_mz, eic_options);
+            let window_lo = bounds.target_mz - tolerance;
+            let window_hi = bounds.target_mz + tolerance;
+
+            let mut intensities = Vec::new();
+            for (_, mz, intensity) in &tile_scans {
+                let mut sum = 0.0;
+                for (m, i) in mz.iter().zip(intensity.iter()) {
+                    if *m >= window_lo && *m <= window_hi {
+                        sum += i;
+                    }
+                }
+                intensities.push(sum);
             }
-            let time_slice = all_times[start..end].to_vec();
-            let intensities = get_eic_for_mz(
-                &all_scans[start..end],
-                time_slice.len(),
-                bounds.target_mz,
-                eic_options,
-            );
+
+            let time_slice: Vec<f64> = tile_scans.iter().map(|(rt, _, _)| *rt).collect();
+
             let feature = get_peak(
                 &DataXY {
                     x: time_slice,
@@ -451,15 +518,8 @@ fn fill_sample(
             )
             .filter(|p| p.intensity > 0.0)
             .map(|p| {
-                let measured_mz = weighted_centroid_mz(
-                    &all_scans[start..end],
-                    &all_times[start..end],
-                    bounds.target_mz,
-                    eic_options,
-                    p.from,
-                    p.to,
-                )
-                .unwrap_or(bounds.target_mz);
+                let measured_mz =
+                    calculate_weighted_mz(&tile_scans, p.from, p.to).unwrap_or(bounds.target_mz);
                 Feature {
                     mz: measured_mz,
                     rt: p.rt,
@@ -471,14 +531,38 @@ fn fill_sample(
                     noise: p.noise,
                 }
             });
-            (ci, feature)
-        })
-        .collect();
 
-    for (ci, f) in filled {
-        if let Some(f) = f {
-            slots[ci].0[sample_idx] = Some(f);
+            if let Some(f) = feature {
+                slots[ci].0[sample_idx] = Some(f);
+            }
         }
+    }
+
+    Ok(())
+}
+
+fn calculate_weighted_mz(
+    scans: &[(f64, Vec<f64>, Vec<f64>)],
+    rt_from: f64,
+    rt_to: f64,
+) -> Option<f64> {
+    let mut total_weighted_mz = 0.0;
+    let mut total_intensity = 0.0;
+
+    for (rt, mz, intensity) in scans {
+        if *rt < rt_from || *rt > rt_to {
+            continue;
+        }
+        for (m, i) in mz.iter().zip(intensity.iter()) {
+            total_weighted_mz += m * i;
+            total_intensity += i;
+        }
+    }
+
+    if total_intensity > 0.0 {
+        Some(total_weighted_mz / total_intensity)
+    } else {
+        None
     }
 }
 
@@ -590,43 +674,49 @@ fn detect_features_per_sample(
     time_window: FromTo,
     config: &FindFeaturesOptions,
     cores: usize,
-) -> Vec<SampleDataset> {
-    samples
-        .into_iter()
-        .enumerate()
-        .map(|(idx, (name, source))| {
-            let start = Instant::now();
-            let features = match &source {
-                SampleSourceKind::Mzml(path) => match open_mzml(path) {
-                    Ok(mut mzml) => {
-                        find_features(&mut mzml, time_window, Some(config.clone()), cores)
-                            .unwrap_or_default()
-                    }
-                    Err(e) => {
-                        eprintln!("[Sample {}] {} failed to open: {}", idx, name, e);
-                        Vec::new()
-                    }
-                },
-                SampleSourceKind::Ion(path) => match open_ion(path) {
-                    Ok(mut owned) => {
-                        find_features(&mut *owned, time_window, Some(config.clone()), cores)
-                            .unwrap_or_default()
-                    }
-                    Err(e) => {
-                        eprintln!("[Sample {}] {} failed to open: {}", idx, name, e);
-                        Vec::new()
-                    }
-                },
-            };
-            eprintln!(
-                "[Sample {}] {} processed in {:.3}s",
-                idx,
-                name,
-                start.elapsed().as_secs_f64()
-            );
-            (name, source, features)
-        })
-        .collect()
+) -> Result<Vec<SampleDataset>, AlignmentError> {
+    let mut results = Vec::new();
+
+    for (idx, (name, source)) in samples.into_iter().enumerate() {
+        let start = Instant::now();
+        let features = match &source {
+            SampleSourceKind::Mzml(path) => {
+                let mut mzml = open_mzml(path).map_err(|e| AlignmentError::Parse {
+                    path: path.to_string_lossy().to_string(),
+                    source: e.to_string(),
+                })?;
+                let mut reader = EicReader::Mzml(&mut mzml);
+                find_features(&mut reader, time_window, Some(config.clone()), cores).map_err(
+                    |e| AlignmentError::FeatureDetection {
+                        path: path.to_string_lossy().to_string(),
+                        source: e,
+                    },
+                )?
+            }
+            SampleSourceKind::Ion(path) => {
+                let mut owned = open_ion(path).map_err(|e| AlignmentError::Parse {
+                    path: path.to_string_lossy().to_string(),
+                    source: e.to_string(),
+                })?;
+                let mut reader = EicReader::Ion(&mut *owned);
+                find_features(&mut reader, time_window, Some(config.clone()), cores).map_err(
+                    |e| AlignmentError::FeatureDetection {
+                        path: path.to_string_lossy().to_string(),
+                        source: e,
+                    },
+                )?
+            }
+        };
+        eprintln!(
+            "[Sample {}] {} processed in {:.3}s",
+            idx,
+            name,
+            start.elapsed().as_secs_f64()
+        );
+        results.push((name, source, features));
+    }
+
+    Ok(results)
 }
 
 pub(crate) fn assign_best_per_sample(cluster: Cluster, n_samples: usize) -> Vec<Option<Feature>> {
@@ -663,7 +753,6 @@ pub(crate) fn compute_search_bounds(
         rt_from: med_rt - rt_tol,
         rt_to: med_rt + rt_tol,
     })
-
 }
 
 pub(crate) fn collect_filled_slots(slots: Vec<Option<Feature>>) -> Vec<Feature> {
@@ -700,7 +789,11 @@ pub(crate) fn aggregate_into_consensus(
         to: bounds.rt_to,
         intensity: median(&mut intensity_values),
         integral: median(&mut integral_values),
-        frequency: if total_samples > 0 { n as f64 / total_samples as f64 } else { 0.0 },
+        frequency: if total_samples > 0 {
+            n as f64 / total_samples as f64
+        } else {
+            0.0
+        },
         n_samples: n,
     }
 }
@@ -714,7 +807,6 @@ pub(crate) fn median(values: &mut [f64]) -> f64 {
         values[mid]
     }
 }
-
 
 // TODO: Mmap-backed mzML loading is still being tested.
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]

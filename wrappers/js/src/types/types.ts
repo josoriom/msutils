@@ -135,3 +135,8 @@ export type ScanQuery =
   | { rt: { closest: number } }
   | { mz: { from: number; to: number } }
   | { mz: { closest: number } };
+
+export type ByteRange = {
+  offset: number;
+  length: number;
+};

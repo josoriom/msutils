@@ -208,13 +208,13 @@ export function mzmlToIon(
  * @param mzTol - Absolute m/z tolerance in Da. Default 0.005.
  * @returns Object with `x` (retention times) and `y` (intensities) arrays.
  */
-export function calculateEic(
+export async function calculateEic(
   file: SampleFile,
   mz: number,
   fromTo: FromTo,
   ppmTol = 20,
   mzTol = 0.005,
-): { x: Float64Array; y: Float64Array } {
+): Promise<{ x: Float64Array; y: Float64Array }> {
   assertFile(file, "calculateEic");
   if (typeof mz !== "number" || !Number.isFinite(mz) || mz <= 0) {
     throw new RangeError(
@@ -225,7 +225,15 @@ export function calculateEic(
   if (!Number.isFinite(from) || !Number.isFinite(to)) {
     throw new RangeError("calculateEic: from and to must be finite numbers");
   }
-  return backend().calculateEic(file._handle!, mz, from, to, ppmTol, mzTol);
+
+  return await file._backend.calculateEic(
+    file._handle!,
+    mz,
+    from,
+    to,
+    ppmTol,
+    mzTol,
+  );
 }
 
 /**

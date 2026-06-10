@@ -17,6 +17,7 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
 SEXP C_mzml_to_ion(SEXP bin, SEXP level, SEXP f32_compress);
 SEXP C_mzml_to_ion_file(SEXP input_path, SEXP output_path, SEXP level, SEXP f32_compress, SEXP section_on_disk);
 SEXP C_parse_ion(SEXP bin, SEXP max_cache_size);
+SEXP C_parse_ion_url(SEXP url, SEXP max_cache_size);
 SEXP C_get_scans(SEXP bin, SEXP query_type, SEXP a, SEXP b, SEXP level);
 SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol,
                     SEXP grid_start, SEXP grid_end, SEXP grid_step,
@@ -40,6 +41,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"C_mzml_to_ion", (DL_FUNC)&C_mzml_to_ion, 3},
     {"C_mzml_to_ion_file", (DL_FUNC)&C_mzml_to_ion_file, 5},
     {"C_parse_ion", (DL_FUNC)&C_parse_ion, 2},
+    {"C_parse_ion_url", (DL_FUNC)&C_parse_ion_url, 2},
     {"C_get_scans", (DL_FUNC)&C_get_scans, 5},
     {"C_get_features", (DL_FUNC)&C_get_features, 16},
     {"C_dispose_mzml", (DL_FUNC)&C_dispose_mzml, 1},

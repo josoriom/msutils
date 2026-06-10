@@ -14,14 +14,17 @@ use utilities::structs::ser_finite_f64;
 use ionic::{
     ScanSource, ScanSummary, bin_to_mzml as bin_to_mzml_rs,
     encoder::encode,
-    ion::{DecoderConfig, Ion, OwnedIon},
+    ion::{ByteRange, DecoderConfig, Ion, OwnedIon, plan_open_ranges},
     mzml::structs::MzML,
     parse_mzml as parse_mzml_rs,
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use ionic::{
-    EncodingConfig, IonWriter, SectionChunkMode, encoder::FileEncoderOutput, mzml::MzmlReader,
+    EncodingConfig, IonWriter, SectionChunkMode,
+    encoder::FileEncoderOutput,
+    encoder::encode::{DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_SEGMENT_BYTES},
+    mzml::MzmlReader,
     stream_to_ion,
 };
 
@@ -34,8 +37,8 @@ use url_source::UrlSource;
 use utilities::{
     calculate_baseline::{BaselineOptions, calculate_baseline as calculate_baseline_rs},
     calculate_eic::{
-        EicOptions, ScanQuery, TimeUnit, calculate_eic as calculate_eic_rs,
-        get_scans as get_scans_rs,
+        EicOptions, EicReader, FastError, ScanQuery, TimeUnit,
+        calculate_eic as calculate_eic_dispatcher, get_scans as get_scans_rs,
     },
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
     find_features::{FindFeaturesOptions, find_features as find_features_rs},
@@ -116,7 +119,7 @@ struct FoundFeatureOut<'a> {
     noise: f64,
 }
 
-pub const MSUTILS_ABI_VERSION: u32 = 1;
+pub const MSUTILS_ABI_VERSION: u32 = 2;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn msutils_abi_version() -> u32 {
@@ -133,6 +136,14 @@ const ERR_INVALID_ARGS: c_int = 1;
 const ERR_PANIC: c_int = 2;
 const ERR_PARSE: c_int = 4;
 const ERR_ENCODE: c_int = 5;
+const ERR_FAST_PATH: c_int = 6;
+
+fn fast_error_to_code(error: FastError) -> c_int {
+    match error {
+        FastError::InvalidRequest => ERR_INVALID_ARGS,
+        _ => ERR_FAST_PATH,
+    }
+}
 
 #[repr(C)]
 pub struct Buf {
@@ -504,6 +515,29 @@ pub unsafe extern "C" fn parse_ion_url(
     }
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn plan_open(
+    header_ptr: *const u8,
+    header_len: usize,
+    out: *mut Buf,
+) -> c_int {
+    if header_ptr.is_null() || out.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let header = unsafe { slice::from_raw_parts(header_ptr, header_len) };
+        let ranges = plan_open_ranges(header).map_err(|_| ERR_FAST_PATH)?;
+        let bytes = pack_byte_ranges(&ranges);
+        write_buf(out, bytes);
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
 /// Serialize a parsed file to JSON and write it to `out`.
 ///
 /// # Safety
@@ -633,8 +667,8 @@ pub unsafe extern "C" fn convert_mzml_file_to_ion_file(
             } else {
                 SectionChunkMode::Memory
             },
-            target_piece_bytes: 128 * 1024,
-            min_split_bytes: 512 * 1024,
+            target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
+            min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
         };
 
         {
@@ -738,14 +772,20 @@ pub unsafe extern "C" fn get_peaks_from_eic(
             ids_buf,
             ids_buf_len,
         );
+        let mut reader = match file {
+            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            ParsedFile::Remote(ion) => EicReader::Ion(ion.as_mut()),
+        };
+
         let peaks = get_peaks_from_eic_rs(
-            file,
+            &mut reader,
             FromTo { from, to },
             &items,
             Some(build_peak_options(opts)),
             cores,
         )
-        .ok_or(ERR_PARSE)?;
+        .map_err(fast_error_to_code)?;
         let arr: Vec<EicPeakOut> = peaks
             .iter()
             .map(|(id, ort, mz, p)| EicPeakOut {
@@ -938,6 +978,55 @@ pub unsafe extern "C" fn find_noise_level(y_ptr: *const f32, len: usize) -> f32 
     .unwrap_or(f32::INFINITY)
 }
 
+fn plan_eic_ranges(
+    ion: &mut Ion,
+    target_mz: f64,
+    from: f64,
+    to: f64,
+    ppm: f64,
+    mz_tol: f64,
+) -> Result<Vec<ByteRange>, FastError> {
+    if !target_mz.is_finite() || target_mz <= 0.0 {
+        return Err(FastError::InvalidRequest);
+    }
+
+    let options = EicOptions {
+        ppm_tolerance: ppm,
+        mz_tolerance: mz_tol,
+        ..Default::default()
+    };
+
+    let tolerance = utilities::calculate_eic::mz_tolerance_for(target_mz, options);
+    if !tolerance.is_finite() || tolerance <= 0.0 {
+        return Err(FastError::InvalidRequest);
+    }
+
+    ion.require_spectrum_bounds().map_err(FastError::from)?;
+
+    let mz_from = target_mz - tolerance;
+    let mz_to = target_mz + tolerance;
+    let rt_from = from.min(to);
+    let rt_to = from.max(to);
+
+    let mut scan_indices = Vec::new();
+    ion.for_each_summary(&mut |scan_index, summary| {
+        if summary.rt >= rt_from && summary.rt <= rt_to && summary.ms_level == 1 {
+            scan_indices.push(scan_index);
+        }
+    });
+
+    let mut ranges = Vec::new();
+    for scan_index in scan_indices {
+        let scan_ranges = ion
+            .spectrum_mz_window_block_ranges_strict(scan_index, mz_from, mz_to)
+            .map_err(FastError::from)?;
+        ranges.extend(scan_ranges);
+    }
+
+    sort_and_dedup_ranges(&mut ranges);
+    Ok(ranges)
+}
+
 /// Calculate an EIC and write `x` and `y` to `out_x` and `out_y`.
 ///
 /// # Safety
@@ -958,8 +1047,16 @@ pub unsafe extern "C" fn calculate_eic(
         return ERR_INVALID_ARGS;
     }
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let eic = calculate_eic_rs(
-            unsafe { &mut *h },
+        let file = unsafe { &mut *h };
+
+        let mut reader = match file {
+            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            ParsedFile::Remote(ion) => EicReader::Ion(ion.as_mut()),
+        };
+
+        let eic = calculate_eic_dispatcher(
+            &mut reader,
             target,
             FromTo { from, to },
             EicOptions {
@@ -967,13 +1064,49 @@ pub unsafe extern "C" fn calculate_eic(
                 mz_tolerance: mz_tol,
                 ..Default::default()
             },
-        );
+        )
+        .map_err(fast_error_to_code)?;
+
         write_buf(out_x, f64_to_u8(&eic.x));
         write_buf(out_y, f64_to_u8(&eic.y));
         Ok(())
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn plan_eic(
+    h: *mut ParsedFile,
+    target: f64,
+    from: f64,
+    to: f64,
+    ppm: f64,
+    mz_tol: f64,
+    out: *mut Buf,
+) -> c_int {
+    if h.is_null() || out.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let file = unsafe { &mut *h };
+
+        let ranges = match file {
+            ParsedFile::Lazy(ion) => plan_eic_ranges(ion.as_mut(), target, from, to, ppm, mz_tol),
+            ParsedFile::Remote(ion) => plan_eic_ranges(ion.as_mut(), target, from, to, ppm, mz_tol),
+            ParsedFile::Full(_) => Err(FastError::UnsupportedBackend),
+        }
+        .map_err(fast_error_to_code)?;
+
+        let bytes = pack_byte_ranges(&ranges);
+        write_buf(out, bytes);
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
         Err(_) => ERR_PANIC,
     }
 }
@@ -1132,7 +1265,7 @@ pub unsafe extern "C" fn get_features(
             alignment_opts,
             if cores > 0 { cores as usize } else { 1 },
         )
-        .unwrap_or_default();
+        .map_err(|_| ERR_FAST_PATH)?;
 
         write_buf(
             out,
@@ -1204,13 +1337,19 @@ pub unsafe extern "C" fn find_features(
             };
         }
 
+        let mut reader = match file {
+            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            ParsedFile::Remote(ion) => EicReader::Ion(ion.as_mut()),
+        };
+
         let feats = find_features_rs(
-            file,
+            &mut reader,
             FromTo { from, to },
             Some(opts),
             if cores > 0 { cores as usize } else { 1 },
         )
-        .unwrap_or_default();
+        .map_err(|_| ERR_FAST_PATH)?;
 
         write_buf(
             out,
@@ -1489,6 +1628,24 @@ fn write_buf(out: *mut Buf, bytes: Box<[u8]>) {
     };
 }
 
+fn push_u64_le(bytes: &mut Vec<u8>, value: u64) {
+    bytes.extend_from_slice(&value.to_le_bytes());
+}
+
+fn pack_byte_ranges(ranges: &[ByteRange]) -> Box<[u8]> {
+    let mut bytes = Vec::with_capacity(ranges.len() * 16);
+    for range in ranges {
+        push_u64_le(&mut bytes, range.offset);
+        push_u64_le(&mut bytes, range.length);
+    }
+    bytes.into_boxed_slice()
+}
+
+fn sort_and_dedup_ranges(ranges: &mut Vec<ByteRange>) {
+    ranges.sort_unstable_by_key(|range| (range.offset, range.length));
+    ranges.dedup_by_key(|range| (range.offset, range.length));
+}
+
 fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
     if opts.is_null() {
         return FindPeaksOptions {
@@ -1530,6 +1687,10 @@ fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ionic::mzml::structs::{
+        BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, NumericType, Run, Scan,
+        ScanList, Spectrum, SpectrumList,
+    };
 
     struct FakeReader {
         data: Vec<u8>,
@@ -1615,5 +1776,258 @@ mod tests {
 
         assert!(result.is_err());
         assert_eq!(fake.call_count.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    fn decode_byte_ranges(bytes: &[u8]) -> Vec<(u64, u64)> {
+        bytes
+            .chunks_exact(16)
+            .map(|chunk| {
+                let offset = u64::from_le_bytes(chunk[0..8].try_into().unwrap());
+                let length = u64::from_le_bytes(chunk[8..16].try_into().unwrap());
+                (offset, length)
+            })
+            .collect()
+    }
+
+    fn new_buf_out() -> *mut Buf {
+        Box::into_raw(Box::new(Buf {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+        }))
+    }
+
+    fn drop_buf_out(out: *mut Buf) {
+        unsafe {
+            if !(*out).ptr.is_null() {
+                free_((*out).ptr, (*out).len);
+            }
+            drop(Box::from_raw(out));
+        }
+    }
+
+    fn cv_param(accession: &str, value: Option<&str>) -> CvParam {
+        CvParam {
+            accession: Some(accession.to_string()),
+            name: accession.to_string(),
+            value: value.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    fn cv_param_with_unit(accession: &str, value: &str, unit_accession: &str) -> CvParam {
+        CvParam {
+            accession: Some(accession.to_string()),
+            name: accession.to_string(),
+            value: Some(value.to_string()),
+            unit_accession: Some(unit_accession.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn binary_array(role_accession: &str, values: Vec<f64>) -> BinaryDataArray {
+        BinaryDataArray {
+            array_length: Some(values.len()),
+            cv_params: vec![
+                cv_param(role_accession, None),
+                cv_param("MS:1000523", None),
+                cv_param("MS:1000576", None),
+            ],
+            numeric_type: Some(NumericType::Float64),
+            binary: Some(BinaryData::F64(values)),
+            ..Default::default()
+        }
+    }
+
+    fn spectrum(index: usize, rt: f64) -> Spectrum {
+        Spectrum {
+            id: format!("scan={}", index + 1),
+            index: Some(index as u32),
+            default_array_length: Some(4),
+            ms_level: Some(1),
+            cv_params: vec![cv_param("MS:1000511", Some("1"))],
+            scan_list: Some(ScanList {
+                count: Some(1),
+                scans: vec![Scan {
+                    cv_params: vec![cv_param_with_unit(
+                        "MS:1000016",
+                        &rt.to_string(),
+                        "UO:0000031",
+                    )],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+            binary_data_array_list: Some(BinaryDataArrayList {
+                count: Some(2),
+                binary_data_arrays: vec![
+                    binary_array("MS:1000514", vec![100.0, 499.999, 500.001, 900.0]),
+                    binary_array("MS:1000515", vec![10.0, 1000.0, 900.0, 20.0]),
+                ],
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn current_a3_ion_bytes() -> Vec<u8> {
+        let mzml = MzML {
+            run: Run {
+                id: "test".to_string(),
+                spectrum_list: Some(SpectrumList {
+                    count: Some(3),
+                    spectra: vec![spectrum(0, 1.0), spectrum(1, 2.0), spectrum(2, 3.0)],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut bytes = Vec::new();
+        encode(&mzml, 0, false, &mut bytes).expect("ion encode should succeed");
+        bytes
+    }
+
+    fn open_current_a3_ion() -> *mut ParsedFile {
+        let bytes = current_a3_ion_bytes();
+        let bytes_arc = Arc::from(bytes.into_boxed_slice());
+        let ion = OwnedIon::open_bytes(bytes_arc, DecoderConfig::default())
+            .expect("OwnedIon::open_bytes failed");
+        Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
+    }
+
+    fn open_old_ion_without_a3() -> *mut ParsedFile {
+        let bytes = include_bytes!("../tests/fixtures/no_a3_test.ion");
+        let bytes_arc = Arc::from(bytes.as_slice());
+        let ion = OwnedIon::open_bytes(bytes_arc, DecoderConfig::default())
+            .expect("OwnedIon::open_bytes failed");
+        Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
+    }
+
+    #[test]
+    fn plan_open_rejects_null_header_ptr() {
+        let out = new_buf_out();
+        let code = unsafe { plan_open(std::ptr::null(), 1024, out) };
+        assert_eq!(code, ERR_INVALID_ARGS);
+        drop_buf_out(out);
+    }
+
+    #[test]
+    fn plan_open_rejects_null_out() {
+        let code = unsafe { plan_open(b"header".as_ptr(), 6, std::ptr::null_mut()) };
+        assert_eq!(code, ERR_INVALID_ARGS);
+    }
+
+    #[test]
+    fn plan_open_rejects_short_header() {
+        let out = new_buf_out();
+        let code = unsafe { plan_open(b"x".as_ptr(), 1, out) };
+        assert_eq!(code, ERR_FAST_PATH);
+        drop_buf_out(out);
+    }
+
+    #[test]
+    fn plan_open_returns_buffer_divisible_by_16() {
+        let out = new_buf_out();
+        let header = vec![0u8; 2048];
+        let _code = unsafe { plan_open(header.as_ptr(), header.len(), out) };
+        let len = unsafe { (*out).len };
+        assert_eq!(len % 16, 0);
+        drop_buf_out(out);
+    }
+
+    #[test]
+    fn pack_byte_ranges_writes_little_endian_pairs() {
+        let ranges = vec![
+            ByteRange {
+                offset: 100,
+                length: 32,
+            },
+            ByteRange {
+                offset: 5000,
+                length: 64,
+            },
+        ];
+
+        let bytes = pack_byte_ranges(&ranges);
+
+        assert_eq!(bytes.len(), 32);
+        assert_eq!(decode_byte_ranges(&bytes), vec![(100, 32), (5000, 64)]);
+    }
+
+    #[test]
+    fn plan_eic_rejects_null_handle() {
+        let out = new_buf_out();
+        let code = unsafe { plan_eic(std::ptr::null_mut(), 500.0, 0.0, 10.0, 20.0, 0.005, out) };
+        assert_eq!(code, ERR_INVALID_ARGS);
+        drop_buf_out(out);
+    }
+
+    #[test]
+    fn plan_eic_rejects_null_out() {
+        let code = unsafe {
+            plan_eic(
+                std::ptr::null_mut(),
+                500.0,
+                0.0,
+                10.0,
+                20.0,
+                0.005,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_eq!(code, ERR_INVALID_ARGS);
+    }
+
+    #[test]
+    fn plan_eic_rejects_invalid_target_mz() {
+        let handle = open_current_a3_ion();
+        let out = new_buf_out();
+        let code = unsafe { plan_eic(handle, -1.0, 0.0, 10.0, 20.0, 0.005, out) };
+        assert_eq!(code, ERR_INVALID_ARGS);
+        drop_buf_out(out);
+        unsafe { free_mzml(handle) };
+    }
+
+    #[test]
+    fn plan_eic_rejects_zero_tolerance() {
+        let handle = open_current_a3_ion();
+        let out = new_buf_out();
+        let code = unsafe { plan_eic(handle, 500.0, 0.0, 10.0, 0.0, 0.0, out) };
+        assert_eq!(code, ERR_INVALID_ARGS);
+        drop_buf_out(out);
+        unsafe { free_mzml(handle) };
+    }
+
+    #[test]
+    fn plan_eic_returns_ranges_for_current_a3_ion() {
+        let handle = open_current_a3_ion();
+        let out = new_buf_out();
+
+        let code = unsafe { plan_eic(handle, 500.0, 0.0, 10.0, 20.0, 0.005, out) };
+
+        assert_eq!(code, OK);
+
+        let bytes = unsafe { slice::from_raw_parts((*out).ptr, (*out).len).to_vec() };
+        assert_eq!(bytes.len() % 16, 0);
+
+        let ranges = decode_byte_ranges(&bytes);
+        assert!(!ranges.is_empty());
+        assert!(ranges.iter().all(|(_, length)| *length > 0));
+
+        drop_buf_out(out);
+        unsafe { free_mzml(handle) };
+    }
+
+    #[test]
+    fn plan_eic_requires_spectrum_bounds_for_ion() {
+        let handle = open_old_ion_without_a3();
+        let out = new_buf_out();
+
+        let code = unsafe { plan_eic(handle, 500.0, 0.0, 9999.0, 20.0, 0.005, out) };
+
+        assert_eq!(code, ERR_FAST_PATH);
+
+        drop_buf_out(out);
+        unsafe { free_mzml(handle) };
     }
 }
