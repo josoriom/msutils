@@ -1,13 +1,37 @@
+use ionic::ion::{ByteRange, Ion};
+
 use crate::utilities::{
     calculate_eic::{
         EicOptions, EicReader, FastError, MS1_LEVEL, get_scan_times, lower_bound, mz_tolerance_for,
-        read_mz_window, upper_bound,
+        plan_window_ranges, read_mz_window, upper_bound,
     },
     find_noise_level,
     find_peaks::{FindPeaksOptions, PeakFilter},
     get_peak::get_peak,
     structs::{DataXY, EicRoi, FromTo, Peak, Roi},
 };
+
+pub fn plan_peaks_ranges(
+    ion: &mut Ion,
+    rois: &[EicRoi],
+    from: f64,
+    to: f64,
+) -> Result<Vec<ByteRange>, FastError> {
+    if rois.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let options = EicOptions::default();
+    let mut mz_from = f64::INFINITY;
+    let mut mz_to = f64::NEG_INFINITY;
+    for roi in rois {
+        let tolerance = mz_tolerance_for(roi.mz, options);
+        mz_from = mz_from.min(roi.mz - tolerance);
+        mz_to = mz_to.max(roi.mz + tolerance);
+    }
+
+    plan_window_ranges(ion, from, to, mz_from, mz_to)
+}
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::parallel::run_with_cores;

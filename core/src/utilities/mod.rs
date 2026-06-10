@@ -1,7 +1,7 @@
 pub mod calculate_eic;
 pub use calculate_eic::{
-    Eic, EicOptions, EicReader, EicRequest, FastError, ScanTime, calculate_eic,
-    calculate_eic_from_scan_source, get_scan_times, read_mz_window,
+    Eic, EicOptions, EicReader, FastError, ScanTime, calculate_eic, get_scan_times,
+    plan_eic_ranges, read_mz_window, sort_and_dedup_ranges,
 };
 
 pub mod parallel;

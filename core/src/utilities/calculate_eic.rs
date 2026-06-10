@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, sync::Arc};
 
-use ionic::ion::{Ion, IonError};
+use ionic::ion::{ByteRange, Ion, IonError};
 use ionic::mzml::structs::MzML;
 use ionic::{ScanSource, ScanSummary};
 use serde::Serialize;
@@ -107,17 +107,6 @@ impl From<IonError> for FastError {
             other => FastError::ReadFailed(other.to_string()),
         }
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct EicRequest {
-    pub target_mz: f64,
-    pub rt_from: f64,
-    pub rt_to: f64,
-    pub ppm_tolerance: f64,
-    pub mz_tolerance: f64,
-    pub time_unit: TimeUnit,
-    pub ms_level: u8,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -229,22 +218,88 @@ pub fn read_mz_window(
             Ok(())
         }
         EicReader::Mzml(mzml) => {
-            let mut temp_mz = Vec::new();
-            let mut temp_intensity = Vec::new();
-
-            if !mzml.load_scan(scan_index, &mut temp_mz, &mut temp_intensity) {
+            if !mzml.load_scan(scan_index, mz_out, intensity_out) {
                 return Err(FastError::ReadFailed("failed to load scan".to_string()));
             }
 
-            for (mz, intensity) in temp_mz.iter().zip(temp_intensity.iter()) {
-                if *mz >= mz_from && *mz <= mz_to {
-                    mz_out.push(*mz);
-                    intensity_out.push(*intensity);
-                }
+            let start = lower_bound(mz_out, mz_from);
+            let end = upper_bound(mz_out, mz_to).min(mz_out.len());
+            if end <= start {
+                mz_out.clear();
+                intensity_out.clear();
+                return Ok(());
             }
+
+            let kept = end - start;
+            mz_out.copy_within(start..end, 0);
+            mz_out.truncate(kept);
+            intensity_out.copy_within(start..end, 0);
+            intensity_out.truncate(kept);
             Ok(())
         }
     }
+}
+
+pub fn plan_window_ranges(
+    ion: &mut Ion,
+    from: f64,
+    to: f64,
+    mz_from: f64,
+    mz_to: f64,
+) -> Result<Vec<ByteRange>, FastError> {
+    ion.require_spectrum_bounds().map_err(FastError::from)?;
+
+    let rt_from = from.min(to);
+    let rt_to = from.max(to);
+
+    let mut scan_indices = Vec::new();
+    ion.for_each_summary(&mut |scan_index, summary| {
+        if summary.rt >= rt_from && summary.rt <= rt_to && summary.ms_level == MS1_LEVEL {
+            scan_indices.push(scan_index);
+        }
+    });
+
+    let mut ranges = Vec::new();
+    for scan_index in scan_indices {
+        let scan_ranges = ion
+            .spectrum_mz_window_block_ranges_strict(scan_index, mz_from, mz_to)
+            .map_err(FastError::from)?;
+        ranges.extend(scan_ranges);
+    }
+
+    sort_and_dedup_ranges(&mut ranges);
+    Ok(ranges)
+}
+
+pub fn plan_eic_ranges(
+    ion: &mut Ion,
+    target_mz: f64,
+    from: f64,
+    to: f64,
+    ppm: f64,
+    mz_tol: f64,
+) -> Result<Vec<ByteRange>, FastError> {
+    if !target_mz.is_finite() || target_mz <= 0.0 {
+        return Err(FastError::InvalidRequest);
+    }
+
+    let options = EicOptions {
+        ppm_tolerance: ppm,
+        mz_tolerance: mz_tol,
+        ..Default::default()
+    };
+
+    let tolerance = mz_tolerance_for(target_mz, options);
+    if !tolerance.is_finite() || tolerance <= 0.0 {
+        return Err(FastError::InvalidRequest);
+    }
+
+    plan_window_ranges(ion, from, to, target_mz - tolerance, target_mz + tolerance)
+}
+
+pub fn sort_and_dedup_ranges(ranges: &mut Vec<ByteRange>) {
+    ranges.sort_unstable_by_key(|range| (range.offset, range.length));
+    ranges.dedup_by_key(|range| (range.offset, range.length));
 }
 
 pub fn calculate_eic(
@@ -299,38 +354,6 @@ pub fn calculate_eic(
     }
 
     Ok(Eic { x, y })
-}
-
-pub fn calculate_eic_from_scan_source(
-    source: &mut impl ScanSource,
-    target_mass: f64,
-    time_range: FromTo,
-    options: EicOptions,
-) -> Eic {
-    if !target_mass.is_finite() || target_mass <= 0.0 {
-        return Eic::empty();
-    }
-    let tolerance = mz_tolerance_for(target_mass, options);
-    if !tolerance.is_finite() || tolerance <= 0.0 {
-        return Eic::empty();
-    }
-    let mz_lower = target_mass - tolerance;
-    let mz_upper = target_mass + tolerance;
-    let rt_min = options
-        .time_unit
-        .to_minutes(time_range.from.min(time_range.to));
-    let rt_max = options
-        .time_unit
-        .to_minutes(time_range.from.max(time_range.to));
-    let mut x = Vec::new();
-    let mut y = Vec::new();
-    source.for_each_in_range(rt_min, rt_max, MS1_LEVEL, |summary, mz, intensity| {
-        x.push(summary.rt);
-        y.push(summed_intensity_in_window(
-            mz, intensity, mz_lower, mz_upper,
-        ));
-    });
-    Eic { x, y }
 }
 
 pub fn get_eic_for_mz(

@@ -29,16 +29,23 @@ use ionic::{
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub mod remote_reader;
+pub mod prefetch;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub mod url_source;
 pub mod utilities;
 
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+use prefetch::NoPrefetch;
+use prefetch::Prefetcher;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use url_source::UrlSource;
+use remote_reader::RemoteReader;
 use utilities::{
     calculate_baseline::{BaselineOptions, calculate_baseline as calculate_baseline_rs},
     calculate_eic::{
         EicOptions, EicReader, FastError, ScanQuery, TimeUnit,
         calculate_eic as calculate_eic_dispatcher, get_scans as get_scans_rs,
+        plan_eic_ranges,
     },
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
     find_features::{FindFeaturesOptions, find_features as find_features_rs},
@@ -46,7 +53,7 @@ use utilities::{
     find_peaks::{FindPeaksOptions, PeakFilter, find_peaks as find_peaks_rs},
     get_peak::get_peak as get_peak_rs,
     get_peaks_from_chrom::get_peaks_from_chrom as get_peaks_from_chrom_rs,
-    get_peaks_from_eic::get_peaks_from_eic as get_peaks_from_eic_rs,
+    get_peaks_from_eic::{get_peaks_from_eic as get_peaks_from_eic_rs, plan_peaks_ranges},
     structs::{ChromRoi, EicRoi},
     structs::{DataXY, FromTo, Roi},
 };
@@ -274,10 +281,21 @@ pub unsafe extern "C" fn free_(ptr_raw: *mut u8, size: usize) {
     }
 }
 
+pub struct RemoteFile {
+    ion: Box<Ion>,
+    prefetcher: Arc<dyn Prefetcher>,
+}
+
+impl RemoteFile {
+    fn ion_mut(&mut self) -> &mut Ion {
+        &mut self.ion
+    }
+}
+
 pub enum ParsedFile {
     Full(Box<MzML>),
     Lazy(Box<OwnedIon>),
-    Remote(Box<Ion>),
+    Remote(RemoteFile),
 }
 
 impl ParsedFile {
@@ -289,7 +307,7 @@ impl ParsedFile {
                 f(&mzml)
             }
             ParsedFile::Remote(file) => {
-                let mzml = file.to_mzml().map_err(|_| ERR_PARSE)?;
+                let mzml = file.ion_mut().to_mzml().map_err(|_| ERR_PARSE)?;
                 f(&mzml)
             }
         }
@@ -301,7 +319,7 @@ impl ScanSource for ParsedFile {
         match self {
             ParsedFile::Full(mzml) => mzml.for_each_summary(cb),
             ParsedFile::Lazy(file) => file.for_each_summary(cb),
-            ParsedFile::Remote(file) => file.for_each_summary(cb),
+            ParsedFile::Remote(file) => file.ion_mut().for_each_summary(cb),
         }
     }
 
@@ -309,7 +327,7 @@ impl ScanSource for ParsedFile {
         match self {
             ParsedFile::Full(mzml) => mzml.load_scan(index, mz, intensity),
             ParsedFile::Lazy(file) => file.load_scan(index, mz, intensity),
-            ParsedFile::Remote(file) => file.load_scan(index, mz, intensity),
+            ParsedFile::Remote(file) => file.ion_mut().load_scan(index, mz, intensity),
         }
     }
 }
@@ -404,7 +422,11 @@ pub unsafe extern "C" fn parse_ion_url(
         )
         .map_err(|_| ERR_PARSE)?;
 
-        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Remote(Box::new(ion)))) };
+        let remote = RemoteFile {
+            ion: Box::new(ion),
+            prefetcher: Arc::new(NoPrefetch),
+        };
+        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Remote(remote))) };
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -496,17 +518,26 @@ pub unsafe extern "C" fn parse_ion_url(
             .to_str()
             .map_err(|_| ERR_INVALID_ARGS)?
             .to_string();
-        let source = UrlSource::new(url).map_err(|_| ERR_PARSE)?;
-        let ion = Ion::open_with_query(
-            move |query| source.read(query),
+        let reader = Arc::new(RemoteReader::new(url).map_err(|_| ERR_PARSE)?);
+        reader.prefetch_open().map_err(|_| ERR_PARSE)?;
+
+        let read_source = reader.clone();
+        let mut ion = Ion::open_with_query(
+            move |query| read_source.read(query),
             DecoderConfig {
                 max_cached_bytes: cache_bytes,
                 ..Default::default()
             },
         )
         .map_err(|_| ERR_PARSE)?;
+        let _ = ion.require_spectrum_bounds();
+        reader.clear();
 
-        unsafe { *out = Box::into_raw(Box::new(ParsedFile::Remote(Box::new(ion)))) };
+        let remote = RemoteFile {
+            ion: Box::new(ion),
+            prefetcher: reader,
+        };
+        unsafe { *out = Box::into_raw(Box::new(ParsedFile::Remote(remote))) };
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -775,7 +806,14 @@ pub unsafe extern "C" fn get_peaks_from_eic(
         let mut reader = match file {
             ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
             ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
-            ParsedFile::Remote(ion) => EicReader::Ion(ion.as_mut()),
+            ParsedFile::Remote(remote) => {
+                let prefetcher = remote.prefetcher.clone();
+                let ion = remote.ion_mut();
+                prefetcher
+                    .prefetch(&mut || plan_peaks_ranges(ion, &items, from, to))
+                    .map_err(fast_error_to_code)?;
+                EicReader::Ion(ion)
+            }
         };
 
         let peaks = get_peaks_from_eic_rs(
@@ -978,55 +1016,6 @@ pub unsafe extern "C" fn find_noise_level(y_ptr: *const f32, len: usize) -> f32 
     .unwrap_or(f32::INFINITY)
 }
 
-fn plan_eic_ranges(
-    ion: &mut Ion,
-    target_mz: f64,
-    from: f64,
-    to: f64,
-    ppm: f64,
-    mz_tol: f64,
-) -> Result<Vec<ByteRange>, FastError> {
-    if !target_mz.is_finite() || target_mz <= 0.0 {
-        return Err(FastError::InvalidRequest);
-    }
-
-    let options = EicOptions {
-        ppm_tolerance: ppm,
-        mz_tolerance: mz_tol,
-        ..Default::default()
-    };
-
-    let tolerance = utilities::calculate_eic::mz_tolerance_for(target_mz, options);
-    if !tolerance.is_finite() || tolerance <= 0.0 {
-        return Err(FastError::InvalidRequest);
-    }
-
-    ion.require_spectrum_bounds().map_err(FastError::from)?;
-
-    let mz_from = target_mz - tolerance;
-    let mz_to = target_mz + tolerance;
-    let rt_from = from.min(to);
-    let rt_to = from.max(to);
-
-    let mut scan_indices = Vec::new();
-    ion.for_each_summary(&mut |scan_index, summary| {
-        if summary.rt >= rt_from && summary.rt <= rt_to && summary.ms_level == 1 {
-            scan_indices.push(scan_index);
-        }
-    });
-
-    let mut ranges = Vec::new();
-    for scan_index in scan_indices {
-        let scan_ranges = ion
-            .spectrum_mz_window_block_ranges_strict(scan_index, mz_from, mz_to)
-            .map_err(FastError::from)?;
-        ranges.extend(scan_ranges);
-    }
-
-    sort_and_dedup_ranges(&mut ranges);
-    Ok(ranges)
-}
-
 /// Calculate an EIC and write `x` and `y` to `out_x` and `out_y`.
 ///
 /// # Safety
@@ -1052,7 +1041,14 @@ pub unsafe extern "C" fn calculate_eic(
         let mut reader = match file {
             ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
             ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
-            ParsedFile::Remote(ion) => EicReader::Ion(ion.as_mut()),
+            ParsedFile::Remote(remote) => {
+                let prefetcher = remote.prefetcher.clone();
+                let ion = remote.ion_mut();
+                prefetcher
+                    .prefetch(&mut || plan_eic_ranges(ion, target, from, to, ppm, mz_tol))
+                    .map_err(fast_error_to_code)?;
+                EicReader::Ion(ion)
+            }
         };
 
         let eic = calculate_eic_dispatcher(
@@ -1096,7 +1092,7 @@ pub unsafe extern "C" fn plan_eic(
 
         let ranges = match file {
             ParsedFile::Lazy(ion) => plan_eic_ranges(ion.as_mut(), target, from, to, ppm, mz_tol),
-            ParsedFile::Remote(ion) => plan_eic_ranges(ion.as_mut(), target, from, to, ppm, mz_tol),
+            ParsedFile::Remote(remote) => plan_eic_ranges(remote.ion_mut(), target, from, to, ppm, mz_tol),
             ParsedFile::Full(_) => Err(FastError::UnsupportedBackend),
         }
         .map_err(fast_error_to_code)?;
@@ -1340,7 +1336,7 @@ pub unsafe extern "C" fn find_features(
         let mut reader = match file {
             ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
             ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
-            ParsedFile::Remote(ion) => EicReader::Ion(ion.as_mut()),
+            ParsedFile::Remote(remote) => EicReader::Ion(remote.ion_mut()),
         };
 
         let feats = find_features_rs(
@@ -1639,11 +1635,6 @@ fn pack_byte_ranges(ranges: &[ByteRange]) -> Box<[u8]> {
         push_u64_le(&mut bytes, range.length);
     }
     bytes.into_boxed_slice()
-}
-
-fn sort_and_dedup_ranges(ranges: &mut Vec<ByteRange>) {
-    ranges.sort_unstable_by_key(|range| (range.offset, range.length));
-    ranges.dedup_by_key(|range| (range.offset, range.length));
 }
 
 fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
@@ -2029,5 +2020,168 @@ mod tests {
 
         drop_buf_out(out);
         unsafe { free_mzml(handle) };
+    }
+
+    fn buf_to_vec(out: *mut Buf) -> Vec<u8> {
+        unsafe {
+            if (*out).ptr.is_null() {
+                return Vec::new();
+            }
+            slice::from_raw_parts((*out).ptr, (*out).len).to_vec()
+        }
+    }
+
+    fn run_eic_at_500(handle: *mut ParsedFile) -> (Vec<u8>, Vec<u8>) {
+        let out_x = new_buf_out();
+        let out_y = new_buf_out();
+        let code = unsafe { calculate_eic(handle, 500.0, 0.0, 10.0, 20.0, 0.005, out_x, out_y) };
+        assert_eq!(code, OK);
+        let x = buf_to_vec(out_x);
+        let y = buf_to_vec(out_y);
+        drop_buf_out(out_x);
+        drop_buf_out(out_y);
+        (x, y)
+    }
+
+    fn parse_range_header(request: &str) -> Option<(u64, u64)> {
+        let line = request
+            .lines()
+            .find(|line| line.to_ascii_lowercase().starts_with("range:"))?;
+        let spec = line.split('=').nth(1)?.trim();
+        let mut bounds = spec.split('-');
+        let start = bounds.next()?.trim().parse().ok()?;
+        let end = bounds.next()?.trim().parse().ok()?;
+        Some((start, end))
+    }
+
+    fn answer_range_request(mut stream: std::net::TcpStream, bytes: Vec<u8>) {
+        use std::io::{Read, Write};
+
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(read) => {
+                    request.extend_from_slice(&chunk[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+
+        let text = String::from_utf8_lossy(&request);
+        let last = bytes.len() as u64 - 1;
+        let (start, end) = parse_range_header(&text).unwrap_or((0, last));
+        let end = end.min(last);
+        let slice = &bytes[start as usize..=end as usize];
+
+        let header = format!(
+            "HTTP/1.1 206 Partial Content\r\nAccept-Ranges: bytes\r\nContent-Range: bytes {start}-{end}/{total}\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n",
+            total = bytes.len(),
+            length = slice.len(),
+        );
+        let _ = stream.write_all(header.as_bytes());
+        let _ = stream.write_all(slice);
+        let _ = stream.flush();
+    }
+
+    fn serve_ranges(listener: std::net::TcpListener, bytes: Vec<u8>) {
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { continue };
+            let copy = bytes.clone();
+            std::thread::spawn(move || answer_range_request(stream, copy));
+        }
+    }
+
+    fn open_local_a3_handle(bytes: &[u8]) -> *mut ParsedFile {
+        let arc: Arc<[u8]> = Arc::from(bytes.to_vec().into_boxed_slice());
+        let ion = OwnedIon::open_bytes(arc, DecoderConfig::default()).expect("open bytes failed");
+        Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
+    }
+
+    #[test]
+    fn remote_eic_over_http_matches_local() {
+        let bytes = current_a3_ion_bytes();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback failed");
+        let port = listener.local_addr().unwrap().port();
+        let served = bytes.clone();
+        std::thread::spawn(move || serve_ranges(listener, served));
+
+        let url = std::ffi::CString::new(format!("http://127.0.0.1:{port}")).unwrap();
+        let mut remote_handle: *mut ParsedFile = std::ptr::null_mut();
+        let code = unsafe { parse_ion_url(url.as_ptr(), 0, &mut remote_handle) };
+        assert_eq!(code, OK);
+        assert!(!remote_handle.is_null());
+
+        let local_handle = open_local_a3_handle(&bytes);
+
+        let remote = run_eic_at_500(remote_handle);
+        let local = run_eic_at_500(local_handle);
+
+        assert_eq!(remote.0, local.0);
+        assert_eq!(remote.1, local.1);
+        assert!(!remote.1.is_empty());
+
+        unsafe { free_mzml(remote_handle) };
+        unsafe { free_mzml(local_handle) };
+    }
+
+    fn run_spread_peaks(handle: *mut ParsedFile) -> Vec<u8> {
+        let target_rts = [2.0f64, 2.0];
+        let target_mzs = [100.0f64, 900.0];
+        let half_widths = [1.0f64, 1.0];
+        let out = new_buf_out();
+        let code = unsafe {
+            get_peaks_from_eic(
+                handle as *const ParsedFile,
+                target_rts.as_ptr(),
+                target_mzs.as_ptr(),
+                half_widths.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                target_rts.len(),
+                0.0,
+                10.0,
+                std::ptr::null(),
+                1,
+                out,
+            )
+        };
+        assert_eq!(code, OK);
+        let bytes = buf_to_vec(out);
+        drop_buf_out(out);
+        bytes
+    }
+
+    #[test]
+    fn remote_peaks_over_http_match_local_for_spread_rois() {
+        let bytes = current_a3_ion_bytes();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback failed");
+        let port = listener.local_addr().unwrap().port();
+        let served = bytes.clone();
+        std::thread::spawn(move || serve_ranges(listener, served));
+
+        let url = std::ffi::CString::new(format!("http://127.0.0.1:{port}")).unwrap();
+        let mut remote_handle: *mut ParsedFile = std::ptr::null_mut();
+        let code = unsafe { parse_ion_url(url.as_ptr(), 0, &mut remote_handle) };
+        assert_eq!(code, OK);
+
+        let local_handle = open_local_a3_handle(&bytes);
+
+        let remote = run_spread_peaks(remote_handle);
+        let local = run_spread_peaks(local_handle);
+
+        assert_eq!(remote, local);
+        assert!(!remote.is_empty());
+
+        unsafe { free_mzml(remote_handle) };
+        unsafe { free_mzml(local_handle) };
     }
 }
