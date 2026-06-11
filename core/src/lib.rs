@@ -14,18 +14,17 @@ use utilities::structs::ser_finite_f64;
 use ionic::{
     ScanSource, ScanSummary, bin_to_mzml as bin_to_mzml_rs,
     encoder::encode,
-    ion::{ByteRange, DecoderConfig, Ion, OwnedIon, plan_open_ranges},
+    ion::{IonReader, ReadOptions, Range, plan_open_ranges},
     mzml::structs::MzML,
     parse_mzml as parse_mzml_rs,
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use ionic::{
-    EncodingConfig, IonWriter, SectionChunkMode,
-    encoder::FileEncoderOutput,
-    encoder::encode::{DEFAULT_MIN_SPLIT_BYTES, DEFAULT_TARGET_SEGMENT_BYTES},
+    IonWriter,
+    ion::{WriteOptions, SectionStorage, FileWriter},
+    encoder::encode::DEFAULT_TARGET_SEGMENT_BYTES,
     mzml::MzmlReader,
-    stream_to_ion,
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
@@ -188,22 +187,22 @@ pub trait RangeReader {
 
 pub fn read_range<R: RangeReader>(
     reader: &R,
-    query: ionic::ion::Query,
-) -> ionic::ion::IonResult<ionic::ion::QueryPayload> {
-    use ionic::ion::{IonError, QueryPayload};
+    range: ionic::ion::Range,
+) -> ionic::ion::IonResult<Vec<u8>> {
+    use ionic::ion::IonError;
 
-    let len = query.length();
+    let len = range.length;
     if len == 0 {
-        return Ok(QueryPayload::new(Vec::new()));
+        return Ok(Vec::new());
     }
     let len_u32 = u32::try_from(len)
         .map_err(|_| IonError::from("range read: length exceeds transport limit"))?;
     let mut buf = vec![0u8; len_u32 as usize];
-    let rc = reader.read(query.offset(), len, &mut buf);
+    let rc = reader.read(range.offset, len, &mut buf);
     if rc != 0 {
         return Err(IonError::from(format!("range read failed: {rc}")));
     }
-    Ok(QueryPayload::new(buf))
+    Ok(buf)
 }
 
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
@@ -282,19 +281,19 @@ pub unsafe extern "C" fn free_(ptr_raw: *mut u8, size: usize) {
 }
 
 pub struct RemoteFile {
-    ion: Box<Ion>,
+    ion: Box<IonReader>,
     prefetcher: Arc<dyn Prefetcher>,
 }
 
 impl RemoteFile {
-    fn ion_mut(&mut self) -> &mut Ion {
+    fn ion_mut(&mut self) -> &mut IonReader {
         &mut self.ion
     }
 }
 
 pub enum ParsedFile {
     Full(Box<MzML>),
-    Lazy(Box<OwnedIon>),
+    Lazy(Box<IonReader>),
     Remote(RemoteFile),
 }
 
@@ -413,9 +412,9 @@ pub unsafe extern "C" fn parse_ion_url(
     }
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let reader = WasmRangeReader { source_id };
-        let ion = Ion::open_with_query(
-            move |query| read_range(&reader, query),
-            DecoderConfig {
+        let ion = IonReader::open_remote(
+            move |range| read_range(&reader, range),
+            ReadOptions {
                 max_cached_bytes: cache_bytes,
                 ..Default::default()
             },
@@ -453,9 +452,9 @@ pub unsafe extern "C" fn parse_bin(
     }
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let arc: Arc<[u8]> = Arc::from(unsafe { std::slice::from_raw_parts(data_ptr, data_len) });
-        let owned = Ion::open_bytes(
+        let owned = IonReader::open_bytes(
             arc,
-            DecoderConfig {
+            ReadOptions {
                 max_cached_bytes: max_cache_size,
                 ..Default::default()
             },
@@ -486,9 +485,9 @@ pub unsafe extern "C" fn parse_ion_path(
             .to_str()
             .map_err(|_| ERR_INVALID_ARGS)?;
         let file_path = std::path::Path::new(path_text);
-        let opened_file = Ion::open_file(
+        let opened_file = IonReader::open_file(
             file_path,
-            DecoderConfig {
+            ReadOptions {
                 max_cached_bytes: max_cache_size,
                 ..Default::default()
             },
@@ -522,15 +521,15 @@ pub unsafe extern "C" fn parse_ion_url(
         reader.prefetch_open().map_err(|_| ERR_PARSE)?;
 
         let read_source = reader.clone();
-        let mut ion = Ion::open_with_query(
-            move |query| read_source.read(query),
-            DecoderConfig {
+        let mut ion = IonReader::open_remote(
+            move |range| read_source.read(range),
+            ReadOptions {
                 max_cached_bytes: cache_bytes,
                 ..Default::default()
             },
         )
         .map_err(|_| ERR_PARSE)?;
-        let _ = ion.require_spectrum_bounds();
+        let _ = ion.require_bounds();
         reader.clear();
 
         let remote = RemoteFile {
@@ -686,25 +685,24 @@ pub unsafe extern "C" fn convert_mzml_file_to_ion_file(
         let mut reader =
             MzmlReader::open(std::path::Path::new(input_path)).map_err(|_| ERR_PARSE)?;
         let mut output =
-            FileEncoderOutput::open_for_writing(output_path).map_err(|_| ERR_ENCODE)?;
+            FileWriter::open(output_path).map_err(|_| ERR_ENCODE)?;
 
-        let config = EncodingConfig {
+        let config = WriteOptions {
             compression_level,
             force_f32: force_f32 != 0,
-            uncompressed_block_size: ION_BLOCK_SIZE_BYTES,
+            block_size: ION_BLOCK_SIZE_BYTES,
             parallel: true,
-            section_chunk: if section_on_disk != 0 {
-                SectionChunkMode::Disk
+            section_storage: if section_on_disk != 0 {
+                SectionStorage::Disk
             } else {
-                SectionChunkMode::Memory
+                SectionStorage::Memory
             },
-            target_segment_bytes: DEFAULT_TARGET_SEGMENT_BYTES,
-            min_split_bytes: DEFAULT_MIN_SPLIT_BYTES,
+            segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
         };
 
         {
             let mut writer = IonWriter::begin(&mut output, config).map_err(|_| ERR_ENCODE)?;
-            stream_to_ion(&mut reader, &mut writer).map_err(|_| ERR_ENCODE)?;
+            writer.write_stream(&mut reader).map_err(|_| ERR_ENCODE)?;
         }
         output.flush().map_err(|_| ERR_ENCODE)?;
         Ok(())
@@ -1628,7 +1626,7 @@ fn push_u64_le(bytes: &mut Vec<u8>, value: u64) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
 
-fn pack_byte_ranges(ranges: &[ByteRange]) -> Box<[u8]> {
+fn pack_byte_ranges(ranges: &[Range]) -> Box<[u8]> {
     let mut bytes = Vec::with_capacity(ranges.len() * 16);
     for range in ranges {
         push_u64_le(&mut bytes, range.offset);
@@ -1704,7 +1702,7 @@ mod tests {
 
     #[test]
     fn zero_len_returns_empty_and_never_calls_read() {
-        use ionic::ion::Query;
+        use ionic::ion::Range;
 
         let fake = FakeReader {
             data: vec![1, 2, 3, 4, 5],
@@ -1712,9 +1710,8 @@ mod tests {
             return_code: 0,
         };
 
-        let query = Query::new(100, 0);
-        let result = read_range(&fake, query).unwrap();
-        let value = result.bytes().to_vec();
+        let range = Range { offset: 100, length: 0 };
+        let value = read_range(&fake, range).unwrap();
 
         assert_eq!(value.len(), 0);
         assert_eq!(fake.call_count.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -1722,7 +1719,7 @@ mod tests {
 
     #[test]
     fn non_zero_read_calls_reader_once() {
-        use ionic::ion::Query;
+        use ionic::ion::Range;
 
         let fake = FakeReader {
             data: vec![10, 20, 30, 40, 50],
@@ -1730,15 +1727,15 @@ mod tests {
             return_code: 0,
         };
 
-        let query = Query::new(0, 3);
-        let _result = read_range(&fake, query).unwrap();
+        let range = Range { offset: 0, length: 3 };
+        let _result = read_range(&fake, range).unwrap();
 
         assert_eq!(fake.call_count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
     fn negative_return_code_becomes_error() {
-        use ionic::ion::Query;
+        use ionic::ion::Range;
 
         let fake = FakeReader {
             data: vec![10, 20, 30],
@@ -1746,15 +1743,15 @@ mod tests {
             return_code: -1,
         };
 
-        let query = Query::new(0, 2);
-        let result = read_range(&fake, query);
+        let range = Range { offset: 0, length: 2 };
+        let result = read_range(&fake, range);
 
         assert!(result.is_err());
     }
 
     #[test]
     fn len_exceeding_u32_max_returns_error_without_allocation() {
-        use ionic::ion::Query;
+        use ionic::ion::Range;
 
         let fake = FakeReader {
             data: vec![1, 2, 3],
@@ -1762,8 +1759,8 @@ mod tests {
             return_code: 0,
         };
 
-        let query = Query::new(0, u64::from(u32::MAX) + 1);
-        let result = read_range(&fake, query);
+        let range = Range { offset: 0, length: u64::from(u32::MAX) + 1 };
+        let result = read_range(&fake, range);
 
         assert!(result.is_err());
         assert_eq!(fake.call_count.load(std::sync::atomic::Ordering::SeqCst), 0);
@@ -1881,16 +1878,17 @@ mod tests {
     fn open_current_a3_ion() -> *mut ParsedFile {
         let bytes = current_a3_ion_bytes();
         let bytes_arc = Arc::from(bytes.into_boxed_slice());
-        let ion = OwnedIon::open_bytes(bytes_arc, DecoderConfig::default())
-            .expect("OwnedIon::open_bytes failed");
+        let ion = IonReader::open_bytes(bytes_arc, ReadOptions::default())
+            .expect("IonReader::open_bytes failed");
         Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
     }
 
     fn open_old_ion_without_a3() -> *mut ParsedFile {
-        let bytes = include_bytes!("../tests/fixtures/no_a3_test.ion");
-        let bytes_arc = Arc::from(bytes.as_slice());
-        let ion = OwnedIon::open_bytes(bytes_arc, DecoderConfig::default())
-            .expect("OwnedIon::open_bytes failed");
+        let mut bytes = current_a3_ion_bytes();
+        const HEADER_LEN_SPEC_SEGMENT_BOUNDS_OFFSET: usize = 56;
+        bytes[HEADER_LEN_SPEC_SEGMENT_BOUNDS_OFFSET..HEADER_LEN_SPEC_SEGMENT_BOUNDS_OFFSET + 8].fill(0);
+        let bytes_arc = Arc::from(bytes.into_boxed_slice());
+        let ion = IonReader::open_bytes(bytes_arc, ReadOptions::default()).expect("open no-a3 ion failed");
         Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
     }
 
@@ -1929,11 +1927,11 @@ mod tests {
     #[test]
     fn pack_byte_ranges_writes_little_endian_pairs() {
         let ranges = vec![
-            ByteRange {
+            Range {
                 offset: 100,
                 length: 32,
             },
-            ByteRange {
+            Range {
                 offset: 5000,
                 length: 64,
             },
@@ -2098,7 +2096,7 @@ mod tests {
 
     fn open_local_a3_handle(bytes: &[u8]) -> *mut ParsedFile {
         let arc: Arc<[u8]> = Arc::from(bytes.to_vec().into_boxed_slice());
-        let ion = OwnedIon::open_bytes(arc, DecoderConfig::default()).expect("open bytes failed");
+        let ion = IonReader::open_bytes(arc, ReadOptions::default()).expect("open bytes failed");
         Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
     }
 
@@ -2183,5 +2181,134 @@ mod tests {
 
         unsafe { free_mzml(remote_handle) };
         unsafe { free_mzml(local_handle) };
+    }
+
+    struct RecordingReader {
+        data: Vec<u8>,
+        reads: std::sync::Mutex<Vec<(u64, u64)>>,
+        fail: std::sync::atomic::AtomicBool,
+    }
+
+    impl RecordingReader {
+        fn new(data: Vec<u8>) -> Self {
+            Self {
+                data,
+                reads: std::sync::Mutex::new(Vec::new()),
+                fail: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+
+        fn clear_reads(&self) {
+            self.reads.lock().unwrap().clear();
+        }
+
+        fn recorded(&self) -> Vec<(u64, u64)> {
+            self.reads.lock().unwrap().clone()
+        }
+
+        fn set_fail(&self, value: bool) {
+            self.fail.store(value, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl RangeReader for RecordingReader {
+        fn read(&self, offset: u64, len: u64, dest: &mut [u8]) -> i32 {
+            self.reads.lock().unwrap().push((offset, len));
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return -1;
+            }
+            let start = offset as usize;
+            let end = match start.checked_add(len as usize) {
+                Some(value) => value,
+                None => return -1,
+            };
+            if end > self.data.len() || dest.len() < len as usize {
+                return -1;
+            }
+            dest[..len as usize].copy_from_slice(&self.data[start..end]);
+            0
+        }
+    }
+
+    #[test]
+    fn eic_compute_reads_are_within_plan() {
+        let bytes = current_a3_ion_bytes();
+        let file_len = bytes.len() as u64;
+        let reader = std::sync::Arc::new(RecordingReader::new(bytes));
+        let read_source = reader.clone();
+        let mut ion = ionic::ion::IonReader::open_remote(
+            move |range| read_range(&*read_source, range),
+            ReadOptions::default(),
+        )
+        .expect("open_remote failed");
+
+        let plan = plan_eic_ranges(&mut ion, 500.0, 0.0, 10.0, 20.0, 0.005)
+            .expect("plan_eic_ranges failed");
+        assert!(!plan.is_empty());
+
+        let planned_bytes: u64 = plan.iter().map(|range| range.length).sum();
+        assert!(planned_bytes < file_len);
+
+        reader.clear_reads();
+
+        let eic = calculate_eic_dispatcher(
+            &mut EicReader::Ion(&mut ion),
+            500.0,
+            FromTo { from: 0.0, to: 10.0 },
+            EicOptions { ppm_tolerance: 20.0, mz_tolerance: 0.005, ..Default::default() },
+        )
+        .expect("calculate_eic failed");
+        assert!(!eic.y.is_empty());
+
+        let compute_reads = reader.recorded();
+        assert!(
+            !compute_reads.is_empty(),
+            "compute recorded no reads — prefetch check would be vacuous"
+        );
+
+        for (offset, len) in &compute_reads {
+            let contained = plan.iter().any(|r| {
+                r.offset <= *offset && offset.saturating_add(*len) <= r.offset + r.length
+            });
+            assert!(
+                contained,
+                "compute read (offset={offset}, len={len}) is not contained in any planned range"
+            );
+        }
+    }
+
+    #[test]
+    fn open_remote_fails_cleanly_when_range_read_fails() {
+        let reader = std::sync::Arc::new(RecordingReader::new(current_a3_ion_bytes()));
+        reader.set_fail(true);
+        let read_source = reader.clone();
+        let result = ionic::ion::IonReader::open_remote(
+            move |range| read_range(&*read_source, range),
+            ReadOptions::default(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn eic_compute_errors_cleanly_when_data_read_fails() {
+        let reader = std::sync::Arc::new(RecordingReader::new(current_a3_ion_bytes()));
+        let read_source = reader.clone();
+        let mut ion = ionic::ion::IonReader::open_remote(
+            move |range| read_range(&*read_source, range),
+            ReadOptions::default(),
+        )
+        .expect("open_remote failed");
+
+        plan_eic_ranges(&mut ion, 500.0, 0.0, 10.0, 20.0, 0.005).expect("plan_eic_ranges failed");
+
+        reader.set_fail(true);
+
+        let result = calculate_eic_dispatcher(
+            &mut EicReader::Ion(&mut ion),
+            500.0,
+            FromTo { from: 0.0, to: 10.0 },
+            EicOptions { ppm_tolerance: 20.0, mz_tolerance: 0.005, ..Default::default() },
+        );
+        assert!(result.is_err());
     }
 }

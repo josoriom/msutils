@@ -1,4 +1,4 @@
-use ionic::ion::{IonError, IonResult, Query, QueryPayload};
+use ionic::ion::{IonError, IonResult, Range};
 use reqwest::{
     StatusCode,
     blocking::Client,
@@ -18,13 +18,13 @@ impl UrlSource {
         Ok(Self { client, url })
     }
 
-    pub fn read(&self, query: Query) -> IonResult<QueryPayload> {
-        let length = query.length();
+    pub fn read(&self, range: Range) -> IonResult<Vec<u8>> {
+        let length = range.length;
         if length == 0 {
-            return Ok(QueryPayload::new(Vec::new()));
+            return Ok(Vec::new());
         }
 
-        let offset = query.offset();
+        let offset = range.offset;
         let last_byte = offset
             .checked_add(length)
             .and_then(|value| value.checked_sub(1))
@@ -45,7 +45,7 @@ impl UrlSource {
             .map_err(|error| IonError::from(error.to_string()))?
             .to_vec();
         allow_len(&bytes, length)?;
-        Ok(QueryPayload::new(bytes))
+        Ok(bytes)
     }
 }
 

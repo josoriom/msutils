@@ -13,7 +13,7 @@ use crate::utilities::structs::ser_finite_f64;
 use crate::utilities::gpu::GpuContext;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use ionic::ion::{DecoderConfig, Ion, OwnedIon};
+use ionic::ion::{IonReader, ReadOptions};
 
 use crate::utilities::{
     calculate_eic::{
@@ -367,7 +367,7 @@ fn fill_all_missing(
                     path: path.to_string_lossy().to_string(),
                     source: e.to_string(),
                 })?;
-                let mut reader = EicReader::Ion(&mut *owned);
+                let mut reader = EicReader::Ion(&mut owned);
                 fill_sample(
                     slots,
                     sample_idx,
@@ -698,7 +698,7 @@ fn detect_features_per_sample(
                     path: path.to_string_lossy().to_string(),
                     source: e.to_string(),
                 })?;
-                let mut reader = EicReader::Ion(&mut *owned);
+                let mut reader = EicReader::Ion(&mut owned);
                 find_features(&mut reader, time_window, Some(config.clone()), cores).map_err(
                     |e| AlignmentError::FeatureDetection {
                         path: path.to_string_lossy().to_string(),
@@ -819,10 +819,10 @@ fn open_mzml(path: &Path) -> Result<MzML, String> {
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 #[inline]
-fn open_ion(path: &Path) -> Result<OwnedIon, String> {
-    Ion::open_file(
+fn open_ion(path: &Path) -> Result<IonReader, String> {
+    IonReader::open_file(
         path,
-        DecoderConfig {
+        ReadOptions {
             max_cached_bytes: ION_CACHE_BYTES,
             ..Default::default()
         },

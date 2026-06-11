@@ -1,4 +1,4 @@
-use ionic::ion::{ByteRange, Ion};
+use ionic::ion::{Range, IonReader};
 
 use crate::utilities::{
     calculate_eic::{
@@ -12,11 +12,11 @@ use crate::utilities::{
 };
 
 pub fn plan_peaks_ranges(
-    ion: &mut Ion,
+    ion: &mut IonReader,
     rois: &[EicRoi],
     from: f64,
     to: f64,
-) -> Result<Vec<ByteRange>, FastError> {
+) -> Result<Vec<Range>, FastError> {
     if rois.is_empty() {
         return Ok(Vec::new());
     }

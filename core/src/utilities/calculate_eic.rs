@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, sync::Arc};
 
-use ionic::ion::{ByteRange, Ion, IonError};
+use ionic::ion::{Range, IonReader, IonError};
 use ionic::mzml::structs::MzML;
 use ionic::{ScanSource, ScanSummary};
 use serde::Serialize;
@@ -58,7 +58,7 @@ impl Eic {
 }
 
 pub enum EicReader<'a> {
-    Ion(&'a mut Ion),
+    Ion(&'a mut IonReader),
     Mzml(&'a mut MzML),
 }
 
@@ -211,7 +211,7 @@ pub fn read_mz_window(
     match reader {
         EicReader::Ion(ion) => {
             let window = ion
-                .read_spectrum_mz_window_strict(scan_index, mz_from, mz_to)
+                .read_mz_range(scan_index, mz_from, mz_to)
                 .map_err(FastError::from)?;
             mz_out.extend_from_slice(&window.mz);
             intensity_out.extend_from_slice(&window.intensity);
@@ -241,13 +241,13 @@ pub fn read_mz_window(
 }
 
 pub fn plan_window_ranges(
-    ion: &mut Ion,
+    ion: &mut IonReader,
     from: f64,
     to: f64,
     mz_from: f64,
     mz_to: f64,
-) -> Result<Vec<ByteRange>, FastError> {
-    ion.require_spectrum_bounds().map_err(FastError::from)?;
+) -> Result<Vec<Range>, FastError> {
+    ion.require_bounds().map_err(FastError::from)?;
 
     let rt_from = from.min(to);
     let rt_to = from.max(to);
@@ -262,7 +262,7 @@ pub fn plan_window_ranges(
     let mut ranges = Vec::new();
     for scan_index in scan_indices {
         let scan_ranges = ion
-            .spectrum_mz_window_block_ranges_strict(scan_index, mz_from, mz_to)
+            .plan_mz_range(scan_index, mz_from, mz_to)
             .map_err(FastError::from)?;
         ranges.extend(scan_ranges);
     }
@@ -272,13 +272,13 @@ pub fn plan_window_ranges(
 }
 
 pub fn plan_eic_ranges(
-    ion: &mut Ion,
+    ion: &mut IonReader,
     target_mz: f64,
     from: f64,
     to: f64,
     ppm: f64,
     mz_tol: f64,
-) -> Result<Vec<ByteRange>, FastError> {
+) -> Result<Vec<Range>, FastError> {
     if !target_mz.is_finite() || target_mz <= 0.0 {
         return Err(FastError::InvalidRequest);
     }
@@ -297,7 +297,7 @@ pub fn plan_eic_ranges(
     plan_window_ranges(ion, from, to, target_mz - tolerance, target_mz + tolerance)
 }
 
-pub fn sort_and_dedup_ranges(ranges: &mut Vec<ByteRange>) {
+pub fn sort_and_dedup_ranges(ranges: &mut Vec<Range>) {
     ranges.sort_unstable_by_key(|range| (range.offset, range.length));
     ranges.dedup_by_key(|range| (range.offset, range.length));
 }

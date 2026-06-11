@@ -1,8 +1,8 @@
-use ionic::ion::ByteRange;
+use ionic::ion::Range;
 
 use crate::utilities::calculate_eic::FastError;
 
-pub type RangePlan<'a> = &'a mut dyn FnMut() -> Result<Vec<ByteRange>, FastError>;
+pub type RangePlan<'a> = &'a mut dyn FnMut() -> Result<Vec<Range>, FastError>;
 
 pub trait Prefetcher: Send + Sync {
     fn prefetch(&self, plan: RangePlan) -> Result<(), FastError>;
