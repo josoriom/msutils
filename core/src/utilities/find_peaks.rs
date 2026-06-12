@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use crate::utilities::calculate_baseline::{BaselineOptions, calculate_baseline};
 use crate::utilities::closest_index;
-use crate::utilities::find_noise_level::find_noise_level;
+use crate::utilities::find_noise_level::{find_noise_level, find_noise_level_san_plot};
 use crate::utilities::functions::gaussian_fn;
 use crate::utilities::get_boundaries::{Boundaries, BoundariesOptions, get_boundaries};
 use crate::utilities::math::xy_integration;
@@ -19,9 +19,19 @@ impl Default for ArtifactFilter {
     fn default() -> Self {
         Self {
             min_gaussian_r2: 0.30,
-            min_apex_to_boundary_ratio: 2.0,
+            min_apex_to_boundary_ratio: 0.0,
         }
     }
+}
+
+/// Which estimator computes the noise level when `auto_noise` is enabled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum NoiseMethod {
+    /// Width/intensity segment clustering (see `find_noise_level`).
+    FindNoiseLevel,
+    /// SAN plot method, Sheberstov et al. 2019 (see `find_noise_level_san_plot`).
+    #[default]
+    SanPlot,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -34,6 +44,7 @@ pub struct PeakFilter {
     pub auto_baseline: Option<bool>,
     pub allow_overlap: Option<bool>,
     pub min_snr: Option<f64>,
+    pub noise_method: Option<NoiseMethod>,
 }
 
 impl Default for PeakFilter {
@@ -47,6 +58,7 @@ impl Default for PeakFilter {
             auto_baseline: Some(false),
             allow_overlap: Some(false),
             min_snr: Some(1.0),
+            noise_method: None,
         }
     }
 }
@@ -139,7 +151,10 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
     };
 
     let noise: f64 = if auto_noise {
-        find_noise_level(&normalized_data.y).intensity
+        match filter.noise_method.unwrap_or_default() {
+            NoiseMethod::FindNoiseLevel => find_noise_level(&normalized_data.y).intensity,
+            NoiseMethod::SanPlot => find_noise_level_san_plot(&normalized_data.y).intensity,
+        }
     } else {
         filter.noise.unwrap_or_default()
     };

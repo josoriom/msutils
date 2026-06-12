@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::f64;
 
 use crate::utilities::cheminfo::kmeans;
+use crate::utilities::cheminfo::noise_san_plot::{NoiseSanPlotOptions, noise_san_plot};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Noise {
@@ -58,6 +59,36 @@ where
         }
     } else {
         Noise::default()
+    }
+}
+
+/// Noise level estimated with the SAN plot method.
+///
+/// SAN plot (Signal–Artifact–Noise), Sheberstov et al. 2019,
+/// <https://doi.org/10.1002/mrc.4882>. Returns the positive-side noise level as
+/// `intensity`; `width` is not defined for this method and is reported as 0.
+///
+/// Drop-in counterpart to [`find_noise_level`] so callers can pick either
+/// estimator and consume the same [`Noise`] shape.
+pub fn find_noise_level_san_plot<'a, Y>(y: Y) -> Noise
+where
+    Y: IntoF64Slice<'a>,
+{
+    let y = y.into_f64_slice();
+    if y.is_empty() {
+        return Noise::default();
+    }
+
+    let result = noise_san_plot(y.as_ref(), NoiseSanPlotOptions::default());
+    let intensity = if result.positive.is_finite() && result.positive > 0.0 {
+        result.positive
+    } else {
+        0.0
+    };
+
+    Noise {
+        width: 0,
+        intensity,
     }
 }
 
