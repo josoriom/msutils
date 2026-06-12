@@ -177,6 +177,17 @@ export class NodeBackend implements Backend {
     );
   }
 
+  getIonImage(
+    handle: FileHandle,
+    mz: number,
+    tolerance: number,
+    level: number,
+  ): any {
+    return parseAndCamelize(
+      this.native.getIonImage(handle, mz, tolerance, level) as string,
+    );
+  }
+
   findPeaks(
     x: Float64Array,
     y: Float64Array,

@@ -1,4 +1,5 @@
 pub mod calculate_eic;
+pub mod ion_image;
 pub use calculate_eic::{
     Eic, EicOptions, EicReader, FastError, ScanTime, calculate_eic, get_scan_times,
     plan_eic_ranges, read_mz_window, sort_and_dedup_ranges,
@@ -10,7 +11,7 @@ pub mod find_features;
 pub use find_features::find_features;
 
 pub mod find_noise_level;
-pub use find_noise_level::find_noise_level;
+pub use find_noise_level::{find_noise_level, find_noise_level_san_plot};
 
 pub mod find_peaks;
 

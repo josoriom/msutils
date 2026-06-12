@@ -301,6 +301,13 @@ class WasmExports {
     level: number,
     outBuf: number,
   ) => number;
+  readonly getIonImage: (
+    handle: number,
+    mz: number,
+    tolerance: number,
+    level: number,
+    outBuf: number,
+  ) => number;
   readonly parseIonUrl: ((sourceId: number, cacheBytes: number, outHandle: number) => number) | null;
   readonly planOpen: ((headerPtr: number, headerLen: number, outBuf: number) => number) | null;
   readonly planEic: (
@@ -339,6 +346,7 @@ class WasmExports {
     this.calculateBaseline = this.resolve(ex, ["calculate_baseline"]);
     this.findFeature = this.resolve(ex, ["find_feature"]);
     this.getScans = this.resolve(ex, ["get_scans"]);
+    this.getIonImage = this.resolve(ex, ["get_ion_image"]);
     this.parseIonUrl = typeof ex["parse_ion_url"] === "function"
       ? ex["parse_ion_url"] as unknown as (sourceId: number, cacheBytes: number, outHandle: number) => number
       : null;
@@ -717,6 +725,12 @@ class WasmApi {
   getScans(handle: number, queryType: number, a: number, b: number, level: number): any {
     const rc = this.fn.getScans(handle, queryType, a, b, level, this.jsonOutputSlot);
     if (rc !== 0) throw new Error("get_scans failed with code " + rc);
+    return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
+  }
+
+  getIonImage(handle: number, mz: number, tolerance: number, level: number): any {
+    const rc = this.fn.getIonImage(handle, mz, tolerance, level, this.jsonOutputSlot);
+    if (rc !== 0) throw new Error("get_ion_image failed with code " + rc);
     return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
   }
 
@@ -1110,6 +1124,15 @@ export class WasmBackend implements Backend {
     level: number,
   ): any {
     return this.getApi().getScans(handle as number, queryType, a, b, level);
+  }
+
+  getIonImage(
+    handle: FileHandle,
+    mz: number,
+    tolerance: number,
+    level: number,
+  ): any {
+    return this.getApi().getIonImage(handle as number, mz, tolerance, level);
   }
 
   findPeaks(

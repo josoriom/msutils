@@ -52,6 +52,13 @@ export interface Backend {
     level: number,
   ): any;
 
+  getIonImage(
+    handle: FileHandle,
+    mz: number,
+    tolerance: number,
+    level: number,
+  ): any;
+
   findPeaks(
     x: Float64Array,
     y: Float64Array,

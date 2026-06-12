@@ -1169,6 +1169,39 @@ pub unsafe extern "C" fn get_scans(
     }
 }
 
+/// Build a 2D ion image for a target m/z by summing intensity in `[target - tolerance, target + tolerance]`
+/// per spectrum and scattering the mean into a position_x/position_y grid. Writes a JSON object to `out`.
+///
+/// # Safety
+/// `h` must be a valid `ParsedFile` pointer from this library.
+/// `out` must be a valid writable `Buf` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn get_ion_image(
+    h: *mut ParsedFile,
+    target: f64,
+    tolerance: f64,
+    level: u8,
+    out: *mut Buf,
+) -> c_int {
+    if h.is_null() || out.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+    if !target.is_finite() || !tolerance.is_finite() || tolerance < 0.0 {
+        return ERR_INVALID_ARGS;
+    }
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let file = unsafe { &mut *h };
+        let image = crate::utilities::ion_image::compute_ion_image(file, target, tolerance, level);
+        let json = serde_json::to_string(&image).map_err(|_| ERR_ENCODE)?;
+        write_buf(out, json.into_bytes().into_boxed_slice());
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(c)) => c,
+        Err(_) => ERR_PANIC,
+    }
+}
+
 /// Find features across all samples in `dir` and write the result to `out`.
 ///
 /// # Safety
@@ -1663,6 +1696,7 @@ fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
             } else {
                 1.5
             }),
+            noise_method: None,
         }),
         baseline: Some(BaselineOptions {
             lambda: (o.lambda > 0).then_some(o.lambda as f64),

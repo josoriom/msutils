@@ -21,6 +21,8 @@ import type {
   CentroidScan,
   SpectrumSummary,
   ScanQuery,
+  IonImage,
+  IonImageOptions,
 } from "../types/types";
 
 export type {
@@ -41,6 +43,8 @@ export type {
   CentroidScan,
   SpectrumSummary,
   ScanQuery,
+  IonImage,
+  IonImageOptions,
 };
 
 const DEFAULTS = {
@@ -398,6 +402,32 @@ export function getScans(
     return raw?.length ? raw[0] : null;
   }
   return raw as CentroidScan[];
+}
+
+/**
+ * Build a 2D ion image for a target m/z. For each spectrum, intensity in
+ * `[mz - tolerance, mz + tolerance]` is summed, then the mean per
+ * `position_x`/`position_y` pixel is returned as a row-major grid.
+ *
+ * @param file - Loaded sample file.
+ * @param mz - Target m/z value.
+ * @param options.tolerance - Absolute m/z half-window in Da. Default 0.125.
+ * @param options.level - MS level (1 = MS1). Default 1.
+ * @returns Image with `width`, `height`, `minX`, `minY`, `minZ`, `maxZ`, `data` (mean intensity), and `counts` (spectra per pixel).
+ */
+export function getIonImage(
+  file: SampleFile,
+  mz: number,
+  options: IonImageOptions = {},
+): IonImage {
+  assertFile(file, "getIonImage");
+  const tolerance = options.tolerance ?? 0.125;
+  const level = options.level ?? 1;
+  if (!Number.isFinite(mz)) throw new RangeError("getIonImage: mz must be finite");
+  if (!Number.isFinite(tolerance) || tolerance < 0)
+    throw new RangeError("getIonImage: tolerance must be a non-negative number");
+  assertLevel(level, "getIonImage");
+  return backend().getIonImage(file._handle!, mz, tolerance, level) as IonImage;
 }
 
 /**

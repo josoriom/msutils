@@ -60,6 +60,7 @@ typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *,
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
 typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
+typedef int32_t (*fn_get_ion_image)(const MzML *, double, double, uint8_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 
 typedef struct
@@ -86,6 +87,7 @@ typedef struct
   fn_free_mzml free_mzml;
   fn_get_features get_features;
   fn_get_scans get_scans;
+  fn_get_ion_image get_ion_image;
 } msabi_t;
 
 static msabi_t ABI{};
@@ -280,6 +282,8 @@ static int abi_load(const char *path, const char **err)
     goto fail;
   if (resolve_required((void **)&ABI.get_scans, "get_scans"))
     goto fail;
+
+  ABI.get_ion_image = (fn_get_ion_image)DLSYM(LIB_HANDLE, "get_ion_image");
 
   ABI.find_noise_level = (fn_find_noise_level)DLSYM(LIB_HANDLE, "find_noise_level");
   ABI.free_ = (fn_free_)DLSYM(LIB_HANDLE, "free_");
@@ -1048,6 +1052,35 @@ static Napi::Value GetScans(const Napi::CallbackInfo &info)
   return TakeUtf8String(env, out.Out());
 }
 
+static Napi::Value GetIonImage(const Napi::CallbackInfo &info)
+{
+  Napi::Env env = info.Env();
+  if (!ThrowIfMissing(env, (void *)ABI.get_ion_image, "get_ion_image"))
+    return env.Undefined();
+
+  MzML *handle = GetHandle(info[0]);
+  if (!handle)
+    return ThrowRc(env, "UseAfterFree/InvalidHandle", 0);
+
+  if (info.Length() < 4 || !info[1].IsNumber() || !info[2].IsNumber() || !info[3].IsNumber())
+  {
+    Napi::TypeError::New(env, "expected: (External handle, number mz, number tolerance, number level)")
+        .ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
+
+  double mz = info[1].As<Napi::Number>().DoubleValue();
+  double tolerance = info[2].As<Napi::Number>().DoubleValue();
+  uint8_t level = (uint8_t)info[3].As<Napi::Number>().Uint32Value();
+
+  OwnedBuf out;
+  int32_t rc = ABI.get_ion_image(handle, mz, tolerance, level, out.Out());
+  if (rc != 0)
+    return ThrowRc(env, "get_ion_image", rc);
+
+  return TakeUtf8String(env, out.Out());
+}
+
 static Napi::Object Init(Napi::Env env, Napi::Object exports)
 {
   exports.Set("bind", Napi::Function::New(env, Bind));
@@ -1070,6 +1103,7 @@ static Napi::Object Init(Napi::Env env, Napi::Object exports)
   exports.Set("dispose", Napi::Function::New(env, DisposeMzML));
   exports.Set("getFeatures", Napi::Function::New(env, GetFeatures));
   exports.Set("getScans", Napi::Function::New(env, GetScans));
+  exports.Set("getIonImage", Napi::Function::New(env, GetIonImage));
   return exports;
 }
 
