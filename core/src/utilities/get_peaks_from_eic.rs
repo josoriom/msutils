@@ -1,4 +1,4 @@
-use ionic::ion::{Range, IonReader};
+use ionic::ion::{ByteRange, IonReader};
 
 use crate::utilities::{
     calculate_eic::{
@@ -16,7 +16,7 @@ pub fn plan_peaks_ranges(
     rois: &[EicRoi],
     from: f64,
     to: f64,
-) -> Result<Vec<Range>, FastError> {
+) -> Result<Vec<ByteRange>, FastError> {
     if rois.is_empty() {
         return Ok(Vec::new());
     }
@@ -91,7 +91,7 @@ pub fn get_peaks_from_eic<'a>(
     Ok(rois
         .iter()
         .enumerate()
-        .map(|(idx, r)| (r.id.as_str(), r.rt, r.mz, results[idx].clone()))
+        .map(|(idx, r)| (r.id.as_str(), r.rt, r.mz, results[idx]))
         .collect())
 }
 
@@ -226,7 +226,9 @@ fn compute_peaks_for_jobs(
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     if cores > 1 && jobs.len() > 1 {
         return run_with_cores(cores, || {
-            compute_peaks_for_jobs_parallel(jobs, eic_values, scan_count, rts_full, options, from_to)
+            compute_peaks_for_jobs_parallel(
+                jobs, eic_values, scan_count, rts_full, options, from_to,
+            )
         });
     }
 

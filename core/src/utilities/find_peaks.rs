@@ -24,13 +24,10 @@ impl Default for ArtifactFilter {
     }
 }
 
-/// Which estimator computes the noise level when `auto_noise` is enabled.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum NoiseMethod {
-    /// Width/intensity segment clustering (see `find_noise_level`).
-    FindNoiseLevel,
-    /// SAN plot method, Sheberstov et al. 2019 (see `find_noise_level_san_plot`).
     #[default]
+    FindNoiseLevel,
     SanPlot,
 }
 

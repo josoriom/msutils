@@ -14,7 +14,7 @@ use utilities::structs::ser_finite_f64;
 use ionic::{
     ScanSource, ScanSummary, bin_to_mzml as bin_to_mzml_rs,
     encoder::encode,
-    ion::{IonReader, ReadOptions, Range, plan_open_ranges},
+    ion::{ByteRange, IonReader, ReadOptions, open_ranges},
     mzml::structs::MzML,
     parse_mzml as parse_mzml_rs,
 };
@@ -23,7 +23,7 @@ use ionic::{
 use ionic::{
     IonWriter,
     ion::{WriteOptions, SectionStorage, FileWriter},
-    encoder::encode::DEFAULT_TARGET_SEGMENT_BYTES,
+    encoder::encode::DEFAULT_MZ_WINDOW,
     mzml::MzmlReader,
 };
 
@@ -187,7 +187,7 @@ pub trait RangeReader {
 
 pub fn read_range<R: RangeReader>(
     reader: &R,
-    range: ionic::ion::Range,
+    range: ionic::ion::ByteRange,
 ) -> ionic::ion::IonResult<Vec<u8>> {
     use ionic::ion::IonError;
 
@@ -557,7 +557,7 @@ pub unsafe extern "C" fn plan_open(
 
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let header = unsafe { slice::from_raw_parts(header_ptr, header_len) };
-        let ranges = plan_open_ranges(header).map_err(|_| ERR_FAST_PATH)?;
+        let ranges = open_ranges(header).map_err(|_| ERR_FAST_PATH)?;
         let bytes = pack_byte_ranges(&ranges);
         write_buf(out, bytes);
         Ok(())
@@ -697,11 +697,11 @@ pub unsafe extern "C" fn convert_mzml_file_to_ion_file(
             } else {
                 SectionStorage::Memory
             },
-            segment_size: DEFAULT_TARGET_SEGMENT_BYTES,
+            mz_window: DEFAULT_MZ_WINDOW,
         };
 
         {
-            let mut writer = IonWriter::begin(&mut output, config).map_err(|_| ERR_ENCODE)?;
+            let mut writer = IonWriter::create(&mut output, config).map_err(|_| ERR_ENCODE)?;
             writer.write_stream(&mut reader).map_err(|_| ERR_ENCODE)?;
         }
         output.flush().map_err(|_| ERR_ENCODE)?;
@@ -1659,7 +1659,7 @@ fn push_u64_le(bytes: &mut Vec<u8>, value: u64) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
 
-fn pack_byte_ranges(ranges: &[Range]) -> Box<[u8]> {
+fn pack_byte_ranges(ranges: &[ByteRange]) -> Box<[u8]> {
     let mut bytes = Vec::with_capacity(ranges.len() * 16);
     for range in ranges {
         push_u64_le(&mut bytes, range.offset);
@@ -1711,7 +1711,7 @@ fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
 mod tests {
     use super::*;
     use ionic::mzml::structs::{
-        BinaryData, BinaryDataArray, BinaryDataArrayList, CvParam, NumericType, Run, Scan,
+        BinaryDataArray, BinaryDataArrayList, CvParam, NumericArray, NumericType, Run, Scan,
         ScanList, Spectrum, SpectrumList,
     };
 
@@ -1736,7 +1736,7 @@ mod tests {
 
     #[test]
     fn zero_len_returns_empty_and_never_calls_read() {
-        use ionic::ion::Range;
+        use ionic::ion::ByteRange;
 
         let fake = FakeReader {
             data: vec![1, 2, 3, 4, 5],
@@ -1744,7 +1744,7 @@ mod tests {
             return_code: 0,
         };
 
-        let range = Range { offset: 100, length: 0 };
+        let range = ByteRange { offset: 100, length: 0 };
         let value = read_range(&fake, range).unwrap();
 
         assert_eq!(value.len(), 0);
@@ -1753,7 +1753,7 @@ mod tests {
 
     #[test]
     fn non_zero_read_calls_reader_once() {
-        use ionic::ion::Range;
+        use ionic::ion::ByteRange;
 
         let fake = FakeReader {
             data: vec![10, 20, 30, 40, 50],
@@ -1761,7 +1761,7 @@ mod tests {
             return_code: 0,
         };
 
-        let range = Range { offset: 0, length: 3 };
+        let range = ByteRange { offset: 0, length: 3 };
         let _result = read_range(&fake, range).unwrap();
 
         assert_eq!(fake.call_count.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -1769,7 +1769,7 @@ mod tests {
 
     #[test]
     fn negative_return_code_becomes_error() {
-        use ionic::ion::Range;
+        use ionic::ion::ByteRange;
 
         let fake = FakeReader {
             data: vec![10, 20, 30],
@@ -1777,7 +1777,7 @@ mod tests {
             return_code: -1,
         };
 
-        let range = Range { offset: 0, length: 2 };
+        let range = ByteRange { offset: 0, length: 2 };
         let result = read_range(&fake, range);
 
         assert!(result.is_err());
@@ -1785,7 +1785,7 @@ mod tests {
 
     #[test]
     fn len_exceeding_u32_max_returns_error_without_allocation() {
-        use ionic::ion::Range;
+        use ionic::ion::ByteRange;
 
         let fake = FakeReader {
             data: vec![1, 2, 3],
@@ -1793,7 +1793,7 @@ mod tests {
             return_code: 0,
         };
 
-        let range = Range { offset: 0, length: u64::from(u32::MAX) + 1 };
+        let range = ByteRange { offset: 0, length: u64::from(u32::MAX) + 1 };
         let result = read_range(&fake, range);
 
         assert!(result.is_err());
@@ -1855,7 +1855,7 @@ mod tests {
                 cv_param("MS:1000576", None),
             ],
             numeric_type: Some(NumericType::Float64),
-            binary: Some(BinaryData::F64(values)),
+            binary: Some(NumericArray::F64(values)),
             ..Default::default()
         }
     }
@@ -1961,11 +1961,11 @@ mod tests {
     #[test]
     fn pack_byte_ranges_writes_little_endian_pairs() {
         let ranges = vec![
-            Range {
+            ByteRange {
                 offset: 100,
                 length: 32,
             },
-            Range {
+            ByteRange {
                 offset: 5000,
                 length: 64,
             },

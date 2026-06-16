@@ -1,4 +1,6 @@
-use ionic::mzml::structs::{BinaryData, BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML};
+use ionic::mzml::structs::{
+    BinaryDataArray, BinaryDataArrayList, Chromatogram, MzML, NumericArray,
+};
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::{ThreadPoolBuilder, prelude::*};
@@ -146,12 +148,12 @@ fn bda_to_f64(bda: &BinaryDataArray) -> Vec<f64> {
         return Vec::new();
     };
     match bin {
-        BinaryData::F64(v) => v.clone(),
-        BinaryData::F32(v) => v.iter().map(|&x| x as f64).collect(),
-        BinaryData::F16(v) => v.iter().map(|&x| x as f64).collect(),
-        BinaryData::I64(v) => v.iter().map(|&x| x as f64).collect(),
-        BinaryData::I32(v) => v.iter().map(|&x| x as f64).collect(),
-        BinaryData::I16(v) => v.iter().map(|&x| x as f64).collect(),
+        NumericArray::F64(v) => v.clone(),
+        NumericArray::F32(v) => v.iter().map(|&x| x as f64).collect(),
+        NumericArray::F16(v) => v.iter().map(|&x| x as f64).collect(),
+        NumericArray::I64(v) => v.iter().map(|&x| x as f64).collect(),
+        NumericArray::I32(v) => v.iter().map(|&x| x as f64).collect(),
+        NumericArray::I16(v) => v.iter().map(|&x| x as f64).collect(),
     }
 }
 
@@ -161,12 +163,12 @@ fn bda_to_f32(bda: &BinaryDataArray) -> Vec<f32> {
         return Vec::new();
     };
     match bin {
-        BinaryData::F16(v) => v.iter().map(|&x| x as f32).collect(),
-        BinaryData::F32(v) => v.clone(),
-        BinaryData::F64(v) => v.iter().map(|&x| x as f32).collect(),
-        BinaryData::I64(v) => v.iter().map(|&x| x as f32).collect(),
-        BinaryData::I32(v) => v.iter().map(|&x| x as f32).collect(),
-        BinaryData::I16(v) => v.iter().map(|&x| x as f32).collect(),
+        NumericArray::F16(v) => v.iter().map(|&x| x as f32).collect(),
+        NumericArray::F32(v) => v.clone(),
+        NumericArray::F64(v) => v.iter().map(|&x| x as f32).collect(),
+        NumericArray::I64(v) => v.iter().map(|&x| x as f32).collect(),
+        NumericArray::I32(v) => v.iter().map(|&x| x as f32).collect(),
+        NumericArray::I16(v) => v.iter().map(|&x| x as f32).collect(),
     }
 }
 

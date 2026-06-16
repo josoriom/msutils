@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use ionic::ion::{Range, IonResult, plan_open_ranges};
+use ionic::ion::{ByteRange, IonResult, open_ranges};
 use rayon::prelude::*;
 
 use crate::prefetch::{Prefetcher, RangePlan};
@@ -62,7 +62,7 @@ impl RangeCache {
         stored.insert(at, entry);
     }
 
-    fn missing(&self, wanted: &[Range]) -> Vec<Range> {
+    fn missing(&self, wanted: &[ByteRange]) -> Vec<ByteRange> {
         wanted
             .iter()
             .filter(|range| self.get(range.offset, range.length).is_none())
@@ -75,7 +75,7 @@ impl RangeCache {
     }
 }
 
-fn merge_ranges(ranges: &[Range]) -> Vec<Range> {
+fn merge_ranges(ranges: &[ByteRange]) -> Vec<ByteRange> {
     if ranges.is_empty() {
         return Vec::new();
     }
@@ -110,7 +110,7 @@ impl RemoteReader {
         })
     }
 
-    pub fn read(&self, range: Range) -> IonResult<Vec<u8>> {
+    pub fn read(&self, range: ByteRange) -> IonResult<Vec<u8>> {
         let length = range.length;
         if length == 0 {
             return Ok(Vec::new());
@@ -122,8 +122,8 @@ impl RemoteReader {
     }
 
     pub fn prefetch_open(&self) -> IonResult<()> {
-        let header = self.source.read(Range { offset: 0, length: HEADER_LENGTH })?;
-        let ranges = plan_open_ranges(&header)?;
+        let header = self.source.read(ByteRange { offset: 0, length: HEADER_LENGTH })?;
+        let ranges = open_ranges(&header)?;
         self.cache.add(0, header);
         self.fetch_into_cache(&ranges)
     }
@@ -132,12 +132,12 @@ impl RemoteReader {
         self.cache.clear();
     }
 
-    fn fetch_into_cache(&self, ranges: &[Range]) -> IonResult<()> {
+    fn fetch_into_cache(&self, ranges: &[ByteRange]) -> IonResult<()> {
         let merged = merge_ranges(&self.cache.missing(ranges));
         let fetched: IonResult<Vec<(u64, Vec<u8>)>> = merged
             .par_iter()
             .map(|range| {
-                let bytes = self.source.read(Range { offset: range.offset, length: range.length })?;
+                let bytes = self.source.read(ByteRange { offset: range.offset, length: range.length })?;
                 Ok((range.offset, bytes))
             })
             .collect();
@@ -161,8 +161,8 @@ impl Prefetcher for RemoteReader {
 mod tests {
     use super::*;
 
-    fn range(offset: u64, length: u64) -> Range {
-        Range { offset, length }
+    fn range(offset: u64, length: u64) -> ByteRange {
+        ByteRange { offset, length }
     }
 
     #[test]

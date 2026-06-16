@@ -1,6 +1,6 @@
 use std::{cmp::Ordering, sync::Arc};
 
-use ionic::ion::{IonError, IonReader, Range};
+use ionic::ion::{ByteRange, IonError, IonReader, Range};
 use ionic::mzml::structs::MzML;
 use ionic::{ScanSource, ScanSummary};
 use serde::Serialize;
@@ -8,6 +8,20 @@ use serde::Serialize;
 use crate::utilities::structs::{FromTo, Peak, ser_finite_f64};
 
 pub(crate) const MS1_LEVEL: u8 = 1;
+
+fn rt_to_minutes(rt: f64, unit: ionic::TimeUnit) -> f64 {
+    match unit {
+        ionic::TimeUnit::Second => rt / 60.0,
+        ionic::TimeUnit::Millisecond => rt / 60_000.0,
+        ionic::TimeUnit::Minute | ionic::TimeUnit::Other => rt,
+    }
+}
+
+fn scan_in_minutes(mut summary: ScanSummary) -> ScanSummary {
+    summary.rt = rt_to_minutes(summary.rt, summary.rt_unit);
+    summary.rt_unit = ionic::TimeUnit::Minute;
+    summary
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct EicOptions {
@@ -184,6 +198,7 @@ pub fn get_scan_times(
     match reader {
         EicReader::Ion(ion) => {
             ion.for_each_summary(&mut |idx, summary| {
+                let summary = scan_in_minutes(summary);
                 if summary.rt >= rt_min && summary.rt <= rt_max && summary.ms_level == ms_level {
                     result.push(ScanTime {
                         index: idx,
@@ -194,6 +209,7 @@ pub fn get_scan_times(
         }
         EicReader::Mzml(mzml) => {
             mzml.for_each_summary(&mut |idx, summary| {
+                let summary = scan_in_minutes(summary);
                 if summary.rt >= rt_min && summary.rt <= rt_max && summary.ms_level == ms_level {
                     result.push(ScanTime {
                         index: idx,
@@ -220,10 +236,10 @@ pub fn read_mz_window(
     match reader {
         EicReader::Ion(ion) => {
             let window = ion
-                .read_mz_range(scan_index, mz_from, mz_to)
+                .read_window(scan_index, Range { from: mz_from, to: mz_to })
                 .map_err(FastError::from)?;
-            mz_out.extend_from_slice(&window.mz);
-            intensity_out.extend_from_slice(&window.intensity);
+            *mz_out = window.x.to_f64();
+            *intensity_out = window.y.to_f64();
             Ok(())
         }
         EicReader::Mzml(mzml) => {
@@ -255,7 +271,7 @@ pub fn plan_window_ranges(
     to: f64,
     mz_from: f64,
     mz_to: f64,
-) -> Result<Vec<Range>, FastError> {
+) -> Result<Vec<ByteRange>, FastError> {
     ion.require_bounds().map_err(FastError::from)?;
 
     let rt_from = from.min(to);
@@ -263,6 +279,7 @@ pub fn plan_window_ranges(
 
     let mut scan_indices = Vec::new();
     ion.for_each_summary(&mut |scan_index, summary| {
+        let summary = scan_in_minutes(summary);
         if summary.rt >= rt_from && summary.rt <= rt_to && summary.ms_level == MS1_LEVEL {
             scan_indices.push(scan_index);
         }
@@ -271,7 +288,7 @@ pub fn plan_window_ranges(
     let mut ranges = Vec::new();
     for scan_index in scan_indices {
         let scan_ranges = ion
-            .plan_mz_range(scan_index, mz_from, mz_to)
+            .byte_ranges(scan_index, Range { from: mz_from, to: mz_to })
             .map_err(FastError::from)?;
         ranges.extend(scan_ranges);
     }
@@ -287,7 +304,7 @@ pub fn plan_eic_ranges(
     to: f64,
     ppm: f64,
     mz_tol: f64,
-) -> Result<Vec<Range>, FastError> {
+) -> Result<Vec<ByteRange>, FastError> {
     if !target_mz.is_finite() || target_mz <= 0.0 {
         return Err(FastError::InvalidRequest);
     }
@@ -306,7 +323,7 @@ pub fn plan_eic_ranges(
     plan_window_ranges(ion, from, to, target_mz - tolerance, target_mz + tolerance)
 }
 
-pub fn sort_and_dedup_ranges(ranges: &mut Vec<Range>) {
+pub fn sort_and_dedup_ranges(ranges: &mut Vec<ByteRange>) {
     ranges.sort_unstable_by_key(|range| (range.offset, range.length));
     ranges.dedup_by_key(|range| (range.offset, range.length));
 }
@@ -420,6 +437,7 @@ fn get_by_rt_range(
     let rt_max = time_unit.to_minutes(range.from.max(range.to));
     let mut candidates: Vec<(usize, ScanSummary)> = Vec::new();
     source.for_each_summary(&mut |index, summary| {
+        let summary = scan_in_minutes(summary);
         if ms_level != 0 && summary.ms_level != ms_level {
             return;
         }
@@ -439,6 +457,7 @@ fn get_closest_by_rt(
 ) -> (Vec<f64>, Vec<CentroidScan>) {
     let mut by_dist: Vec<(f64, usize, ScanSummary)> = Vec::new();
     source.for_each_summary(&mut |index, summary| {
+        let summary = scan_in_minutes(summary);
         if ms_level != 0 && summary.ms_level != ms_level {
             return;
         }
@@ -460,6 +479,7 @@ fn get_by_mz_range(
     let mz_max = range.from.max(range.to);
     let mut candidates: Vec<(usize, ScanSummary)> = Vec::new();
     source.for_each_summary(&mut |index, summary| {
+        let summary = scan_in_minutes(summary);
         if ms_level != 0 && summary.ms_level != ms_level {
             return;
         }
@@ -480,6 +500,7 @@ fn get_closest_by_mz(
 ) -> (Vec<f64>, Vec<CentroidScan>) {
     let mut by_dist: Vec<(f64, usize, ScanSummary)> = Vec::new();
     source.for_each_summary(&mut |index, summary| {
+        let summary = scan_in_minutes(summary);
         if ms_level != 0 && summary.ms_level != ms_level {
             return;
         }
@@ -663,6 +684,7 @@ mod tests {
         (
             ScanSummary {
                 rt,
+                rt_unit: ionic::TimeUnit::Minute,
                 ms_level,
                 polarity: 0,
                 selected_ion_mz,

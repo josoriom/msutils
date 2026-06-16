@@ -1,4 +1,4 @@
-use ionic::ion::{IonError, IonResult, Range};
+use ionic::ion::{ByteRange, IonError, IonResult};
 use reqwest::{
     StatusCode,
     blocking::Client,
@@ -18,7 +18,7 @@ impl UrlSource {
         Ok(Self { client, url })
     }
 
-    pub fn read(&self, range: Range) -> IonResult<Vec<u8>> {
+    pub fn read(&self, range: ByteRange) -> IonResult<Vec<u8>> {
         let length = range.length;
         if length == 0 {
             return Ok(Vec::new());

@@ -691,7 +691,7 @@ mod tests {
                 cv("MS:1000576", None), // no compression
             ],
             numeric_type: Some(NumericType::Float64),
-            binary: Some(BinaryData::F64(values)),
+            binary: Some(NumericArray::F64(values)),
             ..Default::default()
         }
     }
