@@ -1,85 +1,138 @@
-use ionic::ScanSource;
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use rayon::{ThreadPoolBuilder, prelude::*};
+use ionic::ion::{ByteRange, IonReader};
 
 use crate::utilities::{
     calculate_eic::{
-        CentroidScan, EicOptions, ScanQuery, TimeUnit, get_eic_for_mz, get_scans, lower_bound,
-        upper_bound,
+        EicOptions, EicReader, FastError, MS1_LEVEL, get_scan_times, lower_bound, mz_tolerance_for,
+        plan_window_ranges, read_mz_window, upper_bound,
     },
     find_noise_level,
-    find_peaks::{PeakFilter, FindPeaksOptions},
+    find_peaks::{FindPeaksOptions, PeakFilter},
     get_peak::get_peak,
     structs::{DataXY, EicRoi, FromTo, Peak, Roi},
 };
 
+pub fn plan_peaks_ranges(
+    ion: &mut IonReader,
+    rois: &[EicRoi],
+    from: f64,
+    to: f64,
+) -> Result<Vec<ByteRange>, FastError> {
+    if rois.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let options = EicOptions::default();
+    let mut mz_from = f64::INFINITY;
+    let mut mz_to = f64::NEG_INFINITY;
+    for roi in rois {
+        let tolerance = mz_tolerance_for(roi.mz, options);
+        mz_from = mz_from.min(roi.mz - tolerance);
+        mz_to = mz_to.max(roi.mz + tolerance);
+    }
+
+    plan_window_ranges(ion, from, to, mz_from, mz_to)
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use crate::utilities::parallel::run_with_cores;
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::prelude::*;
+
+struct PeakJob {
+    roi_idx: usize,
+    rt: f64,
+    half_width: f64,
+    mz_from: f64,
+    mz_to: f64,
+}
+
 pub fn get_peaks_from_eic<'a>(
-    source: &mut impl ScanSource,
+    reader: &mut EicReader,
     from_to: FromTo,
     rois: &'a [EicRoi],
     options: Option<FindPeaksOptions>,
     cores: usize,
-) -> Option<Vec<(&'a str, f64, f64, Peak)>> {
-    let (rts_full, scans_full) =
-        get_scans(source, ScanQuery::RtRange(from_to), TimeUnit::Minutes, 1);
-
-    if rts_full.len() < 3 || scans_full.is_empty() {
-        return Some(
-            rois.iter()
-                .map(|r| (r.id.as_str(), r.rt, r.mz, Peak::default()))
-                .collect(),
-        );
+) -> Result<Vec<(&'a str, f64, f64, Peak)>, FastError> {
+    if rois.is_empty() {
+        return Ok(Vec::new());
     }
 
-    let f = |roi: &'a EicRoi| -> (&'a str, f64, f64, Peak) {
-        compute_one(roi, &options, &rts_full, &scans_full, from_to)
-    };
+    let scan_times = get_scan_times(reader, from_to.from, from_to.to, MS1_LEVEL);
 
-    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-    {
-        return Some(rois.iter().map(f).collect());
+    if scan_times.len() < 3 {
+        return Ok(rois
+            .iter()
+            .map(|r| (r.id.as_str(), r.rt, r.mz, Peak::default()))
+            .collect());
     }
 
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    {
-        if cores <= 1 || rois.len() < 2 {
-            return Some(rois.iter().map(f).collect());
-        }
-        let pool = ThreadPoolBuilder::new().num_threads(cores).build().ok()?;
-        Some(pool.install(|| rois.par_iter().map(f).collect()))
+    let rts_full: Vec<f64> = scan_times.iter().map(|s| s.rt).collect();
+    let scan_count = scan_times.len();
+
+    let jobs = build_peak_jobs(rois);
+    let eic_values = read_eics_one_pass(reader, &scan_times, &jobs)?;
+
+    let peaks = compute_peaks_for_jobs(
+        &jobs,
+        &eic_values,
+        scan_count,
+        &rts_full,
+        &options,
+        from_to,
+        cores,
+    );
+
+    let mut results = vec![Peak::default(); rois.len()];
+    for (roi_idx, peak) in peaks {
+        results[roi_idx] = peak;
     }
+
+    Ok(rois
+        .iter()
+        .enumerate()
+        .map(|(idx, r)| (r.id.as_str(), r.rt, r.mz, results[idx]))
+        .collect())
 }
 
-#[inline]
-fn compute_one<'a>(
-    roi: &'a EicRoi,
-    options: &Option<FindPeaksOptions>,
-    rts_full: &[f64],
-    scans_full: &[CentroidScan],
-    from_to: FromTo,
-) -> (&'a str, f64, f64, Peak) {
-    const HALF_WIDTH: f64 = 0.5;
-    let local_from = (roi.rt - HALF_WIDTH).max(from_to.from);
-    let local_to = (roi.rt + HALF_WIDTH).min(from_to.to);
-    if local_to <= local_from {
-        return (&roi.id, roi.rt, roi.mz, Peak::default());
-    }
-
+fn build_peak_jobs(rois: &[EicRoi]) -> Vec<PeakJob> {
     let eic_opts = EicOptions::default();
+    rois.iter()
+        .enumerate()
+        .map(|(idx, roi)| {
+            let tolerance = mz_tolerance_for(roi.mz, eic_opts);
+            PeakJob {
+                roi_idx: idx,
+                rt: roi.rt,
+                half_width: roi.half_width,
+                mz_from: roi.mz - tolerance,
+                mz_to: roi.mz + tolerance,
+            }
+        })
+        .collect()
+}
+
+fn compute_peak_for_job(
+    job: &PeakJob,
+    y_full: &[f64],
+    rts_full: &[f64],
+    options: &Option<FindPeaksOptions>,
+    from_to: FromTo,
+) -> Peak {
+    const HALF_WIDTH: f64 = 0.5;
+    let local_from = (job.rt - HALF_WIDTH).max(from_to.from);
+    let local_to = (job.rt + HALF_WIDTH).min(from_to.to);
+    if local_to <= local_from {
+        return Peak::default();
+    }
 
     let start = lower_bound(rts_full, local_from);
     let end = upper_bound(rts_full, local_to).min(rts_full.len());
     if end.saturating_sub(start) < 3 {
-        return (&roi.id, roi.rt, roi.mz, Peak::default());
+        return Peak::default();
     }
 
-    let local_rts = &rts_full[start..end];
-    let local_scans = &scans_full[start..end];
-
-    let y_full = get_eic_for_mz(scans_full, rts_full.len(), roi.mz, eic_opts);
-
-    let noise = find_noise_level(&y_full);
+    let noise = find_noise_level(y_full);
     let max_y = y_full[start..end]
         .iter()
         .copied()
@@ -91,9 +144,7 @@ fn compute_one<'a>(
     };
 
     let mut local_options = options.clone().unwrap_or_default();
-    let filter = local_options
-        .filter
-        .get_or_insert_with(Default::default);
+    let filter = local_options.filter.get_or_insert_with(Default::default);
     let mut min_peak_width_points = filter.min_peak_width_points.unwrap_or_default();
     let mut min_intensity = filter.min_intensity.unwrap_or_default();
     if snr <= 5.0 {
@@ -107,33 +158,140 @@ fn compute_one<'a>(
     });
 
     let roi_hint = Roi {
-        rt: roi.rt,
-        half_width: roi.half_width,
+        rt: job.rt,
+        half_width: job.half_width,
     };
 
-    let pk = get_peak(
+    get_peak(
         &DataXY {
             x: rts_full.to_vec(),
-            y: y_full,
+            y: y_full.to_vec(),
         },
         &roi_hint,
-        Some(local_options.clone()),
+        Some(local_options),
     )
-    .or_else(|| {
-        let y_local = get_eic_for_mz(local_scans, local_rts.len(), roi.mz, eic_opts);
-        if y_local.len() < 3 {
-            return None;
-        }
-        get_peak(
-            &DataXY {
-                x: local_rts.to_vec(),
-                y: y_local,
-            },
-            &roi_hint,
-            Some(local_options),
-        )
-    })
-    .unwrap_or_default();
+    .unwrap_or_default()
+}
 
-    (&roi.id, roi.rt, roi.mz, pk)
+fn read_eics_one_pass(
+    reader: &mut EicReader,
+    scan_times: &[crate::utilities::calculate_eic::ScanTime],
+    jobs: &[PeakJob],
+) -> Result<Vec<f64>, FastError> {
+    let scan_count = scan_times.len();
+    let mut eic_values = vec![0.0; jobs.len() * scan_count];
+
+    let mz_from = jobs
+        .iter()
+        .map(|job| job.mz_from)
+        .fold(f64::INFINITY, f64::min);
+    let mz_to = jobs
+        .iter()
+        .map(|job| job.mz_to)
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    let mut mz_values = Vec::new();
+    let mut intensity_values = Vec::new();
+
+    for (scan_position, scan_time) in scan_times.iter().enumerate() {
+        read_mz_window(
+            reader,
+            scan_time.index,
+            mz_from,
+            mz_to,
+            &mut mz_values,
+            &mut intensity_values,
+        )?;
+
+        for (job_index, job) in jobs.iter().enumerate() {
+            let start = lower_bound(&mz_values, job.mz_from);
+            let end = upper_bound(&mz_values, job.mz_to).min(mz_values.len());
+            eic_values[job_index * scan_count + scan_position] =
+                intensity_values[start..end].iter().sum();
+        }
+    }
+
+    Ok(eic_values)
+}
+
+fn compute_peaks_for_jobs(
+    jobs: &[PeakJob],
+    eic_values: &[f64],
+    scan_count: usize,
+    rts_full: &[f64],
+    options: &Option<FindPeaksOptions>,
+    from_to: FromTo,
+    cores: usize,
+) -> Vec<(usize, Peak)> {
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    if cores > 1 && jobs.len() > 1 {
+        return run_with_cores(cores, || {
+            compute_peaks_for_jobs_parallel(
+                jobs, eic_values, scan_count, rts_full, options, from_to,
+            )
+        });
+    }
+
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    let _ = cores;
+
+    compute_peaks_for_jobs_serial(jobs, eic_values, scan_count, rts_full, options, from_to)
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+fn compute_peaks_for_jobs_parallel(
+    jobs: &[PeakJob],
+    eic_values: &[f64],
+    scan_count: usize,
+    rts_full: &[f64],
+    options: &Option<FindPeaksOptions>,
+    from_to: FromTo,
+) -> Vec<(usize, Peak)> {
+    (0..jobs.len())
+        .into_par_iter()
+        .map(|job_index| {
+            compute_peak_for_job_index(
+                job_index, jobs, eic_values, scan_count, rts_full, options, from_to,
+            )
+        })
+        .collect()
+}
+
+fn compute_peaks_for_jobs_serial(
+    jobs: &[PeakJob],
+    eic_values: &[f64],
+    scan_count: usize,
+    rts_full: &[f64],
+    options: &Option<FindPeaksOptions>,
+    from_to: FromTo,
+) -> Vec<(usize, Peak)> {
+    (0..jobs.len())
+        .map(|job_index| {
+            compute_peak_for_job_index(
+                job_index, jobs, eic_values, scan_count, rts_full, options, from_to,
+            )
+        })
+        .collect()
+}
+
+fn compute_peak_for_job_index(
+    job_index: usize,
+    jobs: &[PeakJob],
+    eic_values: &[f64],
+    scan_count: usize,
+    rts_full: &[f64],
+    options: &Option<FindPeaksOptions>,
+    from_to: FromTo,
+) -> (usize, Peak) {
+    let job = &jobs[job_index];
+    let row_start = job_index * scan_count;
+    let row_end = row_start + scan_count;
+    let peak = compute_peak_for_job(
+        job,
+        &eic_values[row_start..row_end],
+        rts_full,
+        options,
+        from_to,
+    );
+    (job.roi_idx, peak)
 }

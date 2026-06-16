@@ -1,9 +1,11 @@
-import type { Backend } from "./backend";
+import type { Backend, FileHandle } from "./backend";
 import { SampleFile } from "./sampleFile";
 import { toCores, toUint8 } from "./shared";
 import { encodeTargetIds, unpackTargets } from "./pack";
+import { getIonSource, type IonSource } from "./ionSource";
 import type {
   BinaryInput,
+  IonInput,
   PeakOptions,
   BaselineOptions,
   Peak,
@@ -19,10 +21,13 @@ import type {
   CentroidScan,
   SpectrumSummary,
   ScanQuery,
+  IonImage,
+  IonImageOptions,
 } from "../types/types";
 
 export type {
   BinaryInput,
+  IonInput,
   PeakOptions,
   BaselineOptions,
   Peak,
@@ -38,6 +43,8 @@ export type {
   CentroidScan,
   SpectrumSummary,
   ScanQuery,
+  IonImage,
+  IonImageOptions,
 };
 
 const DEFAULTS = {
@@ -89,6 +96,18 @@ function assertFile(file: SampleFile, caller: string): void {
   }
 }
 
+function checkCacheSize(cacheSize: number): void {
+  if (
+    !Number.isFinite(cacheSize) ||
+    !Number.isInteger(cacheSize) ||
+    cacheSize < 0
+  ) {
+    throw new TypeError(
+      "parseIon: maxCacheSize must be a non-negative integer",
+    );
+  }
+}
+
 /**
  * Parse an mzML file buffer into a {@link SampleFile}.
  *
@@ -96,31 +115,40 @@ function assertFile(file: SampleFile, caller: string): void {
  * @returns Loaded sample file.
  */
 export async function parseMzML(data: BinaryInput): Promise<SampleFile> {
-  const b = await backendAsync();
-  const handle = b.parseMzML(toUint8(data));
-  return new SampleFile(handle, b);
+  const selected_backend = await backendAsync();
+  const file_handle = selected_backend.parseMzML(toUint8(data));
+  return new SampleFile(file_handle, selected_backend);
 }
 
-/**
- * Parse an ion binary buffer into a {@link SampleFile}.
- *
- * @param data - Raw ion file bytes.
- * @param options.maxCacheSize - Maximum scan cache size. Default 0 (unlimited).
- * @returns Loaded sample file.
- */
 export async function parseIon(
-  data: BinaryInput,
+  source: IonInput,
   options: { maxCacheSize?: number } = {},
 ): Promise<SampleFile> {
-  const { maxCacheSize = 0 } = options;
-  if (maxCacheSize < 0 || !Number.isFinite(maxCacheSize)) {
-    throw new TypeError(
-      "parseIon: maxCacheSize must be a non-negative integer",
-    );
+  const cacheSize = options.maxCacheSize ?? 0;
+  checkCacheSize(cacheSize);
+  const ionSource = getIonSource(source);
+
+  const selectedBackend = await backendAsync();
+  const fileHandle = await parseIonSource(
+    selectedBackend,
+    ionSource,
+    cacheSize,
+  );
+  return new SampleFile(fileHandle, selectedBackend);
+}
+
+function parseIonSource(
+  backend: Backend,
+  source: IonSource,
+  cacheSize: number,
+): FileHandle | Promise<FileHandle> {
+  if (source.kind === "path") {
+    return backend.parseIonPath(source.path, cacheSize);
   }
-  const b = await backendAsync();
-  const handle = b.parseBin(toUint8(data), maxCacheSize);
-  return new SampleFile(handle, b);
+  if (source.kind === "url") {
+    return backend.parseIonUrl(source.url, cacheSize);
+  }
+  return backend.parseIonBuffer(source.bytes, cacheSize);
 }
 
 /**
@@ -184,13 +212,13 @@ export function mzmlToIon(
  * @param mzTol - Absolute m/z tolerance in Da. Default 0.005.
  * @returns Object with `x` (retention times) and `y` (intensities) arrays.
  */
-export function calculateEic(
+export async function calculateEic(
   file: SampleFile,
   mz: number,
   fromTo: FromTo,
   ppmTol = 20,
   mzTol = 0.005,
-): { x: Float64Array; y: Float64Array } {
+): Promise<{ x: Float64Array; y: Float64Array }> {
   assertFile(file, "calculateEic");
   if (typeof mz !== "number" || !Number.isFinite(mz) || mz <= 0) {
     throw new RangeError(
@@ -201,7 +229,15 @@ export function calculateEic(
   if (!Number.isFinite(from) || !Number.isFinite(to)) {
     throw new RangeError("calculateEic: from and to must be finite numbers");
   }
-  return backend().calculateEic(file._handle!, mz, from, to, ppmTol, mzTol);
+
+  return await file._backend.calculateEic(
+    file._handle!,
+    mz,
+    from,
+    to,
+    ppmTol,
+    mzTol,
+  );
 }
 
 /**
@@ -366,6 +402,32 @@ export function getScans(
     return raw?.length ? raw[0] : null;
   }
   return raw as CentroidScan[];
+}
+
+/**
+ * Build a 2D ion image for a target m/z. For each spectrum, intensity in
+ * `[mz - tolerance, mz + tolerance]` is summed, then the mean per
+ * `position_x`/`position_y` pixel is returned as a row-major grid.
+ *
+ * @param file - Loaded sample file.
+ * @param mz - Target m/z value.
+ * @param options.tolerance - Absolute m/z half-window in Da. Default 0.125.
+ * @param options.level - MS level (1 = MS1). Default 1.
+ * @returns Image with `width`, `height`, `minX`, `minY`, `minZ`, `maxZ`, `data` (mean intensity), and `counts` (spectra per pixel).
+ */
+export function getIonImage(
+  file: SampleFile,
+  mz: number,
+  options: IonImageOptions = {},
+): IonImage {
+  assertFile(file, "getIonImage");
+  const tolerance = options.tolerance ?? 0.125;
+  const level = options.level ?? 1;
+  if (!Number.isFinite(mz)) throw new RangeError("getIonImage: mz must be finite");
+  if (!Number.isFinite(tolerance) || tolerance < 0)
+    throw new RangeError("getIonImage: tolerance must be a non-negative number");
+  assertLevel(level, "getIonImage");
+  return backend().getIonImage(file._handle!, mz, tolerance, level) as IonImage;
 }
 
 /**

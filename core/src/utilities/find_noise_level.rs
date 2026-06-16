@@ -2,6 +2,7 @@ use std::borrow::Cow;
 use std::f64;
 
 use crate::utilities::cheminfo::kmeans;
+use crate::utilities::cheminfo::noise_san_plot::{NoiseSanPlotOptions, noise_san_plot};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Noise {
@@ -23,20 +24,22 @@ where
     Y: IntoF64Slice<'a>,
 {
     let y = y.into_f64_slice();
-    let min_y = x_min_value(&y);
-    let segments = scan_segments(y.as_ref(), min_y);
+    let floor = min_value(&y);
+    let segments = scan_segments(y.as_ref(), floor);
     if segments.is_empty() {
         return Noise::default();
+    }
+    if segments.len() == 1 {
+        return Noise {
+            width: segments[0].width,
+            intensity: segments[0].intensity,
+        };
     }
 
     let params = ClusterParams::default();
     let labels = cluster_intensities(&segments, params);
 
-    let mut counts = [0usize; 2];
-    for &label in &labels {
-        counts[label] += 1;
-    }
-    let noise_label = if counts[0] >= counts[1] { 0 } else { 1 };
+    let noise_label = 0usize;
 
     let mut max_in_noise = f64::NEG_INFINITY;
     let mut max_noise_width = 0usize;
@@ -58,6 +61,36 @@ where
         }
     } else {
         Noise::default()
+    }
+}
+
+pub fn find_noise_level_san_plot<'a, Y>(y: Y) -> Noise
+where
+    Y: IntoF64Slice<'a>,
+{
+    let y = y.into_f64_slice();
+    if y.is_empty() {
+        return Noise::default();
+    }
+
+    let result = noise_san_plot(
+        y.as_ref(),
+        NoiseSanPlotOptions {
+            cut_off: Some(0.5),
+            refine: false,
+            fix_offset: false,
+            ..Default::default()
+        },
+    );
+    let intensity = if result.positive.is_finite() && result.positive > 0.0 {
+        result.positive
+    } else {
+        0.0
+    };
+
+    Noise {
+        width: 0,
+        intensity,
     }
 }
 
@@ -169,27 +202,26 @@ fn cluster_intensities(points: &[Segment], params: ClusterParams) -> Vec<usize> 
         return Vec::new();
     }
 
+    let n = points.len() as f64;
     let mut w_sum = 0.0;
     let mut i_sum = 0.0;
-    let mut w_sq_sum = 0.0;
-    let mut i_sq_sum = 0.0;
-    let n = points.len() as f64;
-
     for seg in points {
-        let lw = log1p_safe(seg.width as f64);
-        let li = log1p_safe(seg.intensity);
-        w_sum += lw;
-        i_sum += li;
-        w_sq_sum += lw * lw;
-        i_sq_sum += li * li;
+        w_sum += log1p_safe(seg.width as f64);
+        i_sum += log1p_safe(seg.intensity);
     }
-
     let m_w = w_sum / n;
     let m_i = i_sum / n;
 
-    // Variance = E[X^2] - (E[X])^2
-    let s_w = ((w_sq_sum / n) - (m_w * m_w)).sqrt().max(1e-6);
-    let s_i = ((i_sq_sum / n) - (m_i * m_i)).sqrt().max(1e-6);
+    let mut w_var = 0.0;
+    let mut i_var = 0.0;
+    for seg in points {
+        let dw = log1p_safe(seg.width as f64) - m_w;
+        let di = log1p_safe(seg.intensity) - m_i;
+        w_var += dw * dw;
+        i_var += di * di;
+    }
+    let s_w = (w_var / n).sqrt().max(1e-6);
+    let s_i = (i_var / n).sqrt().max(1e-6);
 
     let weighted_points: Vec<[f64; 2]> = points
         .iter()
@@ -228,14 +260,11 @@ fn farthest_seeds(weighted_points: &[[f64; 2]]) -> Vec<Vec<f64>> {
     vec![vec![min[0], min[1]], vec![max[0], max[1]]]
 }
 
-fn x_min_value(array: &[f64]) -> f64 {
+fn min_value(array: &[f64]) -> f64 {
     let mut minimum = f64::INFINITY;
     for &value in array {
-        if value.is_finite() {
-            let absolute_value = value.abs();
-            if absolute_value < minimum {
-                minimum = absolute_value;
-            }
+        if value.is_finite() && value < minimum {
+            minimum = value;
         }
     }
     if minimum.is_finite() { minimum } else { 0.0 }

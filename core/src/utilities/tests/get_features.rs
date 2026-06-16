@@ -3,19 +3,16 @@ mod tests {
     use std::fs;
     use std::sync::Arc;
 
-    use ionic::{
-        ion::{WritingMode, encode},
-        mzml::structs::*,
-    };
+    use ionic::{ion::encode, mzml::structs::*};
 
     use crate::utilities::{
         calculate_eic::{CentroidScan, EicOptions, SpectrumSummary},
         find_features::{Feature, FindFeaturesOptions, MzTolerance},
         get_features::{
-            AlignmentOptions, ConsensusFeature, FeatureClusterer, MzRtCluster,
-            SearchBounds, TaggedFeature, aggregate_into_consensus, assign_best_per_sample,
-            collect_filled_slots, compute_search_bounds, dedup, get_features, median,
-            require_minimum_frequency, weighted_centroid_mz,
+            AlignmentOptions, ConsensusFeature, FeatureClusterer, MzRtCluster, SearchBounds,
+            TaggedFeature, aggregate_into_consensus, assign_best_per_sample, collect_filled_slots,
+            compute_search_bounds, dedup, get_features, median, require_minimum_frequency,
+            weighted_centroid_mz,
         },
         structs::FromTo,
     };
@@ -66,7 +63,13 @@ mod tests {
         }
     }
 
-    fn make_feature_full(mz: f64, rt: f64, intensity: f64, n_points: usize, integral: f64) -> Feature {
+    fn make_feature_full(
+        mz: f64,
+        rt: f64,
+        intensity: f64,
+        n_points: usize,
+        integral: f64,
+    ) -> Feature {
         Feature {
             mz,
             rt,
@@ -688,7 +691,7 @@ mod tests {
                 cv("MS:1000576", None), // no compression
             ],
             numeric_type: Some(NumericType::Float64),
-            binary: Some(BinaryData::F64(values)),
+            binary: Some(NumericArray::F64(values)),
             ..Default::default()
         }
     }
@@ -785,9 +788,9 @@ mod tests {
     }
 
     fn to_ion_bytes(mzml: &MzML) -> Vec<u8> {
-        let mut buf = Vec::new();
-        encode(mzml, 0, false, WritingMode::Memory, &mut buf).expect("ion encode should succeed");
-        buf
+        let mut bytes = Vec::new();
+        encode(mzml, 0, false, &mut bytes).expect("ion encode should succeed");
+        bytes
     }
 
     fn write_ion_dir(tag: &str, samples: &[Vec<u8>]) -> std::path::PathBuf {
@@ -818,8 +821,18 @@ mod tests {
         }
     }
 
-    fn feature_cfg() -> FindFeaturesOptions {
-        FindFeaturesOptions::default()
+    fn feature_cfg_for_mz(mz: f64) -> FindFeaturesOptions {
+        let mut cfg = FindFeaturesOptions::default();
+        cfg.mz_scan_grid.min_mz = (mz - 2.0).max(40.0);
+        cfg.mz_scan_grid.max_mz = (mz + 2.0).min(1000.0);
+        cfg
+    }
+
+    fn feature_cfg_for_mz_range(low: f64, high: f64) -> FindFeaturesOptions {
+        let mut cfg = FindFeaturesOptions::default();
+        cfg.mz_scan_grid.min_mz = (low - 2.0).max(40.0);
+        cfg.mz_scan_grid.max_mz = (high + 2.0).min(1000.0);
+        cfg
     }
 
     #[test]
@@ -839,7 +852,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 3.0, to: 7.0 },
-            feature_cfg(),
+            feature_cfg_for_mz(peak_mz),
             alignment_cfg(),
             1,
         )
@@ -888,7 +901,7 @@ mod tests {
                 from: 7.0,
                 to: 11.0,
             },
-            feature_cfg(),
+            feature_cfg_for_mz(peak_mz),
             alignment_cfg(),
             1,
         )
@@ -922,7 +935,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 3.5, to: 6.5 },
-            feature_cfg(),
+            feature_cfg_for_mz(peak_mz),
             alignment_cfg(),
             1,
         )
@@ -955,7 +968,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 6.0, to: 9.0 },
-            feature_cfg(),
+            feature_cfg_for_mz(peak_mz),
             alignment_cfg(),
             1,
         )
@@ -1000,7 +1013,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 3.0, to: 7.0 },
-            feature_cfg(),
+            feature_cfg_for_mz_range(common_mz, rare_mz),
             cfg,
             1,
         )
@@ -1040,7 +1053,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 2.5, to: 5.5 },
-            feature_cfg(),
+            feature_cfg_for_mz(peak_mz),
             cfg,
             1,
         )
@@ -1072,7 +1085,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 3.0, to: 7.0 },
-            feature_cfg(),
+            feature_cfg_for_mz_range(mz_a, mz_b),
             alignment_cfg(),
             1,
         )
@@ -1104,7 +1117,7 @@ mod tests {
         let features = get_features(
             dir.to_str().unwrap(),
             FromTo { from: 4.0, to: 8.0 },
-            feature_cfg(),
+            feature_cfg_for_mz_range(mz_a, mz_b),
             alignment_cfg(),
             1,
         )
@@ -1185,7 +1198,10 @@ mod tests {
         assert!(json.contains("\"from\":0"), "NaN from → 0: {json}");
         assert!(json.contains("\"to\":0"), "+Inf to → 0: {json}");
         assert!(json.contains("\"rt\":1.5"), "finite rt unchanged: {json}");
-        assert!(!json.contains("gaussian"), "gaussian_r2 must be skipped: {json}");
+        assert!(
+            !json.contains("gaussian"),
+            "gaussian_r2 must be skipped: {json}"
+        );
     }
 
     #[test]
@@ -1196,7 +1212,10 @@ mod tests {
         assert!(json.contains("\"from\":0"), "from defaults to 0: {json}");
         assert!(json.contains("\"to\":0"), "to defaults to 0: {json}");
         assert!(json.contains("\"rt\":0"), "rt defaults to 0: {json}");
-        assert!(json.contains("\"n_points\":0"), "n_points (snake_case): {json}");
+        assert!(
+            json.contains("\"n_points\":0"),
+            "n_points (snake_case): {json}"
+        );
         assert!(json.contains("\"noise\":0"), "noise field present: {json}");
         assert!(!json.contains("null"), "no null values: {json}");
         assert!(!json.contains("gaussian"), "gaussian_r2 is skipped: {json}");
@@ -1211,6 +1230,9 @@ mod tests {
             "unknown SpectrumSummary must not produce null: {json}"
         );
         assert!(json.contains("\"rt_seconds\":0"), "rt_seconds → 0: {json}");
-        assert!(json.contains("\"base_peak_mz\":0"), "base_peak_mz → 0: {json}");
+        assert!(
+            json.contains("\"base_peak_mz\":0"),
+            "base_peak_mz → 0: {json}"
+        );
     }
 }

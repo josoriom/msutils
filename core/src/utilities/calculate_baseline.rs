@@ -27,13 +27,13 @@ pub fn calculate_baseline(y: &[f64], options: BaselineOptions) -> Vec<f64> {
     let x: Vec<f64> = (0..n).map(|i| i as f64).collect();
 
     let defaults = BaselineOptions::default();
-    let window = options
-        .lambda
-        .unwrap_or(defaults.lambda.unwrap_or(10.0));
+    let window = options.lambda.unwrap_or(defaults.lambda.unwrap_or(10.0));
     let factor = options
         .max_iterations
         .unwrap_or(defaults.max_iterations.unwrap_or(100));
-    let level = options.edge_slope_level.unwrap_or(defaults.edge_slope_level.unwrap_or(3));
+    let level = options
+        .edge_slope_level
+        .unwrap_or(defaults.edge_slope_level.unwrap_or(3));
 
     let (ys, weights) = curate_edges(y, level, EDGE_SLOPE_POINTS);
 

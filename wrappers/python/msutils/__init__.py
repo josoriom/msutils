@@ -5,9 +5,11 @@ from msutils import api as _api
 from msutils.api import (
     parse_mzml,
     parse_ion,
+    parse_ion_url,
     ion_to_json,
     ion_to_mzml,
     mzml_to_ion,
+    mzml_to_ion_file,
     calculate_eic,
     get_scans,
     find_peaks,
@@ -28,9 +30,11 @@ __all__ = [
     "MsUtils",
     "parse_mzml",
     "parse_ion",
+    "parse_ion_url",
     "ion_to_json",
     "ion_to_mzml",
     "mzml_to_ion",
+    "mzml_to_ion_file",
     "calculate_eic",
     "get_scans",
     "find_peaks",
@@ -61,6 +65,9 @@ class MsUtils:
     def parse_ion(self, data: bytes) -> SampleFile:
         return parse_ion(data)
 
+    def parse_ion_url(self, url: str, max_cache_size: int = 0) -> SampleFile:
+        return parse_ion_url(url, max_cache_size)
+
     def ion_to_json(self, file: SampleFile):
         return ion_to_json(file)
 
@@ -69,6 +76,9 @@ class MsUtils:
 
     def mzml_to_ion(self, file: SampleFile, level: int = 12, f32_compress: bool = False) -> bytes:
         return mzml_to_ion(file, level, f32_compress)
+
+    def mzml_to_ion_file(self, input_path: str, output_path: str, level: int = 12, f32_compress: bool = False, section_on_disk: bool = False) -> None:
+        return mzml_to_ion_file(input_path, output_path, level, f32_compress, section_on_disk)
 
     def calculate_eic(self, file: SampleFile, target_mz: float, from_rt: float, to_rt: float, ppm_tol: float = 20.0, mz_tol: float = 0.005):
         return calculate_eic(file, target_mz, from_rt, to_rt, ppm_tol, mz_tol)

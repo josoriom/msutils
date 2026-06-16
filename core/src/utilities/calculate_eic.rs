@@ -1,11 +1,27 @@
 use std::{cmp::Ordering, sync::Arc};
 
+use ionic::ion::{ByteRange, IonError, IonReader, Range};
+use ionic::mzml::structs::MzML;
 use ionic::{ScanSource, ScanSummary};
 use serde::Serialize;
 
 use crate::utilities::structs::{FromTo, Peak, ser_finite_f64};
 
-const MS1_LEVEL: u8 = 1;
+pub(crate) const MS1_LEVEL: u8 = 1;
+
+fn rt_to_minutes(rt: f64, unit: ionic::TimeUnit) -> f64 {
+    match unit {
+        ionic::TimeUnit::Second => rt / 60.0,
+        ionic::TimeUnit::Millisecond => rt / 60_000.0,
+        ionic::TimeUnit::Minute | ionic::TimeUnit::Other => rt,
+    }
+}
+
+fn scan_in_minutes(mut summary: ScanSummary) -> ScanSummary {
+    summary.rt = rt_to_minutes(summary.rt, summary.rt_unit);
+    summary.rt_unit = ionic::TimeUnit::Minute;
+    summary
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct EicOptions {
@@ -55,6 +71,58 @@ impl Eic {
     }
 }
 
+pub enum EicReader<'a> {
+    Ion(&'a mut IonReader),
+    Mzml(&'a mut MzML),
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ScanTime {
+    pub index: usize,
+    pub rt: f64,
+}
+
+#[derive(Clone, Debug)]
+pub enum FastError {
+    InvalidRequest,
+    UnsupportedBackend,
+    MissingBounds,
+    BadBoundsChecksum,
+    MalformedBounds(String),
+    ReadFailed(String),
+}
+
+impl std::fmt::Display for FastError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FastError::InvalidRequest => write!(f, "invalid EIC request"),
+            FastError::UnsupportedBackend => write!(f, "unsupported file backend"),
+            FastError::MissingBounds => write!(
+                f,
+                "spectrum has no segment bounds (A3); re-encode the file with the current Ionic"
+            ),
+            FastError::BadBoundsChecksum => write!(f, "spectrum bounds (A3) checksum failed"),
+            FastError::MalformedBounds(reason) => {
+                write!(f, "spectrum bounds (A3) malformed: {}", reason)
+            }
+            FastError::ReadFailed(reason) => write!(f, "read failed: {}", reason),
+        }
+    }
+}
+
+impl std::error::Error for FastError {}
+
+impl From<IonError> for FastError {
+    fn from(error: IonError) -> Self {
+        match error {
+            IonError::MissingSpectrumBounds => FastError::MissingBounds,
+            IonError::BadSpectrumBoundsChecksum => FastError::BadBoundsChecksum,
+            IonError::MalformedSpectrumBounds(reason) => FastError::MalformedBounds(reason),
+            other => FastError::ReadFailed(other.to_string()),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct SpectrumSummary {
     #[serde(serialize_with = "ser_finite_f64")]
@@ -69,6 +137,9 @@ pub struct SpectrumSummary {
     pub total_ion_current: f64,
     pub ms_level: u8,
     pub polarity: u8,
+    pub position_x: u32,
+    pub position_y: u32,
+    pub position_z: u32,
 }
 
 impl SpectrumSummary {
@@ -82,6 +153,9 @@ impl SpectrumSummary {
             total_ion_current: f64::NAN,
             ms_level: 0,
             polarity: 0,
+            position_x: 0,
+            position_y: 0,
+            position_z: 0,
         }
     }
 
@@ -95,6 +169,9 @@ impl SpectrumSummary {
             total_ion_current: s.total_ion_current,
             ms_level: s.ms_level,
             polarity: s.polarity,
+            position_x: s.position_x,
+            position_y: s.position_y,
+            position_z: s.position_z,
         }
     }
 }
@@ -108,36 +185,201 @@ pub struct CentroidScan {
     pub metadata: SpectrumSummary,
 }
 
+pub fn get_scan_times(
+    reader: &mut EicReader,
+    rt_from: f64,
+    rt_to: f64,
+    ms_level: u8,
+) -> Vec<ScanTime> {
+    let mut result = Vec::new();
+    let rt_min = rt_from.min(rt_to);
+    let rt_max = rt_from.max(rt_to);
+
+    match reader {
+        EicReader::Ion(ion) => {
+            ion.for_each_summary(&mut |idx, summary| {
+                let summary = scan_in_minutes(summary);
+                if summary.rt >= rt_min && summary.rt <= rt_max && summary.ms_level == ms_level {
+                    result.push(ScanTime {
+                        index: idx,
+                        rt: summary.rt,
+                    });
+                }
+            });
+        }
+        EicReader::Mzml(mzml) => {
+            mzml.for_each_summary(&mut |idx, summary| {
+                let summary = scan_in_minutes(summary);
+                if summary.rt >= rt_min && summary.rt <= rt_max && summary.ms_level == ms_level {
+                    result.push(ScanTime {
+                        index: idx,
+                        rt: summary.rt,
+                    });
+                }
+            });
+        }
+    }
+    result
+}
+
+pub fn read_mz_window(
+    reader: &mut EicReader,
+    scan_index: usize,
+    mz_from: f64,
+    mz_to: f64,
+    mz_out: &mut Vec<f64>,
+    intensity_out: &mut Vec<f64>,
+) -> Result<(), FastError> {
+    mz_out.clear();
+    intensity_out.clear();
+
+    match reader {
+        EicReader::Ion(ion) => {
+            let window = ion
+                .read_window(scan_index, Range { from: mz_from, to: mz_to })
+                .map_err(FastError::from)?;
+            *mz_out = window.x.to_f64();
+            *intensity_out = window.y.to_f64();
+            Ok(())
+        }
+        EicReader::Mzml(mzml) => {
+            if !mzml.load_scan(scan_index, mz_out, intensity_out) {
+                return Err(FastError::ReadFailed("failed to load scan".to_string()));
+            }
+
+            let start = lower_bound(mz_out, mz_from);
+            let end = upper_bound(mz_out, mz_to).min(mz_out.len());
+            if end <= start {
+                mz_out.clear();
+                intensity_out.clear();
+                return Ok(());
+            }
+
+            let kept = end - start;
+            mz_out.copy_within(start..end, 0);
+            mz_out.truncate(kept);
+            intensity_out.copy_within(start..end, 0);
+            intensity_out.truncate(kept);
+            Ok(())
+        }
+    }
+}
+
+pub fn plan_window_ranges(
+    ion: &mut IonReader,
+    from: f64,
+    to: f64,
+    mz_from: f64,
+    mz_to: f64,
+) -> Result<Vec<ByteRange>, FastError> {
+    ion.require_bounds().map_err(FastError::from)?;
+
+    let rt_from = from.min(to);
+    let rt_to = from.max(to);
+
+    let mut scan_indices = Vec::new();
+    ion.for_each_summary(&mut |scan_index, summary| {
+        let summary = scan_in_minutes(summary);
+        if summary.rt >= rt_from && summary.rt <= rt_to && summary.ms_level == MS1_LEVEL {
+            scan_indices.push(scan_index);
+        }
+    });
+
+    let mut ranges = Vec::new();
+    for scan_index in scan_indices {
+        let scan_ranges = ion
+            .byte_ranges(scan_index, Range { from: mz_from, to: mz_to })
+            .map_err(FastError::from)?;
+        ranges.extend(scan_ranges);
+    }
+
+    sort_and_dedup_ranges(&mut ranges);
+    Ok(ranges)
+}
+
+pub fn plan_eic_ranges(
+    ion: &mut IonReader,
+    target_mz: f64,
+    from: f64,
+    to: f64,
+    ppm: f64,
+    mz_tol: f64,
+) -> Result<Vec<ByteRange>, FastError> {
+    if !target_mz.is_finite() || target_mz <= 0.0 {
+        return Err(FastError::InvalidRequest);
+    }
+
+    let options = EicOptions {
+        ppm_tolerance: ppm,
+        mz_tolerance: mz_tol,
+        ..Default::default()
+    };
+
+    let tolerance = mz_tolerance_for(target_mz, options);
+    if !tolerance.is_finite() || tolerance <= 0.0 {
+        return Err(FastError::InvalidRequest);
+    }
+
+    plan_window_ranges(ion, from, to, target_mz - tolerance, target_mz + tolerance)
+}
+
+pub fn sort_and_dedup_ranges(ranges: &mut Vec<ByteRange>) {
+    ranges.sort_unstable_by_key(|range| (range.offset, range.length));
+    ranges.dedup_by_key(|range| (range.offset, range.length));
+}
+
 pub fn calculate_eic(
-    source: &mut impl ScanSource,
-    target_mass: f64,
+    reader: &mut EicReader,
+    target_mz: f64,
     time_range: FromTo,
     options: EicOptions,
-) -> Eic {
-    if !target_mass.is_finite() || target_mass <= 0.0 {
-        return Eic::empty();
+) -> Result<Eic, FastError> {
+    if !target_mz.is_finite() || target_mz <= 0.0 {
+        return Err(FastError::InvalidRequest);
     }
-    let tolerance = mz_tolerance_for(target_mass, options);
+
+    let tolerance = mz_tolerance_for(target_mz, options);
     if !tolerance.is_finite() || tolerance <= 0.0 {
-        return Eic::empty();
+        return Err(FastError::InvalidRequest);
     }
-    let mz_lower = target_mass - tolerance;
-    let mz_upper = target_mass + tolerance;
+
+    let mz_lower = target_mz - tolerance;
+    let mz_upper = target_mz + tolerance;
+
     let rt_min = options
         .time_unit
         .to_minutes(time_range.from.min(time_range.to));
     let rt_max = options
         .time_unit
         .to_minutes(time_range.from.max(time_range.to));
+
+    let scan_times = get_scan_times(reader, rt_min, rt_max, MS1_LEVEL);
+
+    if scan_times.is_empty() {
+        return Ok(Eic::empty());
+    }
+
     let mut x = Vec::new();
     let mut y = Vec::new();
-    source.for_each_in_range(rt_min, rt_max, MS1_LEVEL, |summary, mz, intensity| {
-        x.push(summary.rt);
-        y.push(summed_intensity_in_window(
-            mz, intensity, mz_lower, mz_upper,
-        ));
-    });
-    Eic { x, y }
+    let mut mz_buf = Vec::new();
+    let mut intensity_buf = Vec::new();
+
+    for scan_time in scan_times {
+        x.push(scan_time.rt);
+        read_mz_window(
+            reader,
+            scan_time.index,
+            mz_lower,
+            mz_upper,
+            &mut mz_buf,
+            &mut intensity_buf,
+        )?;
+
+        let intensity_sum: f64 = intensity_buf.iter().sum();
+        y.push(intensity_sum);
+    }
+
+    Ok(Eic { x, y })
 }
 
 pub fn get_eic_for_mz(
@@ -195,6 +437,7 @@ fn get_by_rt_range(
     let rt_max = time_unit.to_minutes(range.from.max(range.to));
     let mut candidates: Vec<(usize, ScanSummary)> = Vec::new();
     source.for_each_summary(&mut |index, summary| {
+        let summary = scan_in_minutes(summary);
         if ms_level != 0 && summary.ms_level != ms_level {
             return;
         }
@@ -214,6 +457,7 @@ fn get_closest_by_rt(
 ) -> (Vec<f64>, Vec<CentroidScan>) {
     let mut by_dist: Vec<(f64, usize, ScanSummary)> = Vec::new();
     source.for_each_summary(&mut |index, summary| {
+        let summary = scan_in_minutes(summary);
         if ms_level != 0 && summary.ms_level != ms_level {
             return;
         }
@@ -235,6 +479,7 @@ fn get_by_mz_range(
     let mz_max = range.from.max(range.to);
     let mut candidates: Vec<(usize, ScanSummary)> = Vec::new();
     source.for_each_summary(&mut |index, summary| {
+        let summary = scan_in_minutes(summary);
         if ms_level != 0 && summary.ms_level != ms_level {
             return;
         }
@@ -255,6 +500,7 @@ fn get_closest_by_mz(
 ) -> (Vec<f64>, Vec<CentroidScan>) {
     let mut by_dist: Vec<(f64, usize, ScanSummary)> = Vec::new();
     source.for_each_summary(&mut |index, summary| {
+        let summary = scan_in_minutes(summary);
         if ms_level != 0 && summary.ms_level != ms_level {
             return;
         }
@@ -354,7 +600,7 @@ pub fn upper_bound(values: &[f64], target: f64) -> usize {
 }
 
 #[inline]
-pub(crate) fn mz_tolerance_for(target_mz: f64, options: EicOptions) -> f64 {
+pub fn mz_tolerance_for(target_mz: f64, options: EicOptions) -> f64 {
     let ppm_window = if options.ppm_tolerance > 0.0 {
         (options.ppm_tolerance * 1e-6) * target_mz.abs()
     } else {
@@ -364,7 +610,12 @@ pub(crate) fn mz_tolerance_for(target_mz: f64, options: EicOptions) -> f64 {
 }
 
 #[inline]
-fn summed_intensity_in_window(mz: &[f64], intensity: &[f64], mz_lower: f64, mz_upper: f64) -> f64 {
+pub(crate) fn summed_intensity_in_window(
+    mz: &[f64],
+    intensity: &[f64],
+    mz_lower: f64,
+    mz_upper: f64,
+) -> f64 {
     if mz.is_empty() || intensity.is_empty() || mz.len() != intensity.len() {
         return 0.0;
     }
@@ -433,12 +684,16 @@ mod tests {
         (
             ScanSummary {
                 rt,
+                rt_unit: ionic::TimeUnit::Minute,
                 ms_level,
                 polarity: 0,
                 selected_ion_mz,
                 base_peak_mz: f64::NAN,
                 base_peak_int: f64::NAN,
                 total_ion_current: f64::NAN,
+                position_x: 0,
+                position_y: 0,
+                position_z: 0,
             },
             mz,
             intensity,

@@ -1,6 +1,12 @@
 import type { PeakOptions } from "../types/types";
 
 export type FileHandle = unknown;
+export type MaybePromise<T> = T | Promise<T>;
+
+export interface ByteRangeResult {
+  offset: bigint;
+  length: bigint;
+}
 
 export interface Backend {
   readonly ready: boolean;
@@ -10,6 +16,15 @@ export interface Backend {
 
   parseMzML(data: Uint8Array): FileHandle;
   parseBin(data: Uint8Array, maxCacheSize?: number): FileHandle;
+  parseIonPath(
+    path: string,
+    cacheSize: number,
+  ): FileHandle | Promise<FileHandle>;
+  parseIonUrl(url: URL, cacheSize: number): FileHandle | Promise<FileHandle>;
+  parseIonBuffer(
+    bytes: Uint8Array,
+    cacheSize: number,
+  ): FileHandle | Promise<FileHandle>;
   freeFile(handle: FileHandle): void;
 
   fileToJson(handle: FileHandle): any;
@@ -27,13 +42,20 @@ export interface Backend {
     to: number,
     ppmTol: number,
     mzTol: number,
-  ): { x: Float64Array; y: Float64Array };
+  ): MaybePromise<{ x: Float64Array; y: Float64Array }>;
 
   getScans(
     handle: FileHandle,
     queryType: number,
     a: number,
     b: number,
+    level: number,
+  ): any;
+
+  getIonImage(
+    handle: FileHandle,
+    mz: number,
+    tolerance: number,
     level: number,
   ): any;
 

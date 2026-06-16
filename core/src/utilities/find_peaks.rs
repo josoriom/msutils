@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 
 use crate::utilities::calculate_baseline::{BaselineOptions, calculate_baseline};
 use crate::utilities::closest_index;
-use crate::utilities::find_noise_level::find_noise_level;
+use crate::utilities::find_noise_level::{find_noise_level, find_noise_level_san_plot};
 use crate::utilities::functions::gaussian_fn;
 use crate::utilities::get_boundaries::{Boundaries, BoundariesOptions, get_boundaries};
 use crate::utilities::math::xy_integration;
@@ -19,9 +19,16 @@ impl Default for ArtifactFilter {
     fn default() -> Self {
         Self {
             min_gaussian_r2: 0.30,
-            min_apex_to_boundary_ratio: 2.0,
+            min_apex_to_boundary_ratio: 0.0,
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum NoiseMethod {
+    #[default]
+    FindNoiseLevel,
+    SanPlot,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -34,6 +41,7 @@ pub struct PeakFilter {
     pub auto_baseline: Option<bool>,
     pub allow_overlap: Option<bool>,
     pub min_snr: Option<f64>,
+    pub noise_method: Option<NoiseMethod>,
 }
 
 impl Default for PeakFilter {
@@ -47,6 +55,7 @@ impl Default for PeakFilter {
             auto_baseline: Some(false),
             allow_overlap: Some(false),
             min_snr: Some(1.0),
+            noise_method: None,
         }
     }
 }
@@ -73,7 +82,11 @@ impl From<PeakCandidate> for Peak {
             rt: c.rt,
             integral: c.integral,
             intensity: c.intensity,
-            gaussian_r2: if c.gaussian_r2.is_finite() { Some(c.gaussian_r2) } else { None },
+            gaussian_r2: if c.gaussian_r2.is_finite() {
+                Some(c.gaussian_r2)
+            } else {
+                None
+            },
             n_points: c.n_points,
             noise: c.noise,
         }
@@ -127,9 +140,7 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
         vec![0.0; n]
     };
 
-    let y_center: Vec<f64> = (0..n)
-        .map(|i| (data.y[i] - baseline[i]).max(0.0))
-        .collect();
+    let y_center: Vec<f64> = (0..n).map(|i| (data.y[i] - baseline[i]).max(0.0)).collect();
 
     let normalized_data = DataXY {
         x: data.x.clone(),
@@ -137,7 +148,10 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
     };
 
     let noise: f64 = if auto_noise {
-        find_noise_level(&normalized_data.y).intensity
+        match filter.noise_method.unwrap_or_default() {
+            NoiseMethod::FindNoiseLevel => find_noise_level(&normalized_data.y).intensity,
+            NoiseMethod::SanPlot => find_noise_level_san_plot(&normalized_data.y).intensity,
+        }
     } else {
         filter.noise.unwrap_or_default()
     };

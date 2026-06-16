@@ -40,6 +40,27 @@ mzml_to_ion <- function(bin, level = 12L, f32_compress = FALSE) {
   .Call("C_mzml_to_ion", bin, lvl, f32_compress, PACKAGE = "msutils")
 }
 
+mzml_to_ion_file <- function(input_path, output_path, level = 12L, f32_compress = FALSE, section_on_disk = FALSE) {
+  if (!is.character(input_path) || length(input_path) != 1 || is.na(input_path))
+    stop("`input_path` must be a single string")
+  if (!is.character(output_path) || length(output_path) != 1 || is.na(output_path))
+    stop("`output_path` must be a single string")
+
+  if (!is.numeric(level) || length(level) != 1 || is.na(level))
+    stop("`level` must be a single number 0..22")
+  lvl <- as.integer(level)
+  if (lvl < 0L || lvl > 22L)
+    stop("`level` must be between 0 and 22 (inclusive)")
+
+  if (!is.logical(f32_compress) || length(f32_compress) != 1 || is.na(f32_compress))
+    stop("`f32_compress` must be TRUE/FALSE")
+  if (!is.logical(section_on_disk) || length(section_on_disk) != 1 || is.na(section_on_disk))
+    stop("`section_on_disk` must be TRUE/FALSE")
+
+  .Call("C_mzml_to_ion_file", input_path, output_path, lvl, f32_compress, section_on_disk, PACKAGE = "msutils")
+  invisible(output_path)
+}
+
 ion_to_json <- function(bin) {
   if (typeof(bin) != "externalptr") stop("msutils: expected an external pointer (MzML sample)")
   .Call("C_ion_to_json", bin, PACKAGE="msutils")
@@ -347,6 +368,17 @@ parse_ion <- function(bin, max_cache_size = 0) {
   if (!is.numeric(max_cache_size) || length(max_cache_size) != 1 || is.na(max_cache_size) || max_cache_size < 0)
     stop("`max_cache_size` must be a single non-negative number")
   .Call("C_parse_ion", bin, as.numeric(max_cache_size), PACKAGE = "msutils")
+}
+
+parse_ion_url <- function(url, max_cache_size = 0) {
+  if (!is.character(url) || length(url) != 1 || is.na(url) || nchar(url) == 0)
+    stop("`url` must be a single non-empty string")
+  if (!startsWith(tolower(url), "http://") && !startsWith(tolower(url), "https://"))
+    stop("`url` must start with http:// or https://")
+  if (!is.numeric(max_cache_size) || length(max_cache_size) != 1 || is.na(max_cache_size) || max_cache_size < 0)
+    stop("`max_cache_size` must be a single non-negative number")
+
+  .Call("C_parse_ion_url", url, as.numeric(max_cache_size), PACKAGE = "msutils")
 }
 
 .QUERY_RT_RANGE   <- 0L

@@ -10,7 +10,7 @@ npm install msutils
 
 ## Concepts
 
-**Sample**: A parsed mzML or ion file held in memory. Create samples with `parseMzML()` or `parseIon()`. Samples are automatically garbage collected when no longer referenced.
+**Sample**: A parsed mzML or opened ion source. Create samples with `parseMzML()` or `parseIon()`. Samples are automatically garbage collected when no longer referenced.
 
 **XY data**: A pair of numeric arrays where `x` is retention time and `y` is intensity.
 
@@ -24,7 +24,7 @@ import * as msutils from "msutils";
 const raw = await fetch("sample.mzML").then((r) => r.arrayBuffer());
 
 const sample = await msutils.parseMzML(raw);
-const eic = msutils.calculateEic(sample, 174.112, { from: 1, to: 15 });
+const eic = await msutils.calculateEic(sample, 174.112, { from: 1, to: 15 });
 const peaks = msutils.findPeaks(eic.x, eic.y, {
   autoNoise: true,
   snRatio: 3.0,
@@ -47,12 +47,16 @@ const sample = await msutils.parseMzML(buffer);
 
 ### Load ion
 
-Load an ion binary file into a sample.
+Open an ion binary source into a sample.
 
 ```js
 const sample = await msutils.parseIon(buffer);
 const sample = await msutils.parseIon(buffer, { maxCacheSize: 1000000 });
+const sample = await msutils.parseIon("./data/sample.ion");
+const sample = await msutils.parseIon(new URL("https://example.com/sample.ion"));
 ```
+
+`string` inputs are filesystem paths only. URL inputs must use `new URL(...)`. URL range reads are supported by the Node.js backend.
 
 ## Convert
 
@@ -87,7 +91,7 @@ const ionBytes = msutils.mzmlToIon(sample, { level: 12, f32Compress: false });
 Get an extracted ion chromatogram for one m/z from a sample.
 
 ```js
-const eic = msutils.calculateEic(
+const eic = await msutils.calculateEic(
   sample,
   174.112,
   { from: 1, to: 15 },

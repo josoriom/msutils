@@ -2,7 +2,7 @@
 
 use std::mem::size_of;
 
-use crate::utilities::{calculate_eic::CentroidScan, find_features::FindFeaturesOptions};
+use crate::utilities::find_features::FindFeaturesOptions;
 
 use super::{context::GpuContext, kernel::EicKernel};
 use std::fmt::{Display, Formatter};
@@ -37,16 +37,15 @@ impl<'a> GpuGridProcessor<'a> {
         }
     }
 
-    pub fn process(
+    pub(crate) fn process(
         &mut self,
-        scans: &[CentroidScan],
+        scans: &FlattenedScans,
         grid: &[f64],
         config: &FindFeaturesOptions,
     ) -> Result<Vec<f64>, GpuError> {
-        let flattened = flatten_scans(scans);
-        let scan_count = scans.len();
+        let scan_count = scans.offsets.len();
 
-        self.kernel.load_scans(self.ctx, &flattened, scan_count);
+        self.kernel.load_scans(self.ctx, scans, scan_count);
 
         let scan_vram = self.kernel.scan_vram_bytes;
         let batch_size = effective_batch_size(self.ctx, scan_count, &self.opts, scan_vram);
@@ -118,29 +117,31 @@ pub(crate) struct FlattenedScans {
     pub lengths: Vec<u32>,
 }
 
-fn flatten_scans(scans: &[CentroidScan]) -> FlattenedScans {
-    let total: usize = scans.iter().map(|s| s.mz.len()).sum();
+impl FlattenedScans {
+    pub(crate) fn from_windows(windows: &[(Vec<f64>, Vec<f64>)]) -> Self {
+        let total: usize = windows.iter().map(|(mz, _)| mz.len()).sum();
 
-    let mut mz = Vec::with_capacity(total);
-    let mut intensity = Vec::with_capacity(total);
-    let mut offsets = Vec::with_capacity(scans.len());
-    let mut lengths = Vec::with_capacity(scans.len());
-    let mut cursor = 0u32;
+        let mut mz = Vec::with_capacity(total);
+        let mut intensity = Vec::with_capacity(total);
+        let mut offsets = Vec::with_capacity(windows.len());
+        let mut lengths = Vec::with_capacity(windows.len());
+        let mut cursor = 0u32;
 
-    for scan in scans {
-        let n = scan.mz.len() as u32;
-        offsets.push(cursor);
-        lengths.push(n);
-        mz.extend(scan.mz.iter().map(|&v| v as f32));
-        intensity.extend(scan.intensity.iter().map(|&v| v as f32));
-        cursor += n;
-    }
+        for (scan_mz, scan_intensity) in windows {
+            let count = scan_mz.len() as u32;
+            offsets.push(cursor);
+            lengths.push(count);
+            mz.extend(scan_mz.iter().map(|&value| value as f32));
+            intensity.extend(scan_intensity.iter().map(|&value| value as f32));
+            cursor += count;
+        }
 
-    FlattenedScans {
-        mz,
-        intensity,
-        offsets,
-        lengths,
+        Self {
+            mz,
+            intensity,
+            offsets,
+            lengths,
+        }
     }
 }
 

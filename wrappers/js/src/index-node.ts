@@ -14,3 +14,4 @@ export async function init(): Promise<void> {
 export * from "./utilities/api";
 export { SampleFile } from "./utilities/sampleFile";
 export { encodeTargetIds, unpackTargets } from "./utilities/pack";
+export { ContainmentCache, type ByteRange } from "./utilities/containmentCache";

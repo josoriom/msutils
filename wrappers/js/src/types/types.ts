@@ -1,4 +1,5 @@
 export type BinaryInput = Uint8Array | ArrayBuffer;
+export type IonInput = BinaryInput | URL | string;
 
 export type PeakOptions = Partial<{
   minIntegral: number;
@@ -120,6 +121,9 @@ export type SpectrumSummary = {
   totalIonCurrent: number;
   msLevel: number;
   polarity: number;
+  positionX: number;
+  positionY: number;
+  positionZ: number;
 };
 
 export type CentroidScan = {
@@ -134,3 +138,24 @@ export type ScanQuery =
   | { rt: { closest: number } }
   | { mz: { from: number; to: number } }
   | { mz: { closest: number } };
+
+export type IonImageOptions = {
+  tolerance?: number;
+  level?: number;
+};
+
+export type IonImage = {
+  width: number;
+  height: number;
+  minX: number;
+  minY: number;
+  minZ: number;
+  maxZ: number;
+  data: number[];
+  counts: number[];
+};
+
+export type ByteRange = {
+  offset: number;
+  length: number;
+};
