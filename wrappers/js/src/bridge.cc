@@ -37,7 +37,7 @@ struct MzMLWrapper
   size_t estimated_size;
 };
 
-static_assert(sizeof(CPeakOptions) == 64, "CPeakOptions must be 64 bytes");
+static_assert(sizeof(CPeakOptions) == 72, "CPeakOptions must be 72 bytes");
 
 typedef uint32_t (*fn_msutils_abi_version)(void);
 typedef size_t   (*fn_msutils_sizeof_peak_options)(void);
@@ -409,6 +409,7 @@ static const CPeakOptions *ReadPeakOptionsObject(Napi::Value value, CPeakOptions
   out->max_iterations        = GetI32(o, "maxIterations",       0);
   out->allow_overlap         = GetI32(o, "allowOverlap",        0);
   out->min_snr               = GetF64(o, "minSnr",              NAN);
+  out->min_gaussian_r2       = GetF64(o, "minGaussianR2",       NAN);
   return out;
 }
 

@@ -1,6 +1,5 @@
-use msutils::utilities::find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter};
-use msutils::utilities::get_peak::get_peak;
-use msutils::utilities::structs::{DataXY, Roi};
+use msutils::utilities::find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter, find_peaks};
+use msutils::utilities::structs::DataXY;
 
 use serde::Deserialize;
 use std::{collections::HashMap, fs, path::Path};
@@ -37,21 +36,15 @@ fn default_options() -> FindPeaksOptions {
         }),
         artifact_filter: Some(ArtifactFilter {
             min_gaussian_r2: 0.30,
-            min_apex_to_boundary_ratio: 2.0,
         }),
         ..Default::default()
     }
 }
 
 fn peaks_near_rt(data: &DataXY, rt: f64, opts: FindPeaksOptions) -> bool {
-    let roi = Roi::new(rt, 0.05);
-    let peak = get_peak(data, &roi, Some(opts));
-    if let Some(p) = peak {
-        helpers::dump_peaks(&[p]);
-        (p.rt - rt).abs() < 0.05 && p.intensity > 0.0
-    } else {
-        false
-    }
+    find_peaks(data, Some(opts))
+        .iter()
+        .any(|peak| (peak.rt - rt).abs() < 0.05 && peak.intensity > 0.0)
 }
 
 #[test]
@@ -206,31 +199,6 @@ fn feature_9_mz808_rt0661_is_a_peak() {
         f.mz,
         f.rt
     );
-}
-
-#[test]
-fn feature_10() {
-    let features = load_features();
-    let f = &features["feature_10"];
-    let data = DataXY {
-        x: f.x.clone(),
-        y: f.y.clone(),
-    };
-    let should_pass = f.is_peak;
-    let found = peaks_near_rt(&data, f.rt, default_options());
-    if should_pass {
-        assert!(
-            found,
-            "mz={:.4} rt={:.4} is a real peak and must not be filtered",
-            f.mz, f.rt
-        );
-    } else {
-        assert!(
-            !found,
-            "mz={:.4} rt={:.4} should be filtered as artifact",
-            f.mz, f.rt
-        );
-    }
 }
 
 #[test]

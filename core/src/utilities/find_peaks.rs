@@ -12,15 +12,11 @@ use crate::utilities::structs::{DataXY, Peak};
 #[derive(Clone, Copy, Debug)]
 pub struct ArtifactFilter {
     pub min_gaussian_r2: f64,
-    pub min_apex_to_boundary_ratio: f64,
 }
 
 impl Default for ArtifactFilter {
     fn default() -> Self {
-        Self {
-            min_gaussian_r2: 0.30,
-            min_apex_to_boundary_ratio: 0.0,
-        }
+        Self { min_gaussian_r2: 0.30 }
     }
 }
 
@@ -94,7 +90,6 @@ impl From<PeakCandidate> for Peak {
 }
 
 enum ShapeOutcome {
-    Artifact,
     Skipped,
     Unfittable,
     Fit(f64),
@@ -447,7 +442,6 @@ fn filter_artifacts(
     opts: &ArtifactFilter,
 ) {
     candidates.retain_mut(|p| match classify_shape(p, data, baseline, opts) {
-        ShapeOutcome::Artifact => false,
         ShapeOutcome::Skipped | ShapeOutcome::Unfittable => {
             p.gaussian_r2 = f64::NAN;
             true
@@ -476,12 +470,10 @@ fn classify_shape(
         .collect();
 
     let mut apex_off = 0usize;
-    let mut h_raw = data.y[lo];
     let mut h = yc[0];
     for (off, &v) in yc.iter().enumerate().skip(1) {
         if v > h {
             h = v;
-            h_raw = data.y[lo + off];
             apex_off = off;
         }
     }
@@ -489,13 +481,6 @@ fn classify_shape(
         return ShapeOutcome::Unfittable;
     }
     let apex_idx = lo + apex_off;
-
-    if opts.min_apex_to_boundary_ratio > 0.0 {
-        let raw_base = data.y[lo].max(data.y[hi]);
-        if h_raw < opts.min_apex_to_boundary_ratio * raw_base {
-            return ShapeOutcome::Artifact;
-        }
-    }
 
     if opts.min_gaussian_r2 <= 0.0 {
         return ShapeOutcome::Skipped;

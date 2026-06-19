@@ -13,7 +13,8 @@ use std::{
 use crate::utilities::{
     calculate_eic::{
         CentroidScan, EicOptions, EicReader, FastError, MS1_LEVEL, get_scan_times, lower_bound,
-        mz_tolerance_for, read_mz_window, summed_intensity_in_window, with_eic_apex_intensity,
+        mz_tolerance_for, read_mz_window, summed_intensity_in_window, upper_bound,
+        with_eic_apex_intensity,
     },
     find_peaks::{FindPeaksOptions, find_peaks},
     parallel::run_with_cores,
@@ -191,9 +192,7 @@ pub fn find_features(
         opts.gpu_context.clone().or_else(|| {
             let context = GpuContext::try_init().map(Arc::new);
             if context.is_none() {
-                eprintln!(
-                    "[find_features] GPU requested but initialization failed, using CPU"
-                );
+                eprintln!("[find_features] GPU requested but initialization failed, using CPU");
             }
             context
         })
@@ -203,7 +202,9 @@ pub fn find_features(
 
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     let gpu_batch = GpuBatchOptions {
-        batch_size: opts.batch_size.unwrap_or_else(|| GpuBatchOptions::default().batch_size),
+        batch_size: opts
+            .batch_size
+            .unwrap_or_else(|| GpuBatchOptions::default().batch_size),
         vram_override: None,
     };
 
@@ -286,7 +287,14 @@ fn read_grid_scans(
     for scan_time in scan_times {
         let mut mz = Vec::new();
         let mut intensity = Vec::new();
-        read_mz_window(reader, scan_time.index, mz_low, mz_high, &mut mz, &mut intensity)?;
+        read_mz_window(
+            reader,
+            scan_time.index,
+            mz_low,
+            mz_high,
+            &mut mz,
+            &mut intensity,
+        )?;
         scans.push((mz, intensity));
     }
 
@@ -430,8 +438,17 @@ fn extract_features(
             .filter(|peak| min_width == 0 || peak.n_points >= min_width)
             .map(|peak| {
                 let peak = with_eic_apex_intensity(&data.x, &data.y, peak);
+                let measured_mz = weighted_mz_in_window(
+                    scans,
+                    time,
+                    target_mz,
+                    peak.from,
+                    peak.to,
+                    opts.final_eic_options,
+                )
+                .unwrap_or(target_mz);
                 Feature {
-                    mz: target_mz,
+                    mz: measured_mz,
                     rt: peak.rt,
                     intensity: peak.intensity,
                     from: peak.from,
@@ -452,6 +469,35 @@ fn extract_features(
     {
         masses.iter().flat_map(extract_one).collect()
     }
+}
+
+fn weighted_mz_in_window(
+    scans: &Scans,
+    time: &[f64],
+    target_mz: f64,
+    rt_from: f64,
+    rt_to: f64,
+    options: EicOptions,
+) -> Option<f64> {
+    let tolerance = mz_tolerance_for(target_mz, options);
+    let lo = target_mz - tolerance;
+    let hi = target_mz + tolerance;
+
+    let mut weighted = 0.0f64;
+    let mut total = 0.0f64;
+    for ((mz, intensity), &rt) in scans.iter().zip(time.iter()) {
+        if rt < rt_from || rt > rt_to {
+            continue;
+        }
+        let start = lower_bound(mz, lo);
+        let end = upper_bound(mz, hi);
+        for k in start..end {
+            weighted += mz[k] * intensity[k];
+            total += intensity[k];
+        }
+    }
+
+    (total > 0.0).then(|| weighted / total)
 }
 
 fn build_coarse_opts(config: &FindFeaturesOptions) -> FindPeaksOptions {

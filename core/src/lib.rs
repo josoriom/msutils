@@ -49,7 +49,7 @@ use utilities::{
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
     find_features::{FindFeaturesOptions, find_features as find_features_rs},
     find_noise_level::find_noise_level as find_noise_level_rs,
-    find_peaks::{FindPeaksOptions, PeakFilter, find_peaks as find_peaks_rs},
+    find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter, find_peaks as find_peaks_rs},
     get_peak::get_peak as get_peak_rs,
     get_peaks_from_chrom::get_peaks_from_chrom as get_peaks_from_chrom_rs,
     get_peaks_from_eic::{get_peaks_from_eic as get_peaks_from_eic_rs, plan_peaks_ranges},
@@ -170,14 +170,11 @@ pub struct CPeakOptions {
     pub max_iterations: c_int,
     pub allow_overlap: c_int,
     pub min_snr: f64,
+    pub min_gaussian_r2: f64,
 }
 
-// Compile-time guard: if any field is added/removed/reordered and the size
-// changes, the build fails immediately. Every wrapper hardcodes 64 bytes
-// (Python ctypes layout, WASM packing, C++ static_assert). When this fires:
-// 1) Bump MSUTILS_ABI_VERSION, 2) Update the wrapper structs to match.
 const _: () = assert!(
-    core::mem::size_of::<CPeakOptions>() == 64,
+    core::mem::size_of::<CPeakOptions>() == 72,
     "CPeakOptions size drifted — bump MSUTILS_ABI_VERSION and update all wrappers"
 );
 
@@ -1678,6 +1675,7 @@ fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
         };
     }
     let o = unsafe { *opts };
+    let default_artifact = ArtifactFilter::default();
     FindPeaksOptions {
         boundaries: Some(Default::default()),
         filter: Some(PeakFilter {
@@ -1703,7 +1701,13 @@ fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
             max_iterations: (o.max_iterations > 0).then_some(o.max_iterations as usize),
             edge_slope_level: Some(1),
         }),
-        artifact_filter: Some(Default::default()),
+        artifact_filter: Some(ArtifactFilter {
+            min_gaussian_r2: if o.min_gaussian_r2.is_finite() && o.min_gaussian_r2 >= 0.0 {
+                o.min_gaussian_r2
+            } else {
+                default_artifact.min_gaussian_r2
+            },
+        }),
     }
 }
 

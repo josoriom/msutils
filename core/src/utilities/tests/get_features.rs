@@ -44,6 +44,7 @@ mod tests {
             integral: intensity * 0.1,
             frequency: 0.0,
             n_samples,
+            debug_missing: Vec::new(),
         }
     }
 
@@ -1142,6 +1143,7 @@ mod tests {
             integral: 0.0,
             frequency: 0.5,
             n_samples: 1,
+            debug_missing: Vec::new(),
         };
         let json = serde_json::to_string(&f).expect("serialise ok");
         // Non-finite mz, rt, from must become 0, not null.

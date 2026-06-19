@@ -52,6 +52,7 @@ def pack_peak_options(opts: Optional[Dict[str, Any]]) -> Optional[PeakOptions]:
     options_struct.allow_overlap         = _get_bool("allow_overlap")
     options_struct._pad2                 = 0
     options_struct.min_snr               = _get_float("min_snr")
+    options_struct.min_gaussian_r2       = _get_float("min_gaussian_r2")
     return options_struct
 
 

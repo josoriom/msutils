@@ -40,11 +40,12 @@ class PeakOptions(ctypes.Structure):
         ("allow_overlap",         c_int32),
         ("_pad2",                 c_int32),
         ("min_snr",               c_double),
+        ("min_gaussian_r2",       c_double),
     ]
 
 
-assert ctypes.sizeof(PeakOptions) == 64, (
-    f"PeakOptions is {ctypes.sizeof(PeakOptions)} bytes — expected 64"
+assert ctypes.sizeof(PeakOptions) == 72, (
+    f"PeakOptions is {ctypes.sizeof(PeakOptions)} bytes — expected 72"
 )
 
 MSUTILS_ABI_VERSION = 2

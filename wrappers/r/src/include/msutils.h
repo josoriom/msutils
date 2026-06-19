@@ -20,6 +20,7 @@ typedef struct CPeakOptions {
   int max_iterations;
   int allow_overlap;
   double min_snr;
+  double min_gaussian_r2;
 } CPeakOptions;
 
 typedef struct Buf {

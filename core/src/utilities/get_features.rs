@@ -13,6 +13,12 @@ use crate::utilities::structs::ser_finite_f64;
 use crate::utilities::gpu::GpuContext;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use crate::utilities::parallel::run_with_cores;
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::prelude::*;
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use ionic::ion::{IonReader, ReadOptions};
 
 use crate::utilities::{
@@ -86,6 +92,19 @@ impl From<Error> for AlignmentError {
 }
 
 #[derive(Clone, Debug, Serialize)]
+pub struct MissingSample {
+    pub sample: String,
+    #[serde(serialize_with = "ser_finite_f64")]
+    pub target_mz: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    pub center_rt: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    pub rt_from: f64,
+    #[serde(serialize_with = "ser_finite_f64")]
+    pub rt_to: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct ConsensusFeature {
     #[serde(serialize_with = "ser_finite_f64")]
     pub mz: f64,
@@ -103,6 +122,8 @@ pub struct ConsensusFeature {
     pub frequency: f64,
     #[serde(skip)]
     pub n_samples: usize,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub debug_missing: Vec<MissingSample>,
 }
 
 #[derive(Clone, Debug)]
@@ -299,12 +320,19 @@ pub fn get_features(
 
     fill_all_missing(
         &mut slots,
-        &mut datasets,
+        &datasets,
         alignment_config.eic_options,
         alignment_config.peak_options,
+        cores,
     )?;
 
-    let results = build_results(slots, alignment_config.min_samples, datasets.len());
+    let sample_names: Vec<String> = datasets.iter().map(|(name, _, _)| name.clone()).collect();
+    let results = build_results(
+        slots,
+        alignment_config.min_samples,
+        datasets.len(),
+        &sample_names,
+    );
 
     Ok(dedup(
         results,
@@ -342,52 +370,69 @@ fn prepare_slots(clusters: Vec<Cluster>, n_samples: usize, rt_tol: f64) -> Vec<C
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 fn fill_all_missing(
     slots: &mut [ClusterSlot],
-    datasets: &mut [SampleDataset],
+    datasets: &[SampleDataset],
     eic_options: EicOptions,
     peak_options: Option<FindPeaksOptions>,
+    cores: usize,
 ) -> Result<(), AlignmentError> {
-    for (sample_idx, (_, source, _)) in datasets.iter_mut().enumerate() {
-        match source {
-            SampleSourceKind::Mzml(path) => {
-                let mut mzml = open_mzml(path).map_err(|e| AlignmentError::Parse {
-                    path: path.to_string_lossy().to_string(),
-                    source: e.to_string(),
-                })?;
-                let mut reader = EicReader::Mzml(&mut mzml);
-                fill_sample(
-                    slots,
-                    sample_idx,
-                    &mut reader,
-                    eic_options,
-                    peak_options.clone(),
-                )?;
-            }
-            SampleSourceKind::Ion(path) => {
-                let mut owned = open_ion(path).map_err(|e| AlignmentError::Parse {
-                    path: path.to_string_lossy().to_string(),
-                    source: e.to_string(),
-                })?;
-                let mut reader = EicReader::Ion(&mut owned);
-                fill_sample(
-                    slots,
-                    sample_idx,
-                    &mut reader,
-                    eic_options,
-                    peak_options.clone(),
-                )?;
-            }
+    let shared_slots: &[ClusterSlot] = slots;
+
+    let per_sample: Vec<(usize, Vec<(usize, Feature)>)> = run_with_cores(cores, || {
+        datasets
+            .par_iter()
+            .enumerate()
+            .map(|(sample_idx, (_, source, _))| {
+                let filled = match source {
+                    SampleSourceKind::Mzml(path) => {
+                        let mut mzml = open_mzml(path).map_err(|e| AlignmentError::Parse {
+                            path: path.to_string_lossy().to_string(),
+                            source: e.to_string(),
+                        })?;
+                        let mut reader = EicReader::Mzml(&mut mzml);
+                        fill_sample(
+                            shared_slots,
+                            sample_idx,
+                            &mut reader,
+                            eic_options,
+                            peak_options.clone(),
+                        )?
+                    }
+                    SampleSourceKind::Ion(path) => {
+                        let mut owned = open_ion(path).map_err(|e| AlignmentError::Parse {
+                            path: path.to_string_lossy().to_string(),
+                            source: e.to_string(),
+                        })?;
+                        let mut reader = EicReader::Ion(&mut owned);
+                        fill_sample(
+                            shared_slots,
+                            sample_idx,
+                            &mut reader,
+                            eic_options,
+                            peak_options.clone(),
+                        )?
+                    }
+                };
+                Ok((sample_idx, filled))
+            })
+            .collect::<Result<Vec<_>, AlignmentError>>()
+    })?;
+
+    for (sample_idx, filled) in per_sample {
+        for (ci, feature) in filled {
+            slots[ci].0[sample_idx] = Some(feature);
         }
     }
+
     Ok(())
 }
 
 fn fill_sample(
-    slots: &mut [ClusterSlot],
+    slots: &[ClusterSlot],
     sample_idx: usize,
     reader: &mut EicReader,
     eic_options: EicOptions,
     peak_options: Option<FindPeaksOptions>,
-) -> Result<(), AlignmentError> {
+) -> Result<Vec<(usize, Feature)>, AlignmentError> {
     let missing: Vec<usize> = slots
         .iter()
         .enumerate()
@@ -401,7 +446,7 @@ fn fill_sample(
         .collect();
 
     if missing.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let rt_min = missing
@@ -416,10 +461,12 @@ fn fill_sample(
     let scan_times = get_scan_times(reader, rt_min, rt_max, MS1_LEVEL);
 
     if scan_times.is_empty() {
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let all_times: Vec<f64> = scan_times.iter().map(|s| s.rt).collect();
+
+    let mut filled: Vec<(usize, Feature)> = Vec::new();
 
     let mut jobs = missing;
     jobs.sort_unstable_by(|&a, &b| {
@@ -486,63 +533,72 @@ fn fill_sample(
             tile_scans.push((scan_time.rt, mz, intensity));
         }
 
-        for &ci in &tile_jobs {
-            let bounds = &slots[ci].1;
-            let tolerance = mz_tolerance_for(bounds.target_mz, eic_options);
-            let window_lo = bounds.target_mz - tolerance;
-            let window_hi = bounds.target_mz + tolerance;
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+        let tile_iter = tile_jobs.par_iter();
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+        let tile_iter = tile_jobs.iter();
 
-            let mut intensities = Vec::new();
-            for (_, mz, intensity) in &tile_scans {
-                let mut sum = 0.0;
-                for (m, i) in mz.iter().zip(intensity.iter()) {
-                    if *m >= window_lo && *m <= window_hi {
-                        sum += i;
+        let tile_features: Vec<(usize, Feature)> = tile_iter
+            .filter_map(|&ci| {
+                let bounds = &slots[ci].1;
+                let tolerance = mz_tolerance_for(bounds.target_mz, eic_options);
+                let window_lo = bounds.target_mz - tolerance;
+                let window_hi = bounds.target_mz + tolerance;
+
+                let mut intensities = Vec::with_capacity(tile_scans.len());
+                for (_, mz, intensity) in &tile_scans {
+                    let mut sum = 0.0;
+                    for (m, i) in mz.iter().zip(intensity.iter()) {
+                        if *m >= window_lo && *m <= window_hi {
+                            sum += i;
+                        }
                     }
+                    intensities.push(sum);
                 }
-                intensities.push(sum);
-            }
 
-            let time_slice: Vec<f64> = tile_scans.iter().map(|(rt, _, _)| *rt).collect();
+                let time_slice: Vec<f64> = tile_scans.iter().map(|(rt, _, _)| *rt).collect();
 
-            let feature = get_peak(
-                &DataXY {
-                    x: time_slice,
-                    y: intensities,
-                },
-                &Roi {
-                    rt: bounds.center_rt,
-                    half_width: bounds.rt_to - bounds.rt_from,
-                },
-                peak_options.clone(),
-            )
-            .filter(|p| p.intensity > 0.0)
-            .map(|p| {
-                let measured_mz =
-                    calculate_weighted_mz(&tile_scans, p.from, p.to).unwrap_or(bounds.target_mz);
-                Feature {
-                    mz: measured_mz,
-                    rt: p.rt,
-                    intensity: p.intensity,
-                    from: p.from,
-                    to: p.to,
-                    n_points: p.n_points,
-                    integral: p.integral,
-                    noise: p.noise,
-                }
-            });
+                get_peak(
+                    &DataXY {
+                        x: time_slice,
+                        y: intensities,
+                    },
+                    &Roi {
+                        rt: bounds.center_rt,
+                        half_width: bounds.rt_to - bounds.rt_from,
+                    },
+                    peak_options.clone(),
+                )
+                .filter(|p| p.intensity > 0.0)
+                .map(|p| {
+                    let measured_mz =
+                        calculate_weighted_mz(&tile_scans, window_lo, window_hi, p.from, p.to)
+                            .unwrap_or(bounds.target_mz);
+                    let feature = Feature {
+                        mz: measured_mz,
+                        rt: p.rt,
+                        intensity: p.intensity,
+                        from: p.from,
+                        to: p.to,
+                        n_points: p.n_points,
+                        integral: p.integral,
+                        noise: p.noise,
+                    };
+                    (ci, feature)
+                })
+            })
+            .collect();
 
-            if let Some(f) = feature {
-                slots[ci].0[sample_idx] = Some(f);
-            }
-        }
+        filled.extend(tile_features);
     }
 
-    Ok(())
+    Ok(filled)
 }
 
 fn calculate_weighted_mz(
     scans: &[(f64, Vec<f64>, Vec<f64>)],
+    mz_lo: f64,
+    mz_hi: f64,
     rt_from: f64,
     rt_to: f64,
 ) -> Option<f64> {
@@ -554,6 +610,9 @@ fn calculate_weighted_mz(
             continue;
         }
         for (m, i) in mz.iter().zip(intensity.iter()) {
+            if *m < mz_lo || *m > mz_hi {
+                continue;
+            }
             total_weighted_mz += m * i;
             total_intensity += i;
         }
@@ -601,13 +660,18 @@ fn build_results(
     slots: Vec<ClusterSlot>,
     min_samples: usize,
     total_samples: usize,
+    sample_names: &[String],
 ) -> Vec<ConsensusFeature> {
     slots
         .into_iter()
         .filter_map(|(s, bounds)| {
+            let debug_missing = collect_missing_samples(&s, &bounds, sample_names);
             let hits = collect_filled_slots(s);
-            require_minimum_frequency(hits, min_samples)
-                .map(|hits| aggregate_into_consensus(hits, &bounds, total_samples))
+            require_minimum_frequency(hits, min_samples).map(|hits| {
+                let mut feature = aggregate_into_consensus(hits, &bounds, total_samples);
+                feature.debug_missing = debug_missing;
+                feature
+            })
         })
         .collect()
 }
@@ -795,7 +859,27 @@ pub(crate) fn aggregate_into_consensus(
             0.0
         },
         n_samples: n,
+        debug_missing: Vec::new(),
     }
+}
+
+fn collect_missing_samples(
+    slots: &[Option<Feature>],
+    bounds: &SearchBounds,
+    sample_names: &[String],
+) -> Vec<MissingSample> {
+    slots
+        .iter()
+        .enumerate()
+        .filter(|(_, slot)| slot.is_none())
+        .map(|(index, _)| MissingSample {
+            sample: sample_names.get(index).cloned().unwrap_or_default(),
+            target_mz: bounds.target_mz,
+            center_rt: bounds.center_rt,
+            rt_from: bounds.rt_from,
+            rt_to: bounds.rt_to,
+        })
+        .collect()
 }
 
 pub(crate) fn median(values: &mut [f64]) -> f64 {
@@ -808,7 +892,6 @@ pub(crate) fn median(values: &mut [f64]) -> f64 {
     }
 }
 
-// TODO: Mmap-backed mzML loading is still being tested.
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 fn open_mzml(path: &Path) -> Result<MzML, String> {
     let file = File::open(path).map_err(|e| format!("open {}: {}", path.display(), e))?;
