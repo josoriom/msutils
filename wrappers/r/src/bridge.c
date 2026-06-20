@@ -247,6 +247,7 @@ static int fill_options(SEXP opts, CPeakOptions *out)
   out->max_iterations = 0;
   out->allow_overlap = 0;
   out->min_snr = NAN;
+  out->min_gaussian_r2 = NAN;
   SEXP v = R_NilValue;
   v = list_get(opts, "min_integral");
   if (v != R_NilValue)
@@ -278,6 +279,9 @@ static int fill_options(SEXP opts, CPeakOptions *out)
   v = list_get(opts, "min_snr");
   if (v != R_NilValue)
     out->min_snr = asReal(v);
+  v = list_get(opts, "min_gaussian_r2");
+  if (v != R_NilValue)
+    out->min_gaussian_r2 = asReal(v);
   return 1;
 }
 

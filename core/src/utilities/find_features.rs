@@ -42,6 +42,7 @@ impl MzTolerance {
         (mz - tol, mz + tol)
     }
 
+    #[cfg(test)]
     pub(crate) fn are_close(&self, a: f64, b: f64) -> bool {
         (a - b).abs() <= self.tol_at(0.5 * (a + b).abs())
     }
@@ -428,7 +429,8 @@ fn extract_features(
         .unwrap_or(opts.min_seed_width_points);
 
     let extract_one = |&target_mz: &f64| -> Vec<Feature> {
-        let eic = eic_row_for_mass(scans, target_mz, opts.final_eic_options);
+        let center_mz = recenter_mass(scans, target_mz, opts.final_eic_options);
+        let eic = eic_row_for_mass(scans, center_mz, opts.final_eic_options);
         let data = DataXY {
             x: time.to_vec(),
             y: eic,
@@ -441,12 +443,12 @@ fn extract_features(
                 let measured_mz = weighted_mz_in_window(
                     scans,
                     time,
-                    target_mz,
+                    center_mz,
                     peak.from,
                     peak.to,
                     opts.final_eic_options,
                 )
-                .unwrap_or(target_mz);
+                .unwrap_or(center_mz);
                 Feature {
                     mz: measured_mz,
                     rt: peak.rt,
@@ -468,6 +470,29 @@ fn extract_features(
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     {
         masses.iter().flat_map(extract_one).collect()
+    }
+}
+
+fn recenter_mass(scans: &Scans, target_mz: f64, options: EicOptions) -> f64 {
+    let tolerance = mz_tolerance_for(target_mz, options);
+    let low = target_mz - tolerance;
+    let high = target_mz + tolerance;
+
+    let mut weighted = 0.0f64;
+    let mut total = 0.0f64;
+    for (mz, intensity) in scans {
+        let start = lower_bound(mz, low);
+        let end = upper_bound(mz, high);
+        for k in start..end {
+            weighted += mz[k] * intensity[k];
+            total += intensity[k];
+        }
+    }
+
+    if total > 0.0 {
+        weighted / total
+    } else {
+        target_mz
     }
 }
 
@@ -520,19 +545,22 @@ pub(crate) fn deduplicate_masses(mut masses: Vec<f64>, opts: EicOptions) -> Vec<
     };
 
     let mut out: Vec<f64> = Vec::with_capacity(masses.len());
-    let mut cluster = vec![masses[0]];
+    let mut anchor = masses[0];
+    let mut sum = masses[0];
+    let mut count = 1usize;
 
     for &m in masses.iter().skip(1) {
-        let median = cluster[cluster.len() / 2];
-        if tolerance.are_close(m, median) {
-            cluster.push(m);
+        if tolerance.are_close_to_ref(m, anchor) {
+            sum += m;
+            count += 1;
         } else {
-            out.push(cluster[cluster.len() / 2]);
-            cluster.clear();
-            cluster.push(m);
+            out.push(sum / count as f64);
+            anchor = m;
+            sum = m;
+            count = 1;
         }
     }
-    out.push(cluster[cluster.len() / 2]);
+    out.push(sum / count as f64);
     out
 }
 

@@ -1,18 +1,14 @@
-use crate::utilities::cheminfo::sgg::{SggOptions, sgg};
 use crate::utilities::find_peaks::{FindPeaksOptions, find_peaks};
 use crate::utilities::structs::{DataXY, Peak, Roi};
 
-// TODO: fix the hardcoded values
 const LOCAL_WINDOW_MINUTES: f64 = 2.0;
-const SMOOTH_WINDOW: usize = 5;
-const SMOOTH_POLYNOMIAL: usize = 3;
 
 pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> Option<Peak> {
     let target = roi.rt;
 
     let local;
     let section: &DataXY = if target.is_finite() {
-        local = smooth(crop_around(data, target, LOCAL_WINDOW_MINUTES));
+        local = crop_around(data, target, LOCAL_WINDOW_MINUTES);
         &local
     } else {
         data
@@ -53,23 +49,6 @@ fn find_closest_peak(peaks: &[Peak], target: f64, half_width: f64) -> Option<&Pe
         }
     }
     closest
-}
-
-fn smooth(section: DataXY) -> DataXY {
-    if section.y.len() < SMOOTH_WINDOW {
-        return section;
-    }
-    let DataXY { x, y } = section;
-    let smooth_y = sgg(
-        &y,
-        &x,
-        SggOptions {
-            window_size: SMOOTH_WINDOW,
-            derivative: 0,
-            polynomial: SMOOTH_POLYNOMIAL,
-        },
-    );
-    DataXY { x, y: smooth_y }
 }
 
 fn crop_around(data: &DataXY, center: f64, half_width: f64) -> DataXY {

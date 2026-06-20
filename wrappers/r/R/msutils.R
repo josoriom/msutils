@@ -12,7 +12,8 @@
   min_peak_width_points = 5L,
   auto_noise           = TRUE,
   auto_baseline        = TRUE,
-  min_snr              = 1
+  min_snr              = 1,
+  min_gaussian_r2      = 0.30
 )
 
 dispose <- function(bin) {
@@ -82,7 +83,8 @@ get_peak <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_gaussian_r2       = .DEFAULTS$min_gaussian_r2
 ) {
   stopifnot(is.numeric(x), is.numeric(y))
   if (length(x) != length(y) || length(x) < 3) stop("x and y must have the same length (>= 3)")
@@ -94,7 +96,7 @@ get_peak <- function(
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
-    allow_overlap=allow_overlap, min_snr=min_snr
+    allow_overlap=allow_overlap, min_snr=min_snr, min_gaussian_r2=min_gaussian_r2
   )
   out_json <- .Call("C_get_peak", as.numeric(x), as.numeric(y), as.numeric(rt), as.numeric(range), opt, PACKAGE="msutils")
   jsonlite::fromJSON(out_json, simplifyVector=TRUE)
@@ -111,7 +113,8 @@ get_peaks_from_eic <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_gaussian_r2       = .DEFAULTS$min_gaussian_r2
 ) {
   stopifnot(typeof(bin) == "externalptr")
   if (!is.data.frame(df)) stop("`df` must be a data.frame")
@@ -132,7 +135,7 @@ get_peaks_from_eic <- function(
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
-    allow_overlap=allow_overlap, min_snr=min_snr
+    allow_overlap=allow_overlap, min_snr=min_snr, min_gaussian_r2=min_gaussian_r2
   )
   cores <- .validate_cores(cores)
   out_json <- .Call("C_get_peaks_from_eic",
@@ -160,7 +163,8 @@ get_peaks_from_chrom <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_gaussian_r2       = .DEFAULTS$min_gaussian_r2
 ) {
   stopifnot(typeof(bin) == "externalptr")
   if (is.null(items) || !(is.list(items) || is.data.frame(items))) stop("items must be a list/data.frame")
@@ -176,7 +180,7 @@ get_peaks_from_chrom <- function(
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
-    allow_overlap=allow_overlap, min_snr=min_snr
+    allow_overlap=allow_overlap, min_snr=min_snr, min_gaussian_r2=min_gaussian_r2
   )
   cores <- .validate_cores(cores)
   out_json <- .Call("C_get_peaks_from_chrom",
@@ -214,7 +218,8 @@ find_peaks <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_gaussian_r2       = .DEFAULTS$min_gaussian_r2
 ) {
   stopifnot(is.numeric(x), is.numeric(y))
   if (length(x) != length(y) || length(x) < 3) stop("x and y must have the same length >= 3")
@@ -226,7 +231,7 @@ find_peaks <- function(
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
-    allow_overlap=allow_overlap, min_snr=min_snr
+    allow_overlap=allow_overlap, min_snr=min_snr, min_gaussian_r2=min_gaussian_r2
   )
   out_json <- .Call("C_find_peaks", as.numeric(x), as.numeric(y), opt, PACKAGE="msutils")
   jsonlite::fromJSON(out_json, simplifyVector=TRUE)
@@ -255,7 +260,8 @@ find_feature <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_gaussian_r2       = .DEFAULTS$min_gaussian_r2
 ) {
   stopifnot(typeof(bin) == "externalptr")
   if (!is.numeric(rt)) stop("rt must be numeric")
@@ -287,7 +293,7 @@ find_feature <- function(
     lambda=lambda,
     max_iterations=max_iterations,
     allow_overlap=allow_overlap,
-    min_snr=min_snr
+    min_snr=min_snr, min_gaussian_r2=min_gaussian_r2
   )
 
   cores <- .validate_cores(cores)
@@ -331,7 +337,8 @@ find_features <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_gaussian_r2       = .DEFAULTS$min_gaussian_r2
 ) {
   stopifnot(typeof(data) == "externalptr")
   if (!is.logical(use_gpu) || length(use_gpu) != 1 || is.na(use_gpu)) stop("use_gpu must be logical TRUE/FALSE")
@@ -342,7 +349,7 @@ find_features <- function(
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
-    allow_overlap=allow_overlap, min_snr=min_snr
+    allow_overlap=allow_overlap, min_snr=min_snr, min_gaussian_r2=min_gaussian_r2
   )
 
   out_json <- .Call(
@@ -451,7 +458,8 @@ get_features <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_gaussian_r2       = .DEFAULTS$min_gaussian_r2
 ) {
   if (!is.character(dir_path) || length(dir_path) != 1) stop("dir_path must be a single string")
   if (!is.logical(use_gpu) || length(use_gpu) != 1 || is.na(use_gpu)) stop("use_gpu must be logical TRUE/FALSE")
@@ -462,7 +470,7 @@ get_features <- function(
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
-    allow_overlap=allow_overlap, min_snr=min_snr
+    allow_overlap=allow_overlap, min_snr=min_snr, min_gaussian_r2=min_gaussian_r2
   )
 
   out_json <- .Call("C_get_features",
