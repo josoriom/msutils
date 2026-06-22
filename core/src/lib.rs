@@ -1188,7 +1188,30 @@ pub unsafe extern "C" fn get_ion_image(
     }
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
-        let image = crate::utilities::ion_image::compute_ion_image(file, target, tolerance, level);
+
+        let mut reader = match file {
+            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            ParsedFile::Remote(remote) => {
+                let prefetcher = remote.prefetcher.clone();
+                let ion = remote.ion_mut();
+                prefetcher
+                    .prefetch(&mut || {
+                        crate::utilities::ion_image::plan_ion_image_ranges(
+                            ion, target, tolerance, level,
+                        )
+                    })
+                    .map_err(fast_error_to_code)?;
+                EicReader::Ion(ion)
+            }
+        };
+
+        let image = crate::utilities::ion_image::compute_ion_image(
+            &mut reader,
+            target,
+            tolerance,
+            level,
+        );
         let json = serde_json::to_string(&image).map_err(|_| ERR_ENCODE)?;
         write_buf(out, json.into_bytes().into_boxed_slice());
         Ok(())
@@ -1196,6 +1219,144 @@ pub unsafe extern "C" fn get_ion_image(
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
         Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn image_begin(
+    h: *mut ParsedFile,
+    target: f64,
+    tolerance: f64,
+    level: u8,
+    out_session: *mut usize,
+) -> c_int {
+    if h.is_null() || out_session.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+    if !target.is_finite() || !tolerance.is_finite() || tolerance < 0.0 {
+        return ERR_INVALID_ARGS;
+    }
+
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let file = unsafe { &mut *h };
+        let mut reader = match file {
+            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            ParsedFile::Remote(remote) => EicReader::Ion(remote.ion_mut()),
+        };
+        let session =
+            crate::utilities::ion_image::image_session_begin(&mut reader, target, tolerance, level);
+        let pointer = Box::into_raw(Box::new(session)) as usize;
+        unsafe { *out_session = pointer };
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn image_scan_count(
+    session: *mut crate::utilities::ion_image::ImageSession,
+    out_count: *mut usize,
+) -> c_int {
+    if session.is_null() || out_count.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+    let session = unsafe { &*session };
+    unsafe { *out_count = session.scan_count() };
+    OK
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn image_ranges(
+    h: *mut ParsedFile,
+    session: *mut crate::utilities::ion_image::ImageSession,
+    from: usize,
+    count: usize,
+    out: *mut Buf,
+) -> c_int {
+    if h.is_null() || session.is_null() || out.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let file = unsafe { &mut *h };
+        let session = unsafe { &*session };
+        let ranges = match file {
+            ParsedFile::Lazy(ion) => session.ranges(ion.as_mut(), from, count),
+            ParsedFile::Remote(remote) => session.ranges(remote.ion_mut(), from, count),
+            ParsedFile::Full(_) => Err(FastError::UnsupportedBackend),
+        }
+        .map_err(fast_error_to_code)?;
+
+        let bytes = pack_byte_ranges(&ranges);
+        write_buf(out, bytes);
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn image_fold(
+    h: *mut ParsedFile,
+    session: *mut crate::utilities::ion_image::ImageSession,
+    from: usize,
+    count: usize,
+) -> c_int {
+    if h.is_null() || session.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let file = unsafe { &mut *h };
+        let session = unsafe { &mut *session };
+        let mut reader = match file {
+            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            ParsedFile::Remote(remote) => EicReader::Ion(remote.ion_mut()),
+        };
+        session.fold(&mut reader, from, count);
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn image_finish(
+    session: *mut crate::utilities::ion_image::ImageSession,
+    out: *mut Buf,
+) -> c_int {
+    if session.is_null() || out.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let session = unsafe { &*session };
+        let image = session.finish();
+        let json = serde_json::to_string(&image).map_err(|_| ERR_ENCODE)?;
+        write_buf(out, json.into_bytes().into_boxed_slice());
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn image_free(session: *mut crate::utilities::ion_image::ImageSession) {
+    if !session.is_null() {
+        unsafe {
+            drop(Box::from_raw(session));
+        }
     }
 }
 

@@ -322,6 +322,20 @@ class WasmExports {
       outBuf: number,
     ) => number
   ) | null;
+  readonly imageBegin:
+    | ((handle: number, mz: number, tolerance: number, level: number, outSession: number) => number)
+    | null;
+  readonly imageScanCount:
+    | ((session: number, outCount: number) => number)
+    | null;
+  readonly imageRanges:
+    | ((handle: number, session: number, from: number, count: number, outBuf: number) => number)
+    | null;
+  readonly imageFold:
+    | ((handle: number, session: number, from: number, count: number) => number)
+    | null;
+  readonly imageFinish: ((session: number, outBuf: number) => number) | null;
+  readonly imageFree: ((session: number) => void) | null;
 
   constructor(instance: WebAssembly.Instance) {
     const ex = instance.exports;
@@ -364,6 +378,41 @@ class WasmExports {
           mzTol: number,
           outBuf: number,
         ) => number
+      : null;
+    this.imageBegin = typeof ex["image_begin"] === "function"
+      ? ex["image_begin"] as unknown as (
+          handle: number,
+          mz: number,
+          tolerance: number,
+          level: number,
+          outSession: number,
+        ) => number
+      : null;
+    this.imageScanCount = typeof ex["image_scan_count"] === "function"
+      ? ex["image_scan_count"] as unknown as (session: number, outCount: number) => number
+      : null;
+    this.imageRanges = typeof ex["image_ranges"] === "function"
+      ? ex["image_ranges"] as unknown as (
+          handle: number,
+          session: number,
+          from: number,
+          count: number,
+          outBuf: number,
+        ) => number
+      : null;
+    this.imageFold = typeof ex["image_fold"] === "function"
+      ? ex["image_fold"] as unknown as (
+          handle: number,
+          session: number,
+          from: number,
+          count: number,
+        ) => number
+      : null;
+    this.imageFinish = typeof ex["image_finish"] === "function"
+      ? ex["image_finish"] as unknown as (session: number, outBuf: number) => number
+      : null;
+    this.imageFree = typeof ex["image_free"] === "function"
+      ? ex["image_free"] as unknown as (session: number) => void
       : null;
   }
 
@@ -456,6 +505,15 @@ async function prefetchRangesForSource(
   });
 
   await Promise.all(fetches);
+}
+
+const IMAGE_BATCH_SCANS = 256;
+const IMAGE_BATCH_BUDGET_BYTES = 192 * 1024 * 1024;
+
+function total_range_bytes(ranges: ByteRangeResult[]): bigint {
+  let total = 0n;
+  for (const range of ranges) total += range.length;
+  return total;
 }
 
 class WasmApi {
@@ -589,6 +647,84 @@ class WasmApi {
     );
     if (rc !== 0) throw new Error(`plan_eic failed with code ${rc}`);
     return this.readRangesFromSlot(this.blobScratchSlot);
+  }
+
+  private imageBegin(handle: number, mz: number, tolerance: number, level: number): number {
+    if (!this.fn.imageBegin) throw new Error("imageBegin not in WASM exports");
+    const rc = this.fn.imageBegin(handle, mz, tolerance, level, this.handleScratchSlot);
+    if (rc !== 0) throw new Error(`image_begin failed with code ${rc}`);
+    return this.heap.readU32(this.handleScratchSlot);
+  }
+
+  private imageScanCount(session: number): number {
+    if (!this.fn.imageScanCount) throw new Error("imageScanCount not in WASM exports");
+    const rc = this.fn.imageScanCount(session, this.handleScratchSlot);
+    if (rc !== 0) throw new Error(`image_scan_count failed with code ${rc}`);
+    return this.heap.readU32(this.handleScratchSlot);
+  }
+
+  private imageRanges(
+    handle: number,
+    session: number,
+    from: number,
+    count: number,
+  ): ByteRangeResult[] {
+    if (!this.fn.imageRanges) throw new Error("imageRanges not in WASM exports");
+    const rc = this.fn.imageRanges(handle, session, from, count, this.blobScratchSlot);
+    if (rc !== 0) throw new Error(`image_ranges failed with code ${rc}`);
+    return this.readRangesFromSlot(this.blobScratchSlot);
+  }
+
+  private imageFold(handle: number, session: number, from: number, count: number): void {
+    if (!this.fn.imageFold) throw new Error("imageFold not in WASM exports");
+    const rc = this.fn.imageFold(handle, session, from, count);
+    if (rc !== 0) throw new Error(`image_fold failed with code ${rc}`);
+  }
+
+  private imageFinish(session: number): any {
+    if (!this.fn.imageFinish) throw new Error("imageFinish not in WASM exports");
+    const rc = this.fn.imageFinish(session, this.jsonOutputSlot);
+    if (rc !== 0) throw new Error(`image_finish failed with code ${rc}`);
+    return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
+  }
+
+  private imageFree(session: number): void {
+    if (this.fn.imageFree) this.fn.imageFree(session);
+  }
+
+  private async computeImageStreaming(
+    source: RemoteSource,
+    handle: number,
+    mz: number,
+    tolerance: number,
+    level: number,
+    onProgress?: (fetched: number, total: number, heldBytes: number) => void,
+  ): Promise<any> {
+    const session = this.imageBegin(handle, mz, tolerance, level);
+    try {
+      const total = this.imageScanCount(session);
+      onProgress?.(0, total, source.cache.bytes());
+      source.cache.pin();
+
+      let done = 0;
+      while (done < total) {
+        let count = Math.min(IMAGE_BATCH_SCANS, total - done);
+        let ranges = this.imageRanges(handle, session, done, count);
+        while (count > 1 && total_range_bytes(ranges) > BigInt(IMAGE_BATCH_BUDGET_BYTES)) {
+          count = Math.floor(count / 2);
+          ranges = this.imageRanges(handle, session, done, count);
+        }
+        await prefetchRangesForSource(source, ranges);
+        this.imageFold(handle, session, done, count);
+        source.cache.dropUnpinned();
+        done += count;
+        onProgress?.(done, total, source.cache.bytes());
+      }
+
+      return this.imageFinish(session);
+    } finally {
+      this.imageFree(session);
+    }
   }
 
   async parseIonUrl(url: string, cacheSize: number): Promise<number> {
@@ -729,10 +865,30 @@ class WasmApi {
     return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
   }
 
-  getIonImage(handle: number, mz: number, tolerance: number, level: number): any {
+  private getIonImageNow(handle: number, mz: number, tolerance: number, level: number): any {
     const rc = this.fn.getIonImage(handle, mz, tolerance, level, this.jsonOutputSlot);
     if (rc !== 0) throw new Error("get_ion_image failed with code " + rc);
     return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
+  }
+
+  async getIonImage(
+    handle: number,
+    mz: number,
+    tolerance: number,
+    level: number,
+    onProgress?: (fetched: number, total: number, heldBytes: number) => void,
+  ): Promise<any> {
+    const sourceId = this.source_id_by_handle.get(handle);
+
+    if (sourceId !== undefined) {
+      const source = range_sources.get(sourceId);
+      if (!source) {
+        throw new Error("getIonImage: remote source is missing");
+      }
+      return this.computeImageStreaming(source, handle, mz, tolerance, level, onProgress);
+    }
+
+    return this.getIonImageNow(handle, mz, tolerance, level);
   }
 
   findPeaks(
@@ -1127,13 +1283,14 @@ export class WasmBackend implements Backend {
     return this.getApi().getScans(handle as number, queryType, a, b, level);
   }
 
-  getIonImage(
+  async getIonImage(
     handle: FileHandle,
     mz: number,
     tolerance: number,
     level: number,
-  ): any {
-    return this.getApi().getIonImage(handle as number, mz, tolerance, level);
+    onProgress?: (fetched: number, total: number, heldBytes: number) => void,
+  ): Promise<any> {
+    return this.getApi().getIonImage(handle as number, mz, tolerance, level, onProgress);
   }
 
   findPeaks(

@@ -143,6 +143,7 @@ export type ScanQuery =
 export type IonImageOptions = {
   tolerance?: number;
   level?: number;
+  onProgress?: (fetched: number, total: number, heldBytes: number) => void;
 };
 
 export type IonImage = {

@@ -415,11 +415,11 @@ export function getScans(
  * @param options.level - MS level (1 = MS1). Default 1.
  * @returns Image with `width`, `height`, `minX`, `minY`, `minZ`, `maxZ`, `data` (mean intensity), and `counts` (spectra per pixel).
  */
-export function getIonImage(
+export async function getIonImage(
   file: SampleFile,
   mz: number,
   options: IonImageOptions = {},
-): IonImage {
+): Promise<IonImage> {
   assertFile(file, "getIonImage");
   const tolerance = options.tolerance ?? 0.125;
   const level = options.level ?? 1;
@@ -427,7 +427,13 @@ export function getIonImage(
   if (!Number.isFinite(tolerance) || tolerance < 0)
     throw new RangeError("getIonImage: tolerance must be a non-negative number");
   assertLevel(level, "getIonImage");
-  return backend().getIonImage(file._handle!, mz, tolerance, level) as IonImage;
+  return (await file._backend.getIonImage(
+    file._handle!,
+    mz,
+    tolerance,
+    level,
+    options.onProgress,
+  )) as IonImage;
 }
 
 /**
