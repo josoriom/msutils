@@ -50,6 +50,9 @@ use utilities::{
     find_features::{FindFeaturesOptions, find_features as find_features_rs},
     find_noise_level::find_noise_level as find_noise_level_rs,
     find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter, find_peaks as find_peaks_rs},
+    fit_peak::{
+        PeakParameters, PeakSeed, PeakShape, draw_peak as draw_peak_rs, fit_peak as fit_peak_rs,
+    },
     get_peak::get_peak as get_peak_rs,
     get_peaks_from_chrom::get_peaks_from_chrom as get_peaks_from_chrom_rs,
     get_peaks_from_eic::{get_peaks_from_eic as get_peaks_from_eic_rs, plan_peaks_ranges},
@@ -59,6 +62,7 @@ use utilities::{
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use utilities::get_features::{AlignmentOptions, get_features as get_features_rs};
+use utilities::mz_estimator::MzEstimatorKind;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::find_features::MzTolerance;
@@ -125,7 +129,7 @@ struct FoundFeatureOut<'a> {
     noise: f64,
 }
 
-pub const MSUTILS_ABI_VERSION: u32 = 2;
+pub const MSUTILS_ABI_VERSION: u32 = 1;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn msutils_abi_version() -> u32 {
@@ -744,6 +748,95 @@ pub unsafe extern "C" fn get_peak(
         );
         let s = serde_json::to_string(&peak.unwrap_or_default()).map_err(|_| ERR_ENCODE)?;
         write_buf(out, s.into_bytes().into_boxed_slice());
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(c)) => c,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+fn peak_shape_from_code(shape: c_int) -> PeakShape {
+    if shape == 0 {
+        PeakShape::Gaussian
+    } else {
+        PeakShape::EMG
+    }
+}
+
+/// Fit a Gaussian or EMG model to a peak and write the parameters JSON to `out`.
+///
+/// `shape` is 0 for Gaussian, 1 for EMG.
+///
+/// # Safety
+/// `x_ptr` and `y_ptr` must point to `len` readable `f64` values.
+/// `out` must be a valid writable `Buf` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fit_peak(
+    x_ptr: *const f64,
+    y_ptr: *const f64,
+    len: usize,
+    rt: f64,
+    intensity: f64,
+    shape: c_int,
+    out: *mut Buf,
+) -> c_int {
+    if x_ptr.is_null() || y_ptr.is_null() || out.is_null() || len < 5 {
+        return ERR_INVALID_ARGS;
+    }
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let data = DataXY {
+            x: unsafe { slice::from_raw_parts(x_ptr, len) }.to_vec(),
+            y: unsafe { slice::from_raw_parts(y_ptr, len) }.to_vec(),
+        };
+        let params = fit_peak_rs(&data, &PeakSeed { rt, intensity }, peak_shape_from_code(shape));
+        let json = serde_json::to_string(&params).map_err(|_| ERR_ENCODE)?;
+        write_buf(out, json.into_bytes().into_boxed_slice());
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(c)) => c,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+/// Render a fitted peak model over `x` and write the y curve to `out_y`.
+///
+/// `shape` is 0 for Gaussian, 1 for EMG. The output has the same length as `x`.
+///
+/// # Safety
+/// `x_ptr` must point to `len` readable `f64` values.
+/// `out_y` must be a valid writable `Buf` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn draw_peak(
+    x_ptr: *const f64,
+    len: usize,
+    shape: c_int,
+    height: f64,
+    center: f64,
+    fwhm: f64,
+    tail: f64,
+    out_y: *mut Buf,
+) -> c_int {
+    if x_ptr.is_null() || out_y.is_null() || len == 0 {
+        return ERR_INVALID_ARGS;
+    }
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let x = unsafe { slice::from_raw_parts(x_ptr, len) }.to_vec();
+        let params = PeakParameters {
+            shape: peak_shape_from_code(shape),
+            height,
+            center,
+            fwhm,
+            tail,
+            r2: 0.0,
+        };
+        let data = DataXY {
+            x: x.clone(),
+            y: vec![0.0; len],
+        };
+        let drawn = draw_peak_rs(&data, &params);
+        write_buf(out_y, f64_to_u8(&drawn.y));
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -1441,6 +1534,8 @@ pub unsafe extern "C" fn get_features(
             },
             eic_options: feature_opts.final_eic_options,
             peak_options: Some(peak_options),
+            mz_estimator: MzEstimatorKind::MedianMzApex,
+            ..AlignmentOptions::default()
         };
 
         let feats = get_features_rs(
@@ -1734,6 +1829,8 @@ fn write_scans_json(
     Ok(())
 }
 
+const DEFAULT_EIC_HALF_WIDTH: f64 = 0.5;
+
 fn build_eic_rois(
     rts: &[f64],
     mzs: &[f64],
@@ -1758,8 +1855,13 @@ fn build_eic_rois(
 
     (0..n)
         .map(|i| {
-            let (rt, mz, w) = (rts[i], mzs[i], wins[i]);
-            let ok = rt.is_finite() && mz.is_finite() && w.is_finite() && w > 0.0;
+            let (rt, mz, window) = (rts[i], mzs[i], wins[i]);
+            let has_target = rt.is_finite() && mz.is_finite();
+            let half_width = if window.is_finite() && window > 0.0 {
+                window
+            } else {
+                DEFAULT_EIC_HALF_WIDTH
+            };
             let id = ibuf
                 .and_then(|buf| {
                     let (o, l) = (offs[i] as usize, lens[i] as usize);
@@ -1771,12 +1873,12 @@ fn build_eic_rois(
                 })
                 .unwrap_or_default();
 
-            if ok {
+            if has_target {
                 EicRoi {
                     id,
                     rt,
                     mz,
-                    half_width: w,
+                    half_width,
                 }
             } else {
                 EicRoi {

@@ -11,9 +11,11 @@ mod tests {
         get_features::{
             AlignmentOptions, ConsensusFeature, FeatureClusterer, MzRtCluster, SearchBounds,
             TaggedFeature, aggregate_into_consensus, assign_best_per_sample, collect_filled_slots,
-            compute_search_bounds, dedup, get_features, median, require_minimum_frequency,
+            compute_search_bounds, dedup, get_features, require_minimum_frequency, resolve_cluster,
             weighted_centroid_mz,
         },
+        math::median,
+        mz_estimator::{MedianMzApex, MzEstimatorKind},
         structs::FromTo,
     };
 
@@ -788,6 +790,74 @@ mod tests {
         }
     }
 
+    fn build_mzml_masses(
+        mzs: &[f64],
+        peak_rt: f64,
+        amp: f64,
+        rt_min: f64,
+        rt_max: f64,
+        n_scans: usize,
+    ) -> MzML {
+        let sigma = 0.05;
+        let mut spectra = Vec::with_capacity(n_scans);
+        for i in 0..n_scans {
+            let rt = rt_min + (rt_max - rt_min) * i as f64 / (n_scans - 1) as f64;
+            let height = gaussian(rt, peak_rt, sigma, amp).max(0.0);
+            let intensities: Vec<f64> = (0..mzs.len())
+                .map(|k| height * (1.0 - 0.15 * k as f64))
+                .collect();
+            spectra.push(make_spectrum(i, rt, mzs.to_vec(), intensities));
+        }
+        MzML {
+            run: Run {
+                id: "test".to_string(),
+                spectrum_list: Some(SpectrumList {
+                    count: Some(spectra.len()),
+                    spectra,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn build_mzml_peak_and_flat(
+        peak_mz: f64,
+        flat_mz: f64,
+        peak_rt: f64,
+        amp: f64,
+        rt_min: f64,
+        rt_max: f64,
+        n_scans: usize,
+    ) -> MzML {
+        let sigma = 0.05;
+        let flat_level = amp * 0.3;
+        let mut spectra = Vec::with_capacity(n_scans);
+        for i in 0..n_scans {
+            let rt = rt_min + (rt_max - rt_min) * i as f64 / (n_scans - 1) as f64;
+            let height = gaussian(rt, peak_rt, sigma, amp).max(0.0);
+            spectra.push(make_spectrum(
+                i,
+                rt,
+                vec![peak_mz, flat_mz],
+                vec![height, flat_level],
+            ));
+        }
+        MzML {
+            run: Run {
+                id: "test".to_string(),
+                spectrum_list: Some(SpectrumList {
+                    count: Some(spectra.len()),
+                    spectra,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     fn to_ion_bytes(mzml: &MzML) -> Vec<u8> {
         let mut bytes = Vec::new();
         encode(mzml, 0, false, &mut bytes).expect("ion encode should succeed");
@@ -819,7 +889,123 @@ mod tests {
                 ..Default::default()
             },
             peak_options: None,
+            mz_estimator: MzEstimatorKind::MedianMzApex,
+            ..Default::default()
         }
+    }
+
+    fn feature_at(mz: f64, rt: f64, from: f64, to: f64) -> Feature {
+        Feature {
+            mz,
+            rt,
+            from,
+            to,
+            intensity: 0.0,
+            integral: 0.0,
+            n_points: 0,
+            noise: 0.0,
+        }
+    }
+
+    fn bounds_at(target_mz: f64, center_rt: f64, rt_from: f64, rt_to: f64) -> SearchBounds {
+        SearchBounds {
+            target_mz,
+            center_rt,
+            rt_from,
+            rt_to,
+        }
+    }
+
+    #[test]
+    fn test_resolve_cluster_present_keeps_feature_and_reads_apex() {
+        let scans = vec![
+            (4.9, vec![100.001], vec![10.0]),
+            (5.0, vec![100.002], vec![90.0]),
+            (5.1, vec![100.003], vec![15.0]),
+        ];
+        let existing = feature_at(100.0, 5.0, 4.9, 5.1);
+        let bounds = bounds_at(100.0, 5.0, 4.85, 5.15);
+        let resolved = resolve_cluster(
+            &scans,
+            Some(&existing),
+            &bounds,
+            99.99,
+            100.01,
+            20.0,
+            None,
+            &MedianMzApex,
+        );
+        assert!(resolved.feature.is_none());
+        let apex = resolved.apex.expect("apex measured");
+        assert!((apex.mz - 100.002).abs() < 1e-9);
+        assert!((apex.intensity - 90.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_resolve_cluster_apex_uses_only_peak_window() {
+        let scans = vec![
+            (4.0, vec![100.050], vec![1000.0]),
+            (5.0, vec![100.002], vec![90.0]),
+            (6.0, vec![100.090], vec![1000.0]),
+        ];
+        let existing = feature_at(100.0, 5.0, 4.9, 5.1);
+        let bounds = bounds_at(100.0, 5.0, 4.85, 5.15);
+        let resolved = resolve_cluster(
+            &scans,
+            Some(&existing),
+            &bounds,
+            99.0,
+            101.0,
+            20.0,
+            None,
+            &MedianMzApex,
+        );
+        let apex = resolved.apex.expect("apex measured");
+        assert!((apex.mz - 100.002).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_resolve_cluster_missing_flat_signal_returns_nothing() {
+        let scans = vec![
+            (4.9, vec![100.002], vec![0.0]),
+            (5.0, vec![100.002], vec![0.0]),
+            (5.1, vec![100.002], vec![0.0]),
+        ];
+        let bounds = bounds_at(100.0, 5.0, 4.85, 5.15);
+        let resolved =
+            resolve_cluster(&scans, None, &bounds, 99.99, 100.01, 20.0, None, &MedianMzApex);
+        assert!(resolved.feature.is_none());
+        assert!(resolved.apex.is_none());
+    }
+
+    #[test]
+    fn test_resolve_cluster_missing_with_peak_fills_and_measures_apex() {
+        let peak_mz = 300.0;
+        let scans: Vec<(f64, Vec<f64>, Vec<f64>)> = (0..41)
+            .map(|i| {
+                let rt = 4.0 + 2.0 * i as f64 / 40.0;
+                (rt, vec![peak_mz], vec![gaussian(rt, 5.0, 0.1, 1000.0)])
+            })
+            .collect();
+        let bounds = bounds_at(peak_mz, 5.0, 4.7, 5.3);
+        let resolved =
+            resolve_cluster(&scans, None, &bounds, 299.99, 300.01, 20.0, None, &MedianMzApex);
+
+        let feature = resolved
+            .feature
+            .expect("a missing sample with a real peak should be filled");
+        assert!(
+            feature.from < 5.0 && feature.to > 5.0,
+            "filled peak [{:.3}, {:.3}] should bracket the apex rt 5.0",
+            feature.from,
+            feature.to
+        );
+        assert!(
+            (feature.mz - peak_mz).abs() < 1e-9,
+            "filled feature mz should be set from the apex"
+        );
+        let apex = resolved.apex.expect("apex measured for the filled peak");
+        assert!((apex.mz - peak_mz).abs() < 1e-9);
     }
 
     fn feature_cfg_for_mz(mz: f64) -> FindFeaturesOptions {
@@ -1235,6 +1421,279 @@ mod tests {
         assert!(
             json.contains("\"base_peak_mz\":0"),
             "base_peak_mz → 0: {json}"
+        );
+    }
+
+    #[test]
+    fn test_rt_shifted_samples_report_apex_mz() {
+        let peak_mz = 200.0;
+        let shifts = [4.90, 4.95, 5.00, 5.05, 5.10];
+
+        let samples: Vec<Vec<u8>> = shifts
+            .iter()
+            .map(|&peak_rt| {
+                let mzml = build_mzml_single_peak(peak_mz, peak_rt, 10_000.0, 4.0, 6.0, 60);
+                to_ion_bytes(&mzml)
+            })
+            .collect();
+
+        let dir = write_ion_dir("rt_shifted_apex", &samples);
+        let features = get_features(
+            dir.to_str().unwrap(),
+            FromTo { from: 3.0, to: 7.0 },
+            feature_cfg_for_mz(peak_mz),
+            alignment_cfg(),
+            1,
+        )
+        .expect("get_features should succeed");
+        let _ = fs::remove_dir_all(&dir);
+
+        let best = features.iter().max_by_key(|f| f.n_samples).unwrap();
+        assert_eq!(best.n_samples, shifts.len(), "all shifted samples cluster");
+        assert!(
+            (best.mz - peak_mz).abs() < 0.001,
+            "apex mz {:.5} should equal {peak_mz}",
+            best.mz
+        );
+    }
+
+    #[test]
+    fn test_consensus_mz_is_deterministic_across_cores() {
+        let peak_mz = 350.0;
+        let shifts = [6.95, 7.00, 7.05, 6.90];
+
+        let samples: Vec<Vec<u8>> = shifts
+            .iter()
+            .map(|&peak_rt| {
+                to_ion_bytes(&build_mzml_single_peak(
+                    peak_mz, peak_rt, 9_000.0, 6.0, 8.0, 60,
+                ))
+            })
+            .collect();
+
+        let run = |cores: usize| {
+            let dir = write_ion_dir(&format!("determinism_{cores}"), &samples);
+            let mut features = get_features(
+                dir.to_str().unwrap(),
+                FromTo { from: 5.0, to: 9.0 },
+                feature_cfg_for_mz(peak_mz),
+                alignment_cfg(),
+                cores,
+            )
+            .expect("get_features should succeed");
+            let _ = fs::remove_dir_all(&dir);
+            features.sort_by(|a, b| a.mz.partial_cmp(&b.mz).unwrap());
+            features.into_iter().map(|f| f.mz).collect::<Vec<f64>>()
+        };
+
+        let one = run(1);
+        let many = run(4);
+        assert_eq!(one.len(), many.len(), "same number of features");
+        for (a, b) in one.iter().zip(many.iter()) {
+            assert!(
+                (a - b).abs() < 1e-9,
+                "mz must be deterministic across cores: {a} vs {b}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_weighted_intensity_median_selection_reports_mz() {
+        let peak_mz = 250.0;
+        let peak_rt = 5.0;
+
+        let samples: Vec<Vec<u8>> = (0..4)
+            .map(|_| {
+                to_ion_bytes(&build_mzml_single_peak(
+                    peak_mz, peak_rt, 10_000.0, 4.0, 6.0, 60,
+                ))
+            })
+            .collect();
+
+        let dir = write_ion_dir("weighted_median_select", &samples);
+        let mut cfg = alignment_cfg();
+        cfg.mz_estimator = MzEstimatorKind::WeightedIntensityMedian;
+        let features = get_features(
+            dir.to_str().unwrap(),
+            FromTo { from: 3.0, to: 7.0 },
+            feature_cfg_for_mz(peak_mz),
+            cfg,
+            1,
+        )
+        .expect("get_features should succeed");
+        let _ = fs::remove_dir_all(&dir);
+
+        let best = features.iter().max_by_key(|f| f.n_samples).unwrap();
+        assert!(
+            (best.mz - peak_mz).abs() < 0.001,
+            "weighted-median mz {:.5} should equal {peak_mz}",
+            best.mz
+        );
+    }
+
+    #[test]
+    fn test_two_co_eluting_masses_split_into_two_features() {
+        let mz_a = 200.0300;
+        let mz_b = 200.0330;
+        let peak_rt = 5.0;
+        let n_samples = 6;
+
+        let samples: Vec<Vec<u8>> = (0..n_samples)
+            .map(|_| {
+                to_ion_bytes(&build_mzml_two_peaks(
+                    mz_a, mz_b, peak_rt, 10_000.0, 4.0, 6.0, 60,
+                ))
+            })
+            .collect();
+
+        let dir = write_ion_dir("co_eluting_split", &samples);
+        let features = get_features(
+            dir.to_str().unwrap(),
+            FromTo { from: 3.0, to: 7.0 },
+            feature_cfg_for_mz_range(mz_a, mz_b),
+            alignment_cfg(),
+            1,
+        )
+        .expect("get_features should succeed");
+        let _ = fs::remove_dir_all(&dir);
+
+        let reported: Vec<f64> = features.iter().map(|f| f.mz).collect();
+        let near = |target: f64| {
+            features
+                .iter()
+                .filter(|f| (f.mz - target).abs() < 0.001 && (f.rt - peak_rt).abs() < 0.2)
+                .count()
+        };
+        assert_eq!(near(mz_a), 1, "mass A reported once, got {reported:?}");
+        assert_eq!(near(mz_b), 1, "mass B reported once, got {reported:?}");
+    }
+
+    fn count_near(features: &[ConsensusFeature], mz: f64, rt: f64) -> usize {
+        features
+            .iter()
+            .filter(|f| (f.mz - mz).abs() < 0.0008 && (f.rt - rt).abs() < 0.2)
+            .count()
+    }
+
+    #[test]
+    fn test_two_masses_within_cutoff_stay_one_feature() {
+        let mz_a = 200.0300;
+        let mz_b = 200.0310;
+        let peak_rt = 5.0;
+        let samples: Vec<Vec<u8>> = (0..6)
+            .map(|_| to_ion_bytes(&build_mzml_masses(&[mz_a, mz_b], peak_rt, 10_000.0, 4.0, 6.0, 60)))
+            .collect();
+        let dir = write_ion_dir("within_cutoff", &samples);
+        let features = get_features(
+            dir.to_str().unwrap(),
+            FromTo { from: 3.0, to: 7.0 },
+            feature_cfg_for_mz_range(mz_a, mz_b),
+            alignment_cfg(),
+            1,
+        )
+        .expect("get_features should succeed");
+        let _ = fs::remove_dir_all(&dir);
+
+        let near = features
+            .iter()
+            .filter(|f| f.mz > 200.028 && f.mz < 200.033 && (f.rt - peak_rt).abs() < 0.2)
+            .count();
+        assert_eq!(
+            near, 1,
+            "masses closer than the cutoff must stay one feature, got {:?}",
+            features.iter().map(|f| f.mz).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_three_co_eluting_masses_split_into_three() {
+        let mzs = [200.030, 200.034, 200.038];
+        let peak_rt = 5.0;
+        let samples: Vec<Vec<u8>> = (0..6)
+            .map(|_| to_ion_bytes(&build_mzml_masses(&mzs, peak_rt, 10_000.0, 4.0, 6.0, 60)))
+            .collect();
+        let dir = write_ion_dir("three_masses", &samples);
+        let features = get_features(
+            dir.to_str().unwrap(),
+            FromTo { from: 3.0, to: 7.0 },
+            feature_cfg_for_mz_range(mzs[0], mzs[2]),
+            alignment_cfg(),
+            1,
+        )
+        .expect("get_features should succeed");
+        let _ = fs::remove_dir_all(&dir);
+
+        let reported: Vec<f64> = features.iter().map(|f| f.mz).collect();
+        for &mz in &mzs {
+            assert_eq!(count_near(&features, mz, peak_rt), 1, "mass {mz} once, got {reported:?}");
+        }
+    }
+
+    #[test]
+    fn test_wider_tolerance_keeps_masses_merged() {
+        let mz_a = 200.0300;
+        let mz_b = 200.0330;
+        let peak_rt = 5.0;
+        let samples: Vec<Vec<u8>> = (0..6)
+            .map(|_| to_ion_bytes(&build_mzml_masses(&[mz_a, mz_b], peak_rt, 10_000.0, 4.0, 6.0, 60)))
+            .collect();
+        let dir = write_ion_dir("wide_tolerance", &samples);
+        let mut cfg = alignment_cfg();
+        cfg.eic_options.ppm_tolerance = 60.0;
+        let features = get_features(
+            dir.to_str().unwrap(),
+            FromTo { from: 3.0, to: 7.0 },
+            feature_cfg_for_mz_range(mz_a, mz_b),
+            cfg,
+            1,
+        )
+        .expect("get_features should succeed");
+        let _ = fs::remove_dir_all(&dir);
+
+        let near = features
+            .iter()
+            .filter(|f| f.mz > 200.028 && f.mz < 200.035 && (f.rt - peak_rt).abs() < 0.2)
+            .count();
+        assert_eq!(
+            near, 1,
+            "a wider ppm tolerance must keep the masses merged, got {:?}",
+            features.iter().map(|f| f.mz).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_contaminant_without_peak_is_dropped() {
+        let peak_mz = 200.0300;
+        let flat_mz = 200.0340;
+        let peak_rt = 5.0;
+        let samples: Vec<Vec<u8>> = (0..6)
+            .map(|_| {
+                to_ion_bytes(&build_mzml_peak_and_flat(
+                    peak_mz, flat_mz, peak_rt, 10_000.0, 4.0, 6.0, 60,
+                ))
+            })
+            .collect();
+        let dir = write_ion_dir("contaminant", &samples);
+        let features = get_features(
+            dir.to_str().unwrap(),
+            FromTo { from: 3.0, to: 7.0 },
+            feature_cfg_for_mz_range(peak_mz, flat_mz),
+            alignment_cfg(),
+            1,
+        )
+        .expect("get_features should succeed");
+        let _ = fs::remove_dir_all(&dir);
+
+        let reported: Vec<f64> = features.iter().map(|f| f.mz).collect();
+        assert_eq!(
+            count_near(&features, peak_mz, peak_rt),
+            1,
+            "the real mass is reported, got {reported:?}"
+        );
+        assert_eq!(
+            count_near(&features, flat_mz, peak_rt),
+            0,
+            "a flat contaminant with no peak must be dropped, got {reported:?}"
         );
     }
 }

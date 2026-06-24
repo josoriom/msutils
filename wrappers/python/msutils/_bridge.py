@@ -48,7 +48,7 @@ assert ctypes.sizeof(PeakOptions) == 72, (
     f"PeakOptions is {ctypes.sizeof(PeakOptions)} bytes — expected 72"
 )
 
-MSUTILS_ABI_VERSION = 2
+MSUTILS_ABI_VERSION = 1
 
 _CODE_MSG = {
     1: "invalid arguments",
@@ -96,6 +96,10 @@ class _ABI:
              c_size_t, POINTER(PeakOptions), c_size_t, POINTER(_Buf)], c_int32),
         "find_peaks": ([POINTER(c_double), POINTER(c_double), c_size_t,
              POINTER(PeakOptions), POINTER(_Buf)], c_int32),
+        "fit_peak": ([POINTER(c_double), POINTER(c_double), c_size_t,
+             c_double, c_double, c_int32, POINTER(_Buf)], c_int32),
+        "draw_peak": ([POINTER(c_double), c_size_t, c_int32,
+             c_double, c_double, c_double, c_double, POINTER(_Buf)], c_int32),
         "calculate_baseline": ([POINTER(c_double), c_size_t, c_int32, c_int32,
              POINTER(_Buf)], c_int32),
         "find_feature": ([c_void_p,

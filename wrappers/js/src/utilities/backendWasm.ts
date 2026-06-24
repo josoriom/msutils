@@ -12,7 +12,7 @@ import { ContainmentCache } from "./containmentCache";
 const IS_INLINE_BUILD = typeof __INLINE__ !== "undefined" && __INLINE__;
 const OUTPUT_BUFFER_PAIR_BYTES = 8;
 const PEAK_OPTIONS_STRUCT_BYTES = 72;
-const MSUTILS_ABI_VERSION = 2;
+const MSUTILS_ABI_VERSION = 1;
 const ERR_FAST_PATH = 6;
 
 function rcError(name: string, rc: number): Error {

@@ -7,4 +7,7 @@ pub(crate) mod find_features;
 pub(crate) mod get_features;
 
 #[cfg(test)]
+pub(crate) mod mz_estimator;
+
+#[cfg(test)]
 pub(crate) mod get_scans;

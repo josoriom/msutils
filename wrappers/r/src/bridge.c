@@ -31,6 +31,8 @@ typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
 typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *);
 typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *);
 typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakOptions *, Buf *);
+typedef int32_t (*fn_fit_peak)(const double *, const double *, size_t, double, double, int32_t, Buf *);
+typedef int32_t (*fn_draw_peak)(const double *, size_t, int32_t, double, double, double, double, Buf *);
 typedef int32_t (*fn_calculate_eic)(const MzML *, double, double, double, double, double, Buf *, Buf *);
 typedef float (*fn_find_noise_level)(const float *, size_t);
 typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakOptions *, size_t, Buf *);
@@ -56,6 +58,8 @@ typedef struct
   fn_bin_to_json bin_to_json;
   fn_bin_to_mzml bin_to_mzml;
   fn_get_peak get_peak;
+  fn_fit_peak fit_peak;
+  fn_draw_peak draw_peak;
   fn_calculate_eic calculate_eic;
   fn_find_noise_level find_noise_level;
   fn_get_peaks_from_eic get_peaks_from_eic;
@@ -125,6 +129,10 @@ int abi_load(const char *path, const char **err)
   if (resolve_required((void **)&ABI.bin_to_mzml, "bin_to_mzml"))
     goto fail;
   if (resolve_required((void **)&ABI.get_peak, "get_peak"))
+    goto fail;
+  if (resolve_required((void **)&ABI.fit_peak, "fit_peak"))
+    goto fail;
+  if (resolve_required((void **)&ABI.draw_peak, "draw_peak"))
     goto fail;
   if (resolve_required((void **)&ABI.calculate_eic, "calculate_eic"))
     goto fail;
@@ -460,6 +468,43 @@ SEXP C_get_peak(SEXP x, SEXP y, SEXP rt, SEXP range, SEXP options)
   SEXP res = mk_string_len(out.ptr, out.len);
   ABI.free_(out.ptr, out.len);
   return res;
+}
+
+SEXP C_fit_peak(SEXP x, SEXP y, SEXP rt, SEXP intensity, SEXP shape)
+{
+  if (TYPEOF(x) != REALSXP || TYPEOF(y) != REALSXP)
+    error("numeric");
+  if (XLENGTH(x) != XLENGTH(y) || XLENGTH(x) < 5)
+    error("length");
+  REQUIRE_BOUND(ABI.fit_peak, "fit_peak");
+  REQUIRE_BOUND(ABI.free_, "free_");
+  R_xlen_t n = XLENGTH(y);
+  Buf out = (Buf){0};
+  int code = ABI.fit_peak(REAL(x), REAL(y), (size_t)n,
+                          asReal(rt), asReal(intensity), (int32_t)asInteger(shape), &out);
+  die_code("fit_peak", code);
+  SEXP res = mk_string_len(out.ptr, out.len);
+  ABI.free_(out.ptr, out.len);
+  return res;
+}
+
+SEXP C_draw_peak(SEXP x, SEXP shape, SEXP height, SEXP center, SEXP fwhm, SEXP tail)
+{
+  if (TYPEOF(x) != REALSXP)
+    error("numeric");
+  REQUIRE_BOUND(ABI.draw_peak, "draw_peak");
+  REQUIRE_BOUND(ABI.free_, "free_");
+  R_xlen_t n = XLENGTH(x);
+  Buf out = (Buf){0};
+  int code = ABI.draw_peak(REAL(x), (size_t)n, (int32_t)asInteger(shape),
+                           asReal(height), asReal(center), asReal(fwhm), asReal(tail), &out);
+  die_code("draw_peak", code);
+  size_t ny = out.len / 8;
+  SEXP Ry = PROTECT(Rf_allocVector(REALSXP, (R_xlen_t)ny));
+  memcpy(REAL(Ry), out.ptr, out.len);
+  ABI.free_(out.ptr, out.len);
+  UNPROTECT(1);
+  return Ry;
 }
 
 SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, SEXP from_left, SEXP to_right, SEXP options, SEXP cores)
@@ -816,7 +861,7 @@ SEXP C_get_scans(SEXP bin, SEXP query_type, SEXP a, SEXP b, SEXP level)
 SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
                     SEXP eic_ppm_tol, SEXP eic_mz_tol,
                     SEXP grid_start, SEXP grid_end, SEXP grid_step,
-                    SEXP group_ppm_tol, SEXP group_da_tol, SEXP group_rt_tol,
+                    SEXP group_ppm_tol, SEXP group_mz_tol, SEXP group_rt_tol,
                     SEXP frequency, SEXP options, SEXP cores,
                     SEXP use_gpu, SEXP batch_size)
 {
@@ -844,7 +889,7 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
       asReal(from_time), asReal(to_time),
       asReal(eic_ppm_tol), asReal(eic_mz_tol),
       asReal(grid_start), asReal(grid_end), asReal(grid_step),
-      asReal(group_ppm_tol), asReal(group_da_tol), asReal(group_rt_tol),
+      asReal(group_ppm_tol), asReal(group_mz_tol), asReal(group_rt_tol),
       asInteger(frequency),
       opt_ptr, (int32_t)ncores, gpu, bsz,
       &out);

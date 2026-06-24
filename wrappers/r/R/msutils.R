@@ -5,15 +5,15 @@
   grid_end             = 1000,
   grid_step            = 0.005,
   group_ppm_tol        = 5.0,
-  group_da_tol         = 0.0025,
+  group_mz_tol         = 0.0025,
   group_rt_tol         = 0.05,
   frequency            = 1L,
-  min_intensity        = 1000,
-  min_peak_width_points = 5L,
+  min_intensity        = 500,
+  min_peak_width_points = 3L,
   auto_noise           = TRUE,
   auto_baseline        = TRUE,
-  min_snr              = 1,
-  min_gaussian_r2      = 0.30
+  min_snr              = 2,
+  min_gaussian_r2      = 0.0
 )
 
 dispose <- function(bin) {
@@ -246,6 +246,32 @@ calculate_baseline <- function(y, lambda=0L, max_iterations=0L) {
         PACKAGE="msutils")
 }
 
+.shape_code <- function(shape) {
+  s <- tolower(as.character(shape))
+  if (s == "gaussian") return(0L)
+  if (s == "emg")      return(1L)
+  stop("shape must be 'gaussian' or 'emg'")
+}
+
+fit_peak <- function(x, y, rt, intensity, shape = "emg") {
+  stopifnot(is.numeric(x), is.numeric(y), length(x) == length(y), length(x) >= 5)
+  out_json <- .Call("C_fit_peak",
+        as.numeric(x), as.numeric(y),
+        as.numeric(rt), as.numeric(intensity), .shape_code(shape),
+        PACKAGE="msutils")
+  jsonlite::fromJSON(out_json, simplifyVector = TRUE)
+}
+
+draw_peak <- function(x, params) {
+  stopifnot(is.numeric(x), is.list(params))
+  tail <- if (is.null(params$tail)) 0 else params$tail
+  .Call("C_draw_peak",
+        as.numeric(x), .shape_code(params$shape),
+        as.numeric(params$height), as.numeric(params$center),
+        as.numeric(params$fwhm), as.numeric(tail),
+        PACKAGE="msutils")
+}
+
 find_feature <- function(
   bin,
   rt, mz, window, id = NULL,
@@ -443,7 +469,7 @@ get_features <- function(
   grid_end              = .DEFAULTS$grid_end,
   grid_step             = .DEFAULTS$grid_step,
   group_ppm_tol         = .DEFAULTS$group_ppm_tol,
-  group_da_tol          = .DEFAULTS$group_da_tol,
+  group_mz_tol          = .DEFAULTS$group_mz_tol,
   group_rt_tol          = .DEFAULTS$group_rt_tol,
   frequency             = .DEFAULTS$frequency,
   cores                 = 1L,
@@ -478,7 +504,7 @@ get_features <- function(
     as.numeric(from), as.numeric(to),
     as.numeric(eic_ppm_tol), as.numeric(eic_mz_tol),
     as.numeric(grid_start), as.numeric(grid_end), as.numeric(grid_step),
-    as.numeric(group_ppm_tol), as.numeric(group_da_tol), as.numeric(group_rt_tol),
+    as.numeric(group_ppm_tol), as.numeric(group_mz_tol), as.numeric(group_rt_tol),
     as.integer(frequency),
     opt, as.integer(cores), as.logical(use_gpu), as.integer(batch_size),
     PACKAGE = "msutils"

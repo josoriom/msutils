@@ -2,8 +2,8 @@ use std::cmp::Ordering;
 
 use crate::utilities::calculate_baseline::{BaselineOptions, calculate_baseline};
 use crate::utilities::closest_index;
+use crate::utilities::emg_filter::{Candidate, EmgFilter};
 use crate::utilities::find_noise_level::{find_noise_level, find_noise_level_san_plot};
-use crate::utilities::functions::gaussian_fn;
 use crate::utilities::get_boundaries::{Boundaries, BoundariesOptions, get_boundaries};
 use crate::utilities::math::xy_integration;
 use crate::utilities::scan_for_peaks::scan_for_peaks;
@@ -16,7 +16,9 @@ pub struct ArtifactFilter {
 
 impl Default for ArtifactFilter {
     fn default() -> Self {
-        Self { min_gaussian_r2: 0.30 }
+        Self {
+            min_gaussian_r2: 0.0,
+        }
     }
 }
 
@@ -89,10 +91,14 @@ impl From<PeakCandidate> for Peak {
     }
 }
 
-enum ShapeOutcome {
-    Skipped,
-    Unfittable,
-    Fit(f64),
+impl Candidate for PeakCandidate {
+    fn bounds(&self) -> (usize, usize) {
+        (self.from_idx, self.to_idx)
+    }
+
+    fn set_score(&mut self, r2: f64) {
+        self.gaussian_r2 = r2;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -197,7 +203,12 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
     }
 
     if let Some(artifact_opts) = o.artifact_filter {
-        filter_artifacts(&mut candidates, data, &baseline, &artifact_opts);
+        EmgFilter::new(artifact_opts.min_gaussian_r2).retain(
+            &mut candidates,
+            &data.x,
+            &data.y,
+            &baseline,
+        );
     }
 
     if candidates.is_empty() {
@@ -292,7 +303,7 @@ fn filter_peak_candidates(peaks: Vec<PeakCandidate>, opt: PeakFilter) -> Vec<Pea
 
         if pass
             && let Some(w) = min_width
-            && p.n_points <= w
+            && p.n_points < w
         {
             pass = false;
         }
@@ -433,179 +444,4 @@ fn suppress_contained_peaks(data: &DataXY, mut peaks: Vec<Peak>) -> Vec<Peak> {
     }
     out.sort_by(|a, b| a.rt.partial_cmp(&b.rt).unwrap_or(Ordering::Equal));
     out
-}
-
-fn filter_artifacts(
-    candidates: &mut Vec<PeakCandidate>,
-    data: &DataXY,
-    baseline: &[f64],
-    opts: &ArtifactFilter,
-) {
-    candidates.retain_mut(|p| match classify_shape(p, data, baseline, opts) {
-        ShapeOutcome::Skipped | ShapeOutcome::Unfittable => {
-            p.gaussian_r2 = f64::NAN;
-            true
-        }
-        ShapeOutcome::Fit(r2) => {
-            p.gaussian_r2 = r2;
-            r2 >= opts.min_gaussian_r2
-        }
-    });
-}
-
-fn classify_shape(
-    p: &PeakCandidate,
-    data: &DataXY,
-    baseline: &[f64],
-    opts: &ArtifactFilter,
-) -> ShapeOutcome {
-    if p.from_idx >= p.to_idx || p.to_idx >= data.y.len() || baseline.len() != data.y.len() {
-        return ShapeOutcome::Unfittable;
-    }
-    let lo = p.from_idx;
-    let hi = p.to_idx;
-
-    let yc: Vec<f64> = (lo..=hi)
-        .map(|i| (data.y[i] - baseline[i]).max(0.0))
-        .collect();
-
-    let mut apex_off = 0usize;
-    let mut h = yc[0];
-    for (off, &v) in yc.iter().enumerate().skip(1) {
-        if v > h {
-            h = v;
-            apex_off = off;
-        }
-    }
-    if h <= 0.0 || !h.is_finite() {
-        return ShapeOutcome::Unfittable;
-    }
-    let apex_idx = lo + apex_off;
-
-    if opts.min_gaussian_r2 <= 0.0 {
-        return ShapeOutcome::Skipped;
-    }
-
-    let floor = 0.05 * h;
-    let trim_lo = yc[..=apex_off]
-        .iter()
-        .rposition(|&v| v < floor)
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let trim_hi_off = yc[apex_off..]
-        .iter()
-        .position(|&v| v < floor)
-        .map(|i| apex_off + i)
-        .unwrap_or(yc.len() - 1);
-
-    if trim_hi_off.saturating_sub(trim_lo) + 1 < 5 {
-        return ShapeOutcome::Unfittable;
-    }
-
-    let trimmed_x = &data.x[lo + trim_lo..=lo + trim_hi_off];
-    let trimmed_yc = &yc[trim_lo..=trim_hi_off];
-    let trimmed_apex_off = apex_off.saturating_sub(trim_lo);
-
-    let sigma = estimate_sigma(trimmed_x, trimmed_yc, trimmed_apex_off, h);
-    if !sigma.is_finite() || sigma <= 0.0 {
-        return ShapeOutcome::Unfittable;
-    }
-
-    let mu = data.x[apex_idx];
-    let r2 = gaussian_r2(trimmed_x, trimmed_yc, mu, h, sigma);
-    if !r2.is_finite() {
-        return ShapeOutcome::Unfittable;
-    }
-
-    ShapeOutcome::Fit(r2)
-}
-
-fn estimate_sigma(x: &[f64], yc: &[f64], apex_off: usize, h: f64) -> f64 {
-    let n = yc.len();
-    if n < 3 {
-        return 0.0;
-    }
-    let half = 0.5 * h;
-
-    let mut left_x: Option<f64> = None;
-    if apex_off > 0 {
-        let mut i = apex_off;
-        while i > 0 {
-            if yc[i] >= half && yc[i - 1] < half {
-                let y1 = yc[i - 1];
-                let y2 = yc[i];
-                let x1 = x[i - 1];
-                let x2 = x[i];
-                let denom = y2 - y1;
-                let t = if denom.abs() > 1e-18 {
-                    (half - y1) / denom
-                } else {
-                    0.5
-                };
-                left_x = Some(x1 + t * (x2 - x1));
-                break;
-            }
-            i -= 1;
-        }
-    }
-    let mut right_x: Option<f64> = None;
-    if apex_off + 1 < n {
-        let mut i = apex_off;
-        while i + 1 < n {
-            if yc[i] >= half && yc[i + 1] < half {
-                let y1 = yc[i];
-                let y2 = yc[i + 1];
-                let x1 = x[i];
-                let x2 = x[i + 1];
-                let denom = y1 - y2;
-                let t = if denom.abs() > 1e-18 {
-                    (y1 - half) / denom
-                } else {
-                    0.5
-                };
-                right_x = Some(x1 + t * (x2 - x1));
-                break;
-            }
-            i += 1;
-        }
-    }
-
-    let fwhm = match (left_x, right_x) {
-        (Some(lx), Some(rx)) => (rx - lx).abs(),
-        (Some(lx), None) => 2.0 * (x[apex_off] - lx).abs(),
-        (None, Some(rx)) => 2.0 * (rx - x[apex_off]).abs(),
-        (None, None) => {
-            let span = (x[n - 1] - x[0]).abs();
-            return span / 6.0;
-        }
-    };
-
-    let c = 2.0 * (2.0_f64 * std::f64::consts::LN_2).sqrt();
-    fwhm / c
-}
-
-fn gaussian_r2(x: &[f64], yc: &[f64], mu: f64, h: f64, sigma: f64) -> f64 {
-    let n = yc.len();
-    if n < 3 {
-        return 0.0;
-    }
-    let mut mean_y = 0.0;
-    for &v in yc.iter() {
-        mean_y += v;
-    }
-    mean_y /= n as f64;
-
-    let mut ss_res = 0.0_f64;
-    let mut ss_tot = 0.0_f64;
-    for i in 0..n {
-        let expected = gaussian_fn(x[i], h, mu, sigma);
-        let r = yc[i] - expected;
-        ss_res += r * r;
-        let d = yc[i] - mean_y;
-        ss_tot += d * d;
-    }
-    if ss_tot <= 1e-18 {
-        return 0.0;
-    }
-    1.0 - ss_res / ss_tot
 }

@@ -7,6 +7,8 @@ SEXP C_parse_mzml(SEXP data);
 SEXP C_ion_to_json(SEXP bin);
 SEXP C_ion_to_mzml(SEXP bin);
 SEXP C_get_peak(SEXP x, SEXP y, SEXP rt, SEXP range, SEXP options);
+SEXP C_fit_peak(SEXP x, SEXP y, SEXP rt, SEXP intensity, SEXP shape);
+SEXP C_draw_peak(SEXP x, SEXP shape, SEXP height, SEXP center, SEXP fwhm, SEXP tail);
 SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, SEXP from_left, SEXP to_right, SEXP options, SEXP cores);
 SEXP C_get_peaks_from_chrom(SEXP bin, SEXP idxs, SEXP rts, SEXP ranges, SEXP options, SEXP cores);
 SEXP C_calculate_eic(SEXP bin, SEXP targets, SEXP from, SEXP to, SEXP ppm_tol, SEXP mz_tol);
@@ -21,7 +23,7 @@ SEXP C_parse_ion_url(SEXP url, SEXP max_cache_size);
 SEXP C_get_scans(SEXP bin, SEXP query_type, SEXP a, SEXP b, SEXP level);
 SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol,
                     SEXP grid_start, SEXP grid_end, SEXP grid_step,
-                    SEXP group_ppm_tol, SEXP group_da_tol, SEXP group_rt_tol,
+                    SEXP group_ppm_tol, SEXP group_mz_tol, SEXP group_rt_tol,
                     SEXP frequency, SEXP options, SEXP cores, SEXP use_gpu, SEXP batch_size);
 SEXP C_dispose_mzml(SEXP ptr);
 
@@ -31,6 +33,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"C_ion_to_json", (DL_FUNC)&C_ion_to_json, 1},
     {"C_ion_to_mzml", (DL_FUNC)&C_ion_to_mzml, 1},
     {"C_get_peak", (DL_FUNC)&C_get_peak, 5},
+    {"C_fit_peak", (DL_FUNC)&C_fit_peak, 5},
+    {"C_draw_peak", (DL_FUNC)&C_draw_peak, 6},
     {"C_get_peaks_from_eic", (DL_FUNC)&C_get_peaks_from_eic, 9},
     {"C_get_peaks_from_chrom", (DL_FUNC)&C_get_peaks_from_chrom, 6},
     {"C_calculate_eic", (DL_FUNC)&C_calculate_eic, 6},

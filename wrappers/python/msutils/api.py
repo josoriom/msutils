@@ -55,11 +55,12 @@ class _GroupingDefaults:
     frequency: int       = 1
 
 class _FindPeakDefaults:
-    min_intensity: float        = 150.0
-    min_peak_width_points: int  = 5
+    min_intensity: float        = 500.0
+    min_peak_width_points: int  = 3
     auto_noise: bool            = True
     auto_baseline: bool         = True
-    min_snr: float              = 1.0
+    min_snr: float              = 2.0
+    min_gaussian_r2: float      = 0.0
 
 
 def _as_f64_ptr(array: np.ndarray) -> POINTER(c_double):
@@ -413,6 +414,81 @@ def get_peak(
     return buf_to_json(abi, buf)
 
 
+def _shape_code(shape: str) -> int:
+    name = str(shape).lower()
+    if name == "gaussian":
+        return 0
+    if name == "emg":
+        return 1
+    raise ValueError(f"shape must be 'gaussian' or 'emg', got {shape!r}")
+
+
+def fit_peak(
+    x: Sequence,
+    y: Sequence,
+    rt: float,
+    intensity: float,
+    shape: str = "emg",
+) -> Optional[Dict]:
+    """Fit a Gaussian or EMG model to one peak.
+
+    The apex (rt, intensity) from peak picking seeds the fit, so the optimizer
+    only has to find the shape.
+
+    Args:
+        x: Retention-time sequence. Minimum 5 points.
+        y: Intensity sequence, same length as x.
+        rt: Apex retention time.
+        intensity: Apex intensity.
+        shape: 'gaussian' or 'emg'. Default 'emg'.
+
+    Returns:
+        Dict with keys shape, height, center, fwhm, tail, r2.
+        None if the peak could not be fit.
+    """
+    abi = _get_abi()
+    x_array, y_array = _to_f64_array(x), _to_f64_array(y)
+    if len(x_array) != len(y_array) or len(x_array) < 5:
+        raise ValueError("x and y must have equal length >= 5")
+    buf = _Buf()
+    _check("fit_peak", abi.fit_peak(
+        _as_f64_ptr(x_array),
+        _as_f64_ptr(y_array),
+        c_size_t(len(x_array)),
+        c_double(rt),
+        c_double(intensity),
+        c_int32(_shape_code(shape)),
+        ctypes.byref(buf),
+    ))
+    return buf_to_json(abi, buf)
+
+
+def draw_peak(x: Sequence, params: Dict) -> np.ndarray:
+    """Render a fitted peak model over x.
+
+    Args:
+        x: Retention-time sequence to draw on.
+        params: Result of fit_peak (shape, height, center, fwhm, tail).
+
+    Returns:
+        Intensity array with the same length and x as the input.
+    """
+    abi = _get_abi()
+    x_array = _to_f64_array(x)
+    buf = _Buf()
+    _check("draw_peak", abi.draw_peak(
+        _as_f64_ptr(x_array),
+        c_size_t(len(x_array)),
+        c_int32(_shape_code(params["shape"])),
+        c_double(params["height"]),
+        c_double(params["center"]),
+        c_double(params["fwhm"]),
+        c_double(params.get("tail", 0.0)),
+        ctypes.byref(buf),
+    ))
+    return buf_to_f64(abi, buf)
+
+
 def find_noise_level(y: Sequence) -> float:
     """Estimate the noise level of a signal.
 
@@ -677,6 +753,7 @@ def find_features(
         "auto_noise":           _FindPeakDefaults.auto_noise,
         "auto_baseline":        _FindPeakDefaults.auto_baseline,
         "min_snr":              _FindPeakDefaults.min_snr,
+        "min_gaussian_r2":      _FindPeakDefaults.min_gaussian_r2,
     }
     if options:
         peak_defaults.update(options)
@@ -737,6 +814,7 @@ def find_feature(
         "auto_noise":           _FindPeakDefaults.auto_noise,
         "auto_baseline":        _FindPeakDefaults.auto_baseline,
         "min_snr":              _FindPeakDefaults.min_snr,
+        "min_gaussian_r2":      _FindPeakDefaults.min_gaussian_r2,
     }
     if options:
         peak_defaults.update(options)
@@ -844,6 +922,7 @@ def get_features(
         "auto_noise":           _FindPeakDefaults.auto_noise,
         "auto_baseline":        _FindPeakDefaults.auto_baseline,
         "min_snr":              _FindPeakDefaults.min_snr,
+        "min_gaussian_r2":      _FindPeakDefaults.min_gaussian_r2,
     }
     if options:
         peak_defaults.update(options)

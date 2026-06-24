@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define MSUTILS_ABI_VERSION 2
+#define MSUTILS_ABI_VERSION 1
 
 typedef struct CPeakOptions {
   double min_integral;

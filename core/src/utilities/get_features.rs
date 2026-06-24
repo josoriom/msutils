@@ -29,7 +29,12 @@ use crate::utilities::{
     find_features::{Feature, FeatureError, FindFeaturesOptions, MzTolerance, find_features},
     find_peaks::FindPeaksOptions,
     get_peak::get_peak,
-    structs::{DataXY, FromTo, Roi},
+    math::median,
+    mz_estimator::{
+        MzEstimator, MzEstimatorKind, SampleMz, has_multiple_masses, make_estimator,
+        same_mass_gap, split_by_gap,
+    },
+    structs::{DataXY, FromTo, Peak, Roi},
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
@@ -133,6 +138,8 @@ pub struct AlignmentOptions {
     pub min_samples: usize,
     pub eic_options: EicOptions,
     pub peak_options: Option<FindPeaksOptions>,
+    pub mz_estimator: MzEstimatorKind,
+    pub fill_window_minutes: f64,
 }
 
 impl Default for AlignmentOptions {
@@ -150,6 +157,8 @@ impl Default for AlignmentOptions {
                 ..Default::default()
             },
             peak_options: None,
+            mz_estimator: MzEstimatorKind::default(),
+            fill_window_minutes: 2.0,
         }
     }
 }
@@ -288,7 +297,20 @@ impl FeatureClusterer {
     }
 }
 
-type ClusterSlot = (Vec<Option<Feature>>, SearchBounds);
+#[derive(Clone, Copy)]
+pub(crate) struct MassPeak {
+    pub(crate) mz: f64,
+    pub(crate) intensity: f64,
+    pub(crate) integral: f64,
+    pub(crate) rt: f64,
+}
+
+struct ClusterSlot {
+    features: Vec<Option<Feature>>,
+    apex_values: Vec<Option<SampleMz>>,
+    masses: Vec<Option<Vec<MassPeak>>>,
+    bounds: SearchBounds,
+}
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub fn get_features(
@@ -318,27 +340,40 @@ pub fn get_features(
         alignment_config.rt_tolerance,
     );
 
-    fill_all_missing(
+    let estimator = make_estimator(&alignment_config.mz_estimator);
+
+    resolve_samples(
         &mut slots,
         &datasets,
         alignment_config.eic_options,
         alignment_config.peak_options,
+        estimator.as_ref(),
+        alignment_config.fill_window_minutes,
         cores,
     )?;
 
     let sample_names: Vec<String> = datasets.iter().map(|(name, _, _)| name.clone()).collect();
-    let results = build_results(
+    let (single, split) = build_results(
         slots,
         alignment_config.min_samples,
         datasets.len(),
         &sample_names,
+        estimator.as_ref(),
+        &alignment_config.mz_tolerance,
+        alignment_config.eic_options.ppm_tolerance,
     );
 
-    Ok(dedup(
-        results,
+    let mut results = dedup(
+        single,
         &alignment_config.mz_tolerance,
         alignment_config.rt_tolerance,
-    ))
+    );
+    let same_mass = MzTolerance {
+        mz_absolute: 0.0,
+        ppm: 0.5 * alignment_config.eic_options.ppm_tolerance,
+    };
+    results.extend(dedup(split, &same_mass, alignment_config.rt_tolerance));
+    Ok(results)
 }
 
 fn collect_tagged(datasets: &mut [SampleDataset]) -> Vec<TaggedFeature> {
@@ -360,41 +395,50 @@ fn prepare_slots(clusters: Vec<Cluster>, n_samples: usize, rt_tol: f64) -> Vec<C
     clusters
         .into_iter()
         .filter_map(|cluster| {
-            let slots = assign_best_per_sample(cluster, n_samples);
-            let bounds = compute_search_bounds(&slots, rt_tol)?;
-            Some((slots, bounds))
+            let features = assign_best_per_sample(cluster, n_samples);
+            let bounds = compute_search_bounds(&features, rt_tol)?;
+            Some(ClusterSlot {
+                apex_values: vec![None; features.len()],
+                masses: vec![None; features.len()],
+                features,
+                bounds,
+            })
         })
         .collect()
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-fn fill_all_missing(
+fn resolve_samples(
     slots: &mut [ClusterSlot],
     datasets: &[SampleDataset],
     eic_options: EicOptions,
     peak_options: Option<FindPeaksOptions>,
+    estimator: &(dyn MzEstimator + Send + Sync),
+    fill_window: f64,
     cores: usize,
 ) -> Result<(), AlignmentError> {
     let shared_slots: &[ClusterSlot] = slots;
 
-    let per_sample: Vec<(usize, Vec<(usize, Feature)>)> = run_with_cores(cores, || {
+    let per_sample: Vec<(usize, Vec<(usize, Resolved)>)> = run_with_cores(cores, || {
         datasets
             .par_iter()
             .enumerate()
             .map(|(sample_idx, (_, source, _))| {
-                let filled = match source {
+                let items = match source {
                     SampleSourceKind::Mzml(path) => {
                         let mut mzml = open_mzml(path).map_err(|e| AlignmentError::Parse {
                             path: path.to_string_lossy().to_string(),
                             source: e.to_string(),
                         })?;
                         let mut reader = EicReader::Mzml(&mut mzml);
-                        fill_sample(
+                        resolve_sample(
                             shared_slots,
                             sample_idx,
                             &mut reader,
                             eic_options,
                             peak_options.clone(),
+                            estimator,
+                            fill_window,
                         )?
                     }
                     SampleSourceKind::Ion(path) => {
@@ -403,89 +447,94 @@ fn fill_all_missing(
                             source: e.to_string(),
                         })?;
                         let mut reader = EicReader::Ion(&mut owned);
-                        fill_sample(
+                        resolve_sample(
                             shared_slots,
                             sample_idx,
                             &mut reader,
                             eic_options,
                             peak_options.clone(),
+                            estimator,
+                            fill_window,
                         )?
                     }
                 };
-                Ok((sample_idx, filled))
+                Ok((sample_idx, items))
             })
             .collect::<Result<Vec<_>, AlignmentError>>()
     })?;
 
-    for (sample_idx, filled) in per_sample {
-        for (ci, feature) in filled {
-            slots[ci].0[sample_idx] = Some(feature);
+    for (sample_idx, items) in per_sample {
+        for (ci, resolved) in items {
+            if let Some(feature) = resolved.feature {
+                slots[ci].features[sample_idx] = Some(feature);
+            }
+            if let Some(apex) = resolved.apex {
+                slots[ci].apex_values[sample_idx] = Some(apex);
+            }
+            if let Some(masses) = resolved.masses {
+                slots[ci].masses[sample_idx] = Some(masses);
+            }
         }
     }
 
     Ok(())
 }
 
-fn fill_sample(
+pub(crate) struct Resolved {
+    pub(crate) feature: Option<Feature>,
+    pub(crate) apex: Option<SampleMz>,
+    pub(crate) masses: Option<Vec<MassPeak>>,
+}
+
+fn resolve_sample(
     slots: &[ClusterSlot],
     sample_idx: usize,
     reader: &mut EicReader,
     eic_options: EicOptions,
     peak_options: Option<FindPeaksOptions>,
-) -> Result<Vec<(usize, Feature)>, AlignmentError> {
-    let missing: Vec<usize> = slots
-        .iter()
-        .enumerate()
-        .filter_map(|(ci, (s, _))| {
-            if s[sample_idx].is_none() {
-                Some(ci)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    if missing.is_empty() {
+    estimator: &(dyn MzEstimator + Send + Sync),
+    fill_window: f64,
+) -> Result<Vec<(usize, Resolved)>, AlignmentError> {
+    if slots.is_empty() {
         return Ok(Vec::new());
     }
 
-    let rt_min = missing
+    let rt_min = slots
         .iter()
-        .map(|&ci| slots[ci].1.rt_from)
+        .map(|slot| sample_rt_from(slot, sample_idx, fill_window))
         .fold(f64::INFINITY, f64::min);
-    let rt_max = missing
+    let rt_max = slots
         .iter()
-        .map(|&ci| slots[ci].1.rt_to)
+        .map(|slot| sample_rt_to(slot, sample_idx, fill_window))
         .fold(f64::NEG_INFINITY, f64::max);
 
     let scan_times = get_scan_times(reader, rt_min, rt_max, MS1_LEVEL);
-
     if scan_times.is_empty() {
         return Ok(Vec::new());
     }
 
     let all_times: Vec<f64> = scan_times.iter().map(|s| s.rt).collect();
 
-    let mut filled: Vec<(usize, Feature)> = Vec::new();
-
-    let mut jobs = missing;
+    let mut jobs: Vec<usize> = (0..slots.len()).collect();
     jobs.sort_unstable_by(|&a, &b| {
         slots[a]
-            .1
+            .bounds
             .target_mz
-            .partial_cmp(&slots[b].1.target_mz)
-            .unwrap_or(std::cmp::Ordering::Equal)
+            .partial_cmp(&slots[b].bounds.target_mz)
+            .unwrap_or(Ordering::Equal)
     });
+
+    let mut resolved: Vec<(usize, Resolved)> = Vec::new();
 
     let mut job_idx = 0;
     while job_idx < jobs.len() {
-        let tile_center_mz = slots[jobs[job_idx]].1.target_mz;
+        let tile_center_mz = slots[jobs[job_idx]].bounds.target_mz;
         let tile_tolerance = mz_tolerance_for(tile_center_mz, eic_options);
 
         let mut tile_jobs = vec![jobs[job_idx]];
         job_idx += 1;
         while job_idx < jobs.len()
-            && (slots[jobs[job_idx]].1.target_mz - tile_center_mz).abs() <= tile_tolerance * 2.0
+            && (slots[jobs[job_idx]].bounds.target_mz - tile_center_mz).abs() <= tile_tolerance * 2.0
         {
             tile_jobs.push(jobs[job_idx]);
             job_idx += 1;
@@ -493,11 +542,11 @@ fn fill_sample(
 
         let tile_rt_min = tile_jobs
             .iter()
-            .map(|&ci| slots[ci].1.rt_from)
+            .map(|&ci| sample_rt_from(&slots[ci], sample_idx, fill_window))
             .fold(f64::INFINITY, f64::min);
         let tile_rt_max = tile_jobs
             .iter()
-            .map(|&ci| slots[ci].1.rt_to)
+            .map(|&ci| sample_rt_to(&slots[ci], sample_idx, fill_window))
             .fold(f64::NEG_INFINITY, f64::max);
 
         let start = lower_bound(&all_times, tile_rt_min);
@@ -510,11 +559,11 @@ fn fill_sample(
         let tile_mz_lo = tile_center_mz - tile_tolerance;
         let tile_mz_hi = tile_jobs
             .iter()
-            .map(|&ci| slots[ci].1.target_mz)
+            .map(|&ci| slots[ci].bounds.target_mz)
             .fold(f64::NEG_INFINITY, f64::max)
             + tile_tolerance;
 
-        let mut tile_scans: Vec<(f64, Vec<f64>, Vec<f64>)> = Vec::new();
+        let mut tile_scans: Vec<(f64, Vec<f64>, Vec<f64>)> = Vec::with_capacity(end - start);
         for scan_time in scan_times[start..end].iter() {
             let mut mz = Vec::new();
             let mut intensity = Vec::new();
@@ -538,91 +587,286 @@ fn fill_sample(
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         let tile_iter = tile_jobs.iter();
 
-        let tile_features: Vec<(usize, Feature)> = tile_iter
-            .filter_map(|&ci| {
-                let bounds = &slots[ci].1;
+        let tile_resolved: Vec<(usize, Resolved)> = tile_iter
+            .map(|&ci| {
+                let bounds = &slots[ci].bounds;
                 let tolerance = mz_tolerance_for(bounds.target_mz, eic_options);
-                let window_lo = bounds.target_mz - tolerance;
-                let window_hi = bounds.target_mz + tolerance;
-
-                let mut intensities = Vec::with_capacity(tile_scans.len());
-                for (_, mz, intensity) in &tile_scans {
-                    let mut sum = 0.0;
-                    for (m, i) in mz.iter().zip(intensity.iter()) {
-                        if *m >= window_lo && *m <= window_hi {
-                            sum += i;
-                        }
-                    }
-                    intensities.push(sum);
-                }
-
-                let time_slice: Vec<f64> = tile_scans.iter().map(|(rt, _, _)| *rt).collect();
-
-                get_peak(
-                    &DataXY {
-                        x: time_slice,
-                        y: intensities,
-                    },
-                    &Roi {
-                        rt: bounds.center_rt,
-                        half_width: bounds.rt_to - bounds.rt_from,
-                    },
+                let mz_lo = bounds.target_mz - tolerance;
+                let mz_hi = bounds.target_mz + tolerance;
+                let existing = slots[ci].features[sample_idx].as_ref();
+                let resolved = resolve_cluster(
+                    &tile_scans,
+                    existing,
+                    bounds,
+                    mz_lo,
+                    mz_hi,
+                    eic_options.ppm_tolerance,
                     peak_options.clone(),
-                )
-                .filter(|p| p.intensity > 0.0)
-                .map(|p| {
-                    let measured_mz =
-                        calculate_weighted_mz(&tile_scans, window_lo, window_hi, p.from, p.to)
-                            .unwrap_or(bounds.target_mz);
-                    let feature = Feature {
-                        mz: measured_mz,
-                        rt: p.rt,
-                        intensity: p.intensity,
-                        from: p.from,
-                        to: p.to,
-                        n_points: p.n_points,
-                        integral: p.integral,
-                        noise: p.noise,
-                    };
-                    (ci, feature)
-                })
+                    estimator,
+                );
+                (ci, resolved)
             })
             .collect();
 
-        filled.extend(tile_features);
+        resolved.extend(tile_resolved);
     }
 
-    Ok(filled)
+    Ok(resolved)
 }
 
-fn calculate_weighted_mz(
+fn sample_rt_from(slot: &ClusterSlot, sample_idx: usize, fill_window: f64) -> f64 {
+    match slot.features[sample_idx].as_ref() {
+        Some(feature) => feature.from,
+        None => (slot.bounds.center_rt - fill_window).min(slot.bounds.rt_from),
+    }
+}
+
+fn sample_rt_to(slot: &ClusterSlot, sample_idx: usize, fill_window: f64) -> f64 {
+    match slot.features[sample_idx].as_ref() {
+        Some(feature) => feature.to,
+        None => (slot.bounds.center_rt + fill_window).max(slot.bounds.rt_to),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_cluster(
+    tile_scans: &[(f64, Vec<f64>, Vec<f64>)],
+    existing: Option<&Feature>,
+    bounds: &SearchBounds,
+    mz_lo: f64,
+    mz_hi: f64,
+    ppm: f64,
+    peak_options: Option<FindPeaksOptions>,
+    estimator: &dyn MzEstimator,
+) -> Resolved {
+    let (from, to, filled) = match existing {
+        Some(feature) => (feature.from, feature.to, None),
+        None => match detect_peak(tile_scans, bounds, mz_lo, mz_hi, peak_options.clone()) {
+            Some(feature) => (feature.from, feature.to, Some(feature)),
+            None => {
+                return Resolved {
+                    feature: None,
+                    apex: None,
+                    masses: None,
+                };
+            }
+        },
+    };
+
+    let window = crop_scans(tile_scans, from, to);
+    let apex = estimator.per_sample(window, mz_lo, mz_hi);
+    let centroids = apex_scan_centroids(window, mz_lo, mz_hi);
+    let peak_feature = existing.or(filled.as_ref());
+
+    let masses: Vec<MassPeak> = if centroids.len() <= 1 {
+        match (centroids.first(), peak_feature) {
+            (Some(centroid), Some(feature)) => vec![MassPeak {
+                mz: centroid.mz,
+                intensity: feature.intensity,
+                integral: feature.integral,
+                rt: feature.rt,
+            }],
+            _ => Vec::new(),
+        }
+    } else {
+        centroids
+            .iter()
+            .filter_map(|centroid| {
+                let gap = same_mass_gap(centroid.mz, ppm);
+                measure_mass(window, centroid.mz, gap, bounds, peak_options.clone()).map(|peak| {
+                    MassPeak {
+                        mz: centroid.mz,
+                        intensity: peak.intensity,
+                        integral: peak.integral,
+                        rt: peak.rt,
+                    }
+                })
+            })
+            .collect()
+    };
+
+    let feature = filled.map(|mut feature| {
+        if let Some(sample_mz) = apex {
+            feature.mz = sample_mz.mz;
+        }
+        feature
+    });
+
+    Resolved {
+        feature,
+        apex,
+        masses: (!masses.is_empty()).then_some(masses),
+    }
+}
+
+fn measure_mass(
+    window: &[(f64, Vec<f64>, Vec<f64>)],
+    center_mz: f64,
+    gap: f64,
+    bounds: &SearchBounds,
+    peak_options: Option<FindPeaksOptions>,
+) -> Option<Peak> {
+    let mz_lo = center_mz - gap;
+    let mz_hi = center_mz + gap;
+    let mut times = Vec::with_capacity(window.len());
+    let mut intensities = Vec::with_capacity(window.len());
+    for (rt, mz, intensity) in window {
+        let mut sum = 0.0;
+        for (m, i) in mz.iter().zip(intensity.iter()) {
+            if *m >= mz_lo && *m <= mz_hi {
+                sum += *i;
+            }
+        }
+        times.push(*rt);
+        intensities.push(sum);
+    }
+    anchor_edges(&mut intensities);
+    get_peak(
+        &DataXY {
+            x: times,
+            y: intensities,
+        },
+        &Roi {
+            rt: bounds.center_rt,
+            half_width: bounds.rt_to - bounds.rt_from,
+        },
+        peak_options,
+    )
+    .filter(|p| p.intensity > 0.0)
+}
+
+fn apex_scan_centroids(
     scans: &[(f64, Vec<f64>, Vec<f64>)],
     mz_lo: f64,
     mz_hi: f64,
-    rt_from: f64,
-    rt_to: f64,
-) -> Option<f64> {
-    let mut total_weighted_mz = 0.0;
-    let mut total_intensity = 0.0;
-
-    for (rt, mz, intensity) in scans {
-        if *rt < rt_from || *rt > rt_to {
-            continue;
-        }
+) -> Vec<SampleMz> {
+    let mut best: Vec<SampleMz> = Vec::new();
+    let mut best_sum = 0.0;
+    for (_, mz, intensity) in scans {
+        let mut sum = 0.0;
+        let mut centroids: Vec<SampleMz> = Vec::new();
         for (m, i) in mz.iter().zip(intensity.iter()) {
-            if *m < mz_lo || *m > mz_hi {
+            if !m.is_finite() || !i.is_finite() || *i <= 0.0 || *m < mz_lo || *m > mz_hi {
                 continue;
             }
-            total_weighted_mz += m * i;
-            total_intensity += i;
+            sum += *i;
+            centroids.push(SampleMz {
+                mz: *m,
+                intensity: *i,
+            });
+        }
+        if !centroids.is_empty() && (best.is_empty() || sum > best_sum) {
+            best_sum = sum;
+            best = centroids;
         }
     }
+    best
+}
 
-    if total_intensity > 0.0 {
-        Some(total_weighted_mz / total_intensity)
-    } else {
-        None
+fn detect_peak(
+    tile_scans: &[(f64, Vec<f64>, Vec<f64>)],
+    bounds: &SearchBounds,
+    mz_lo: f64,
+    mz_hi: f64,
+    peak_options: Option<FindPeaksOptions>,
+) -> Option<Feature> {
+    let mut times = Vec::with_capacity(tile_scans.len());
+    let mut intensities = Vec::with_capacity(tile_scans.len());
+    for (rt, mz, intensity) in tile_scans {
+        let mut sum = 0.0;
+        for (m, i) in mz.iter().zip(intensity.iter()) {
+            if *m >= mz_lo && *m <= mz_hi {
+                sum += *i;
+            }
+        }
+        times.push(*rt);
+        intensities.push(sum);
     }
+
+    anchor_edges(&mut intensities);
+
+    get_peak(
+        &DataXY {
+            x: times,
+            y: intensities,
+        },
+        &Roi {
+            rt: bounds.center_rt,
+            half_width: bounds.rt_to - bounds.rt_from,
+        },
+        peak_options,
+    )
+    .filter(|p| p.intensity > 0.0)
+    .map(|p| Feature {
+        mz: bounds.target_mz,
+        rt: p.rt,
+        intensity: p.intensity,
+        from: p.from,
+        to: p.to,
+        n_points: p.n_points,
+        integral: p.integral,
+        noise: p.noise,
+    })
+}
+
+const EDGE_BLEED_FRACTION: f64 = 0.05;
+
+fn anchor_edges(values: &mut [f64]) {
+    let length = values.len();
+    if length < 3 {
+        return;
+    }
+    let baseline = lowest_value(values);
+    let limit = length / 3;
+    flatten_leading_bleed(values, baseline, limit);
+    flatten_trailing_bleed(values, baseline, limit);
+}
+
+fn lowest_value(values: &[f64]) -> f64 {
+    let mut lowest = f64::INFINITY;
+    for &value in values {
+        if value.is_finite() && value < lowest {
+            lowest = value;
+        }
+    }
+    if lowest.is_finite() { lowest } else { 0.0 }
+}
+
+fn flatten_leading_bleed(values: &mut [f64], baseline: f64, limit: usize) {
+    let threshold = baseline + EDGE_BLEED_FRACTION * (values[0] - baseline);
+    let mut index = 0;
+    while index < limit && values[index] > threshold {
+        index += 1;
+    }
+    if index < limit {
+        for value in values.iter_mut().take(index) {
+            *value = baseline;
+        }
+    }
+}
+
+fn flatten_trailing_bleed(values: &mut [f64], baseline: f64, limit: usize) {
+    let length = values.len();
+    let threshold = baseline + EDGE_BLEED_FRACTION * (values[length - 1] - baseline);
+    let mut index = length;
+    while index > length - limit && values[index - 1] > threshold {
+        index -= 1;
+    }
+    if index > length - limit {
+        for value in values.iter_mut().skip(index) {
+            *value = baseline;
+        }
+    }
+}
+
+fn crop_scans(
+    scans: &[(f64, Vec<f64>, Vec<f64>)],
+    from: f64,
+    to: f64,
+) -> &[(f64, Vec<f64>, Vec<f64>)] {
+    let start = scans.partition_point(|(rt, _, _)| *rt < from);
+    let end = scans.partition_point(|(rt, _, _)| *rt <= to);
+    &scans[start..end.max(start)]
 }
 
 pub fn weighted_centroid_mz(
@@ -656,24 +900,119 @@ pub fn weighted_centroid_mz(
     (isum > 0.0).then(|| wsum / isum)
 }
 
+struct BuildContext<'a> {
+    estimator: &'a dyn MzEstimator,
+    tolerance: &'a MzTolerance,
+    total_samples: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_results(
     slots: Vec<ClusterSlot>,
     min_samples: usize,
     total_samples: usize,
     sample_names: &[String],
-) -> Vec<ConsensusFeature> {
-    slots
-        .into_iter()
-        .filter_map(|(s, bounds)| {
-            let debug_missing = collect_missing_samples(&s, &bounds, sample_names);
-            let hits = collect_filled_slots(s);
-            require_minimum_frequency(hits, min_samples).map(|hits| {
+    estimator: &(dyn MzEstimator + Send + Sync),
+    tolerance: &MzTolerance,
+    ppm: f64,
+) -> (Vec<ConsensusFeature>, Vec<ConsensusFeature>) {
+    let context = BuildContext {
+        estimator,
+        tolerance,
+        total_samples,
+    };
+    let mut single: Vec<ConsensusFeature> = Vec::new();
+    let mut split: Vec<ConsensusFeature> = Vec::new();
+    for slot in slots {
+        let ClusterSlot {
+            features,
+            apex_values,
+            masses,
+            bounds,
+        } = slot;
+        let debug_missing = collect_missing_samples(&features, &bounds, sample_names);
+
+        let mut pool: Vec<(usize, MassPeak)> = Vec::new();
+        for (sample_idx, observations) in masses.iter().enumerate() {
+            if let Some(observations) = observations {
+                for observation in observations {
+                    pool.push((sample_idx, *observation));
+                }
+            }
+        }
+        let pool_mz: Vec<f64> = pool.iter().map(|(_, o)| o.mz).collect();
+        let cutoff = same_mass_gap(bounds.target_mz, ppm);
+
+        if pool.is_empty() || !has_multiple_masses(&pool_mz, cutoff) {
+            let dominant_apex: Vec<SampleMz> = apex_values.iter().flatten().copied().collect();
+            let hits = collect_filled_slots(features);
+            if let Some(hits) = require_minimum_frequency(hits, min_samples) {
                 let mut feature = aggregate_into_consensus(hits, &bounds, total_samples);
+                if let Some(mz) = context.estimator.combine(&dominant_apex, context.tolerance) {
+                    feature.mz = mz;
+                }
                 feature.debug_missing = debug_missing;
-                feature
-            })
-        })
-        .collect()
+                single.push(feature);
+            }
+            continue;
+        }
+
+        let mut group_features: Vec<ConsensusFeature> = Vec::new();
+        for group in split_by_gap(&pool_mz, cutoff) {
+            let low = group.iter().copied().fold(f64::INFINITY, f64::min);
+            let high = group.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let entries: Vec<(usize, MassPeak)> = pool
+                .iter()
+                .copied()
+                .filter(|(_, o)| o.mz >= low && o.mz <= high)
+                .collect();
+            if let Some(feature) = build_mass_feature(&entries, &bounds, &context)
+                && feature.n_samples >= min_samples
+            {
+                group_features.push(feature);
+            }
+        }
+        if let Some(first) = group_features.first_mut() {
+            first.debug_missing = debug_missing;
+        }
+        split.extend(group_features);
+    }
+    (single, split)
+}
+
+fn build_mass_feature(
+    entries: &[(usize, MassPeak)],
+    bounds: &SearchBounds,
+    context: &BuildContext,
+) -> Option<ConsensusFeature> {
+    if entries.is_empty() {
+        return None;
+    }
+
+    let mut samples: Vec<usize> = entries.iter().map(|(sample_idx, _)| *sample_idx).collect();
+    samples.sort_unstable();
+    samples.dedup();
+
+    let mut mzs: Vec<f64> = entries.iter().map(|(_, o)| o.mz).collect();
+    let mut intensities: Vec<f64> = entries.iter().map(|(_, o)| o.intensity).collect();
+    let mut integrals: Vec<f64> = entries.iter().map(|(_, o)| o.integral).collect();
+    let mut rts: Vec<f64> = entries.iter().map(|(_, o)| o.rt).collect();
+
+    Some(ConsensusFeature {
+        mz: median(&mut mzs),
+        rt: median(&mut rts),
+        from: bounds.rt_from,
+        to: bounds.rt_to,
+        intensity: median(&mut intensities),
+        integral: median(&mut integrals),
+        frequency: if context.total_samples > 0 {
+            samples.len() as f64 / context.total_samples as f64
+        } else {
+            0.0
+        },
+        n_samples: samples.len(),
+        debug_missing: Vec::new(),
+    })
 }
 
 pub(crate) fn dedup(
@@ -882,16 +1221,6 @@ fn collect_missing_samples(
         .collect()
 }
 
-pub(crate) fn median(values: &mut [f64]) -> f64 {
-    values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-    let mid = values.len() / 2;
-    if values.len().is_multiple_of(2) {
-        (values[mid - 1] + values[mid]) / 2.0
-    } else {
-        values[mid]
-    }
-}
-
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 fn open_mzml(path: &Path) -> Result<MzML, String> {
     let file = File::open(path).map_err(|e| format!("open {}: {}", path.display(), e))?;
@@ -911,4 +1240,48 @@ fn open_ion(path: &Path) -> Result<IonReader, String> {
         },
     )
     .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod anchor_edges_tests {
+    use super::anchor_edges;
+
+    #[test]
+    fn flattens_leading_bleed_and_keeps_center() {
+        let mut values = vec![0.0; 30];
+        let descent = [150_000.0, 90_000.0, 40_000.0, 10_000.0, 1_000.0];
+        for (index, value) in descent.iter().enumerate() {
+            values[index] = *value;
+        }
+        values[15] = 350_000.0;
+        anchor_edges(&mut values);
+        assert_eq!(values[0], 0.0);
+        assert_eq!(values[1], 0.0);
+        assert_eq!(values[15], 350_000.0);
+    }
+
+    #[test]
+    fn flattens_trailing_bleed_and_keeps_center() {
+        let mut values = vec![0.0; 30];
+        let ascent = [1_000.0, 10_000.0, 40_000.0, 90_000.0, 150_000.0];
+        for (offset, value) in ascent.iter().enumerate() {
+            values[25 + offset] = *value;
+        }
+        values[15] = 350_000.0;
+        anchor_edges(&mut values);
+        assert_eq!(values[29], 0.0);
+        assert_eq!(values[28], 0.0);
+        assert_eq!(values[15], 350_000.0);
+    }
+
+    #[test]
+    fn leaves_clean_edges_untouched() {
+        let mut values = vec![0.0; 30];
+        values[14] = 200_000.0;
+        values[15] = 350_000.0;
+        values[16] = 200_000.0;
+        let before = values.clone();
+        anchor_edges(&mut values);
+        assert_eq!(values, before);
+    }
 }

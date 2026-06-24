@@ -14,6 +14,8 @@ from msutils.api import (
     get_scans,
     find_peaks,
     get_peak,
+    fit_peak,
+    draw_peak,
     find_noise_level,
     calculate_baseline,
     get_peaks_from_eic,
@@ -39,6 +41,8 @@ __all__ = [
     "get_scans",
     "find_peaks",
     "get_peak",
+    "fit_peak",
+    "draw_peak",
     "find_noise_level",
     "calculate_baseline",
     "get_peaks_from_eic",
@@ -91,6 +95,12 @@ class MsUtils:
 
     def get_peak(self, x, y, rt: float, range_: float, options=None):
         return get_peak(x, y, rt, range_, options)
+
+    def fit_peak(self, x, y, rt: float, intensity: float, shape: str = "emg"):
+        return fit_peak(x, y, rt, intensity, shape)
+
+    def draw_peak(self, x, params):
+        return draw_peak(x, params)
 
     def find_noise_level(self, y) -> float:
         return find_noise_level(y)

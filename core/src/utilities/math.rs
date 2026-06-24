@@ -28,6 +28,16 @@ pub fn closest_index(xs: &[f64], v: f64) -> usize {
     }
 }
 
+pub fn median(values: &mut [f64]) -> f64 {
+    values.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        (values[mid - 1] + values[mid]) / 2.0
+    } else {
+        values[mid]
+    }
+}
+
 pub fn xy_integration(x: &[f64], y: &[f64]) -> (f64, f64) {
     let n = x.len();
     if n == 0 || n != y.len() {
