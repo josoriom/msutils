@@ -1,22 +1,26 @@
 use msutils::utilities::find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter};
 use msutils::utilities::get_peak::get_peak;
+use msutils::utilities::shape_filter::PeakShape;
 use msutils::utilities::structs::{DataXY, Roi};
 
 const STEP_MINUTES: f64 = 0.006;
 
 fn options() -> FindPeaksOptions {
-    let mut filter = PeakFilter::default();
-    filter.auto_noise = Some(true);
-    filter.auto_baseline = Some(true);
-    filter.min_peak_width_points = Some(5);
-    filter.min_intensity = Some(1000.0);
-    filter.min_snr = Some(2.0);
-    let mut options = FindPeaksOptions::default();
-    options.filter = Some(filter);
-    options.artifact_filter = Some(ArtifactFilter {
-        min_gaussian_r2: 0.0,
-    });
-    options
+    FindPeaksOptions {
+        filter: Some(PeakFilter {
+            auto_noise: Some(true),
+            auto_baseline: Some(true),
+            min_peak_width_points: Some(5),
+            min_intensity: Some(1000.0),
+            min_snr: Some(2.0),
+            ..Default::default()
+        }),
+        artifact_filter: Some(ArtifactFilter {
+            min_r2: 0.0,
+            shape: PeakShape::EMG,
+        }),
+        ..Default::default()
+    }
 }
 
 fn gaussian(time: f64, center: f64, height: f64, width: f64) -> f64 {

@@ -97,6 +97,7 @@ mod tests {
                 allow_overlap: Some(false),
                 min_snr: Some(2.0),
                 noise_method: None,
+                kernel_size: None,
             }),
             baseline: Some(BaselineOptions {
                 lambda: None,

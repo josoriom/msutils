@@ -6,11 +6,11 @@ pub fn dump_peaks(peaks: &[Peak]) {
     println!("peaks.len() = {}", peaks.len());
     for (i, p) in peaks.iter().enumerate() {
         let r2 = p
-            .gaussian_r2
+            .r2
             .map(|v| format!("{:.3}", v))
             .unwrap_or_else(|| "N/A".to_string());
         println!(
-            "#{:03} from={:.6} to={:.6} rt={:.6} integral={:.3} intensity={:.3} gaussian_r2={} n_points={} noise={:.3}",
+            "#{:03} from={:.6} to={:.6} rt={:.6} integral={:.3} intensity={:.3} r2={} n_points={} noise={:.3}",
             i, p.from, p.to, p.rt, p.integral, p.intensity, r2, p.n_points, p.noise
         );
     }
@@ -108,4 +108,88 @@ pub fn shuffle_with_seed<T>(xs: &mut [T], seed: u64) {
         let j = (u * ((i + 1) as f64)).floor() as usize;
         xs.swap(i, j);
     }
+}
+
+use ionic::ion::{IonReader, ReadOptions};
+use ionic::mzml::structs::{Chromatogram, NumericArray};
+use std::collections::BTreeMap;
+use std::path::Path;
+
+#[allow(dead_code)]
+pub struct Eic {
+    pub time: Vec<f64>,
+    pub intensity: Vec<f64>,
+    pub params: BTreeMap<String, String>,
+}
+
+#[allow(dead_code)]
+pub fn load_chromatograms(file_name: &str) -> BTreeMap<String, Eic> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(file_name);
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("cannot read {:?}: {}", path, e));
+    let mut reader = IonReader::open(&bytes, ReadOptions::default()).expect("open ion fixture");
+    let mzml = reader.to_mzml().expect("decode ion fixture");
+
+    let mut out = BTreeMap::new();
+    if let Some(list) = mzml.run.chromatogram_list {
+        for item in list.chromatograms {
+            let time = chromatogram_array(&item, "MS:1000595");
+            let intensity = chromatogram_array(&item, "MS:1000515");
+            let params = item
+                .user_params
+                .into_iter()
+                .filter_map(|param| param.value.map(|value| (param.name, value)))
+                .collect();
+            out.insert(item.id, Eic { time, intensity, params });
+        }
+    }
+    out
+}
+
+#[allow(dead_code)]
+fn chromatogram_array(item: &Chromatogram, accession: &str) -> Vec<f64> {
+    let arrays = &item
+        .binary_data_array_list
+        .as_ref()
+        .expect("binary arrays")
+        .binary_data_arrays;
+    for array in arrays {
+        if array.cv_params.iter().any(|p| p.accession.as_deref() == Some(accession)) {
+            return numeric_to_f64(array.binary.as_ref().expect("binary payload"));
+        }
+    }
+    panic!("array {accession} missing in {}", item.id);
+}
+
+#[allow(dead_code)]
+fn numeric_to_f64(array: &NumericArray) -> Vec<f64> {
+    match array {
+        NumericArray::F64(v) => v.clone(),
+        NumericArray::F32(v) => v.iter().map(|&x| x as f64).collect(),
+        NumericArray::F16(v) => v.iter().map(|&x| x as f64).collect(),
+        NumericArray::I64(v) => v.iter().map(|&x| x as f64).collect(),
+        NumericArray::I32(v) => v.iter().map(|&x| x as f64).collect(),
+        NumericArray::I16(v) => v.iter().map(|&x| x as f64).collect(),
+    }
+}
+
+#[allow(dead_code)]
+pub fn group_ids<'a>(chromatograms: &'a BTreeMap<String, Eic>, prefix: &str) -> Vec<&'a String> {
+    chromatograms.keys().filter(|id| id.starts_with(prefix)).collect()
+}
+
+#[allow(dead_code)]
+pub fn param_f64(eic: &Eic, key: &str) -> f64 {
+    eic.params
+        .get(key)
+        .unwrap_or_else(|| panic!("param {key} missing"))
+        .parse()
+        .expect("numeric param")
+}
+
+#[allow(dead_code)]
+pub fn param_bool(eic: &Eic, key: &str) -> bool {
+    eic.params.get(key).map(|value| value == "true").unwrap_or(false)
 }

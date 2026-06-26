@@ -60,7 +60,8 @@ class _FindPeakDefaults:
     auto_noise: bool            = True
     auto_baseline: bool         = True
     min_snr: float              = 2.0
-    min_gaussian_r2: float      = 0.0
+    min_r2: float               = 0.0
+    shape: str                  = "emg"
 
 
 def _as_f64_ptr(array: np.ndarray) -> POINTER(c_double):
@@ -753,7 +754,8 @@ def find_features(
         "auto_noise":           _FindPeakDefaults.auto_noise,
         "auto_baseline":        _FindPeakDefaults.auto_baseline,
         "min_snr":              _FindPeakDefaults.min_snr,
-        "min_gaussian_r2":      _FindPeakDefaults.min_gaussian_r2,
+        "min_r2":               _FindPeakDefaults.min_r2,
+        "shape":                _FindPeakDefaults.shape,
     }
     if options:
         peak_defaults.update(options)
@@ -814,7 +816,8 @@ def find_feature(
         "auto_noise":           _FindPeakDefaults.auto_noise,
         "auto_baseline":        _FindPeakDefaults.auto_baseline,
         "min_snr":              _FindPeakDefaults.min_snr,
-        "min_gaussian_r2":      _FindPeakDefaults.min_gaussian_r2,
+        "min_r2":               _FindPeakDefaults.min_r2,
+        "shape":                _FindPeakDefaults.shape,
     }
     if options:
         peak_defaults.update(options)
@@ -922,7 +925,8 @@ def get_features(
         "auto_noise":           _FindPeakDefaults.auto_noise,
         "auto_baseline":        _FindPeakDefaults.auto_baseline,
         "min_snr":              _FindPeakDefaults.min_snr,
-        "min_gaussian_r2":      _FindPeakDefaults.min_gaussian_r2,
+        "min_r2":               _FindPeakDefaults.min_r2,
+        "shape":                _FindPeakDefaults.shape,
     }
     if options:
         peak_defaults.update(options)

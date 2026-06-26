@@ -167,6 +167,7 @@ pub struct CPeakOptions {
     pub min_integral: f64,
     pub min_intensity: f64,
     pub min_peak_width_points: c_int,
+    pub shape: c_int,
     pub noise: f64,
     pub auto_noise: c_int,
     pub auto_baseline: c_int,
@@ -174,11 +175,12 @@ pub struct CPeakOptions {
     pub max_iterations: c_int,
     pub allow_overlap: c_int,
     pub min_snr: f64,
-    pub min_gaussian_r2: f64,
+    pub min_r2: f64,
+    pub kernel_size: c_int,
 }
 
 const _: () = assert!(
-    core::mem::size_of::<CPeakOptions>() == 72,
+    core::mem::size_of::<CPeakOptions>() == 80,
     "CPeakOptions size drifted — bump MSUTILS_ABI_VERSION and update all wrappers"
 );
 
@@ -1958,6 +1960,7 @@ fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
                 1.5
             }),
             noise_method: None,
+            kernel_size: (o.kernel_size > 0).then_some(o.kernel_size as usize),
         }),
         baseline: Some(BaselineOptions {
             lambda: (o.lambda > 0).then_some(o.lambda as f64),
@@ -1965,11 +1968,12 @@ fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
             edge_slope_level: Some(1),
         }),
         artifact_filter: Some(ArtifactFilter {
-            min_gaussian_r2: if o.min_gaussian_r2.is_finite() && o.min_gaussian_r2 >= 0.0 {
-                o.min_gaussian_r2
+            min_r2: if o.min_r2.is_finite() && o.min_r2 >= 0.0 {
+                o.min_r2
             } else {
-                default_artifact.min_gaussian_r2
+                default_artifact.min_r2
             },
+            shape: peak_shape_from_code(o.shape),
         }),
     }
 }

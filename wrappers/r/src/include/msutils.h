@@ -13,6 +13,7 @@ typedef struct CPeakOptions {
   double min_integral;
   double min_intensity;
   int min_peak_width_points;
+  int shape;
   double noise;
   int auto_noise;
   int auto_baseline;
@@ -20,7 +21,8 @@ typedef struct CPeakOptions {
   int max_iterations;
   int allow_overlap;
   double min_snr;
-  double min_gaussian_r2;
+  double min_r2;
+  int kernel_size;
 } CPeakOptions;
 
 typedef struct Buf {

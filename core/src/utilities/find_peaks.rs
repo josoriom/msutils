@@ -1,23 +1,27 @@
 use std::cmp::Ordering;
 
 use crate::utilities::calculate_baseline::{BaselineOptions, calculate_baseline};
+use crate::utilities::cheminfo::sgg::{SggOptions, sgg};
 use crate::utilities::closest_index;
-use crate::utilities::emg_filter::{Candidate, EmgFilter};
 use crate::utilities::find_noise_level::{find_noise_level, find_noise_level_san_plot};
+use crate::utilities::fit_peak::PeakShape;
 use crate::utilities::get_boundaries::{Boundaries, BoundariesOptions, get_boundaries};
 use crate::utilities::math::xy_integration;
 use crate::utilities::scan_for_peaks::scan_for_peaks;
+use crate::utilities::shape_filter::{Candidate, ShapeFilter};
 use crate::utilities::structs::{DataXY, Peak};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ArtifactFilter {
-    pub min_gaussian_r2: f64,
+    pub min_r2: f64,
+    pub shape: PeakShape,
 }
 
 impl Default for ArtifactFilter {
     fn default() -> Self {
         Self {
-            min_gaussian_r2: 0.0,
+            min_r2: 0.0,
+            shape: PeakShape::EMG,
         }
     }
 }
@@ -40,6 +44,7 @@ pub struct PeakFilter {
     pub allow_overlap: Option<bool>,
     pub min_snr: Option<f64>,
     pub noise_method: Option<NoiseMethod>,
+    pub kernel_size: Option<usize>,
 }
 
 impl Default for PeakFilter {
@@ -54,6 +59,7 @@ impl Default for PeakFilter {
             allow_overlap: Some(false),
             min_snr: Some(1.0),
             noise_method: None,
+            kernel_size: None,
         }
     }
 }
@@ -68,7 +74,7 @@ struct PeakCandidate {
     integral: f64,
     intensity: f64,
     n_points: usize,
-    gaussian_r2: f64,
+    r2: f64,
     noise: f64,
 }
 
@@ -80,11 +86,7 @@ impl From<PeakCandidate> for Peak {
             rt: c.rt,
             integral: c.integral,
             intensity: c.intensity,
-            gaussian_r2: if c.gaussian_r2.is_finite() {
-                Some(c.gaussian_r2)
-            } else {
-                None
-            },
+            r2: if c.r2.is_finite() { Some(c.r2) } else { None },
             n_points: c.n_points,
             noise: c.noise,
         }
@@ -97,7 +99,7 @@ impl Candidate for PeakCandidate {
     }
 
     fn set_score(&mut self, r2: f64) {
-        self.gaussian_r2 = r2;
+        self.r2 = r2;
     }
 }
 
@@ -165,9 +167,12 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
     let mut bopt = o.boundaries.unwrap_or_default();
     bopt.noise = noise;
 
+    let smoothed_signal = get_smoothed_signal(&normalized_data, filter.kernel_size);
+    let boundary_input = smoothed_signal.as_ref().unwrap_or(&normalized_data);
+
     let mut candidates: Vec<PeakCandidate> = Vec::with_capacity(positions.len());
     for seed_rt in positions {
-        let b = get_boundaries(&normalized_data, seed_rt, Some(bopt));
+        let b = get_boundaries(boundary_input, seed_rt, Some(bopt));
         let seed_idx = closest_index(&normalized_data.x, seed_rt);
         let apex = apex_in_window(&normalized_data, &b);
         let (rt, apex_y) = if let Some(t) = apex {
@@ -191,7 +196,7 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
                     integral,
                     intensity,
                     n_points: ti - fi + 1,
-                    gaussian_r2: f64::NAN,
+                    r2: f64::NAN,
                     noise,
                 });
             }
@@ -203,7 +208,7 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
     }
 
     if let Some(artifact_opts) = o.artifact_filter {
-        EmgFilter::new(artifact_opts.min_gaussian_r2).retain(
+        ShapeFilter::new(artifact_opts.min_r2, artifact_opts.shape).retain(
             &mut candidates,
             &data.x,
             &data.y,
@@ -241,6 +246,35 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
         peaks = suppress_contained_peaks(data, peaks);
     }
     peaks
+}
+
+fn get_smoothed_signal(input: &DataXY, kernel_size: Option<usize>) -> Option<DataXY> {
+    let window = get_smoothing_window(kernel_size?, input.y.len())?;
+    let smoothed = sgg(
+        &input.y,
+        &input.x,
+        SggOptions {
+            window_size: window,
+            derivative: 0,
+            polynomial: 3,
+        },
+    );
+    Some(DataXY {
+        x: input.x.clone(),
+        y: smoothed.into_iter().map(keep_above_zero).collect(),
+    })
+}
+
+fn get_smoothing_window(requested: usize, length: usize) -> Option<usize> {
+    let mut window = requested.min(length);
+    if window.is_multiple_of(2) {
+        window -= 1;
+    }
+    (window >= 5).then_some(window)
+}
+
+fn keep_above_zero(value: f64) -> f64 {
+    value.max(0.0)
 }
 
 pub fn apex_in_window(data: &DataXY, b: &Boundaries) -> Option<(f64, f64)> {

@@ -2,8 +2,8 @@ use msutils::utilities::fit_peak::{PeakSeed, PeakShape, draw_peak, fit_peak};
 use msutils::utilities::functions::{emg_fn, gaussian_fn, sigma_from_fwhm};
 use msutils::utilities::structs::DataXY;
 
-use serde::Deserialize;
-use std::{fs, path::Path};
+mod helpers;
+use helpers::load_chromatograms;
 
 fn linspace(from: f64, to: f64, points: usize) -> Vec<f64> {
     (0..points)
@@ -63,27 +63,23 @@ fn emg_round_trip() {
     assert_eq!(drawn.x, data.x);
 }
 
-#[derive(Deserialize)]
-struct Peak {
-    name: String,
-    x: Vec<f64>,
-    y: Vec<f64>,
-}
-
 #[test]
 fn real_peaks_fit_emg() {
-    let path = Path::new(file!()).parent().unwrap().join("fixtures").join("emg_filter.json");
-    let text = fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {:?}: {}", path, e));
-    let peaks: Vec<Peak> = serde_json::from_str(&text).expect("invalid JSON");
+    let chromatograms = load_chromatograms("chromatogram.ion");
+    let peaks: Vec<(String, helpers::Eic)> = chromatograms
+        .into_iter()
+        .filter(|(id, _)| id.starts_with("emg_filter/"))
+        .collect();
+    assert!(!peaks.is_empty(), "no emg_filter chromatograms");
 
-    for peak in peaks {
+    for (id, eic) in peaks {
         let data = DataXY {
-            x: peak.x.clone(),
-            y: peak.y.clone(),
+            x: eic.time.clone(),
+            y: eic.intensity.clone(),
         };
         let seed = apex(&data);
-        let params = fit_peak(&data, &seed, PeakShape::EMG).expect(&peak.name);
-        assert!(params.r2 >= 0.9, "{} r2 = {:.3}", peak.name, params.r2);
+        let params = fit_peak(&data, &seed, PeakShape::EMG).expect(&id);
+        assert!(params.r2 >= 0.9, "{} r2 = {:.3}", id, params.r2);
 
         let drawn = draw_peak(&data, &params);
         assert_eq!(drawn.x, data.x);

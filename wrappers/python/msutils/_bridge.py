@@ -31,7 +31,7 @@ class PeakOptions(ctypes.Structure):
         ("min_integral",          c_double),
         ("min_intensity",         c_double),
         ("min_peak_width_points", c_int32),
-        ("_pad",                  c_int32),
+        ("shape",                 c_int32),
         ("noise",                 c_double),
         ("auto_noise",            c_int32),
         ("auto_baseline",         c_int32),
@@ -40,12 +40,13 @@ class PeakOptions(ctypes.Structure):
         ("allow_overlap",         c_int32),
         ("_pad2",                 c_int32),
         ("min_snr",               c_double),
-        ("min_gaussian_r2",       c_double),
+        ("min_r2",                c_double),
+        ("kernel_size",           c_int32),
     ]
 
 
-assert ctypes.sizeof(PeakOptions) == 72, (
-    f"PeakOptions is {ctypes.sizeof(PeakOptions)} bytes — expected 72"
+assert ctypes.sizeof(PeakOptions) == 80, (
+    f"PeakOptions is {ctypes.sizeof(PeakOptions)} bytes — expected 80"
 )
 
 MSUTILS_ABI_VERSION = 1

@@ -79,12 +79,26 @@ function writeI32(view: DataView, offset: number, value: unknown): void {
   );
 }
 
+const SHAPE_CODES: Record<string, number> = { gaussian: 0, emg: 1 };
+const DEFAULT_SHAPE_CODE = 1;
+
+function shapeCode(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const code = SHAPE_CODES[value.trim().toLowerCase()];
+    return code === undefined ? DEFAULT_SHAPE_CODE : code;
+  }
+  return DEFAULT_SHAPE_CODE;
+}
+
 function packPeakOptions(opts: PeakOptions): Uint8Array {
   const view = new DataView(new ArrayBuffer(PEAK_OPTIONS_STRUCT_BYTES));
   writeF64(view, 0, opts.minIntegral);
   writeF64(view, 8, opts.minIntensity);
   writeI32(view, 16, opts.minPeakWidthPoints);
-  view.setInt32(20, 0, true);
+  view.setInt32(20, shapeCode(opts.shape), true);
   writeF64(view, 24, opts.noise);
   writeI32(view, 32, opts.autoNoise);
   writeI32(view, 36, opts.autoBaseline);
@@ -93,7 +107,7 @@ function packPeakOptions(opts: PeakOptions): Uint8Array {
   writeI32(view, 48, opts.allowOverlap);
   view.setInt32(52, 0, true);
   writeF64(view, 56, opts.minSnr);
-  writeF64(view, 64, opts.minGaussianR2);
+  writeF64(view, 64, opts.minR2);
   return new Uint8Array(view.buffer);
 }
 

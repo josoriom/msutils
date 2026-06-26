@@ -21,7 +21,7 @@ find_feature(
   max_iterations = 0L,
   allow_overlap = FALSE,
   min_snr = 1,
-  min_gaussian_r2 = 0.3
+  min_r2 = 0.3
 )
 }
 \arguments{
@@ -45,7 +45,7 @@ find_feature(
   \item{max_iterations}{Maximum airPLS iterations. \code{0} uses a default.}
   \item{allow_overlap}{Allow overlapping peak boundaries. Default \code{FALSE}.}
   \item{min_snr}{Minimum signal-to-noise ratio. Default 1.}
-  \item{min_gaussian_r2}{Minimum Gaussian R-squared for the artifact filter; \code{0} disables it (keep peaks regardless of shape). Default 0.3.}
+  \item{min_r2}{Minimum fit R-squared (Gaussian or EMG) for the artifact filter; \code{0} disables it (keep peaks regardless of shape). Default 0.3.}
 }
 \value{
 A data frame with one row per target. Columns include \code{id}, \code{mz},

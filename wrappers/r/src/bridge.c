@@ -255,7 +255,9 @@ static int fill_options(SEXP opts, CPeakOptions *out)
   out->max_iterations = 0;
   out->allow_overlap = 0;
   out->min_snr = NAN;
-  out->min_gaussian_r2 = NAN;
+  out->min_r2 = NAN;
+  out->shape = 1;
+  out->kernel_size = 0;
   SEXP v = R_NilValue;
   v = list_get(opts, "min_integral");
   if (v != R_NilValue)
@@ -287,9 +289,19 @@ static int fill_options(SEXP opts, CPeakOptions *out)
   v = list_get(opts, "min_snr");
   if (v != R_NilValue)
     out->min_snr = asReal(v);
-  v = list_get(opts, "min_gaussian_r2");
+  v = list_get(opts, "min_r2");
   if (v != R_NilValue)
-    out->min_gaussian_r2 = asReal(v);
+    out->min_r2 = asReal(v);
+  v = list_get(opts, "shape");
+  if (v != R_NilValue) {
+    if (TYPEOF(v) == STRSXP && XLENGTH(v) > 0)
+      out->shape = (strcmp(CHAR(STRING_ELT(v, 0)), "gaussian") == 0) ? 0 : 1;
+    else
+      out->shape = (int32_t)asInteger(v);
+  }
+  v = list_get(opts, "kernel_size");
+  if (v != R_NilValue)
+    out->kernel_size = (int32_t)asInteger(v);
   return 1;
 }
 

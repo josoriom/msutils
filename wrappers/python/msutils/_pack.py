@@ -7,6 +7,9 @@ import numpy as np
 
 from msutils._bridge import PeakOptions
 
+SHAPE_CODES = {"gaussian": 0, "emg": 1}
+DEFAULT_SHAPE_CODE = 1
+
 
 def pack_peak_options(opts: Optional[Dict[str, Any]]) -> Optional[PeakOptions]:
     if not opts:
@@ -39,11 +42,19 @@ def pack_peak_options(opts: Optional[Dict[str, Any]]) -> Optional[PeakOptions]:
             return int(value)
         return 1 if value else 0
 
+    def _get_shape(key: str) -> int:
+        value = opts.get(key)
+        if value is None:
+            return DEFAULT_SHAPE_CODE
+        if isinstance(value, str):
+            return SHAPE_CODES.get(value.strip().lower(), DEFAULT_SHAPE_CODE)
+        return _get_int(key)
+
     options_struct = PeakOptions()
     options_struct.min_integral          = _get_float("min_integral")
     options_struct.min_intensity         = _get_float("min_intensity")
     options_struct.min_peak_width_points = _get_int("min_peak_width_points")
-    options_struct._pad                  = 0
+    options_struct.shape                 = _get_shape("shape")
     options_struct.noise                 = _get_float("noise")
     options_struct.auto_noise            = _get_bool("auto_noise")
     options_struct.auto_baseline         = _get_bool("auto_baseline")
@@ -52,7 +63,7 @@ def pack_peak_options(opts: Optional[Dict[str, Any]]) -> Optional[PeakOptions]:
     options_struct.allow_overlap         = _get_bool("allow_overlap")
     options_struct._pad2                 = 0
     options_struct.min_snr               = _get_float("min_snr")
-    options_struct.min_gaussian_r2       = _get_float("min_gaussian_r2")
+    options_struct.min_r2                = _get_float("min_r2")
     return options_struct
 
 

@@ -12,7 +12,8 @@ export type PeakOptions = Partial<{
   maxIterations: number;
   allowOverlap: boolean | number;
   minSnr: number;
-  minGaussianR2: number;
+  minR2: number;
+  shape: 'gaussian' | 'emg' | number;
 }>;
 
 export type BaselineOptions = Partial<{

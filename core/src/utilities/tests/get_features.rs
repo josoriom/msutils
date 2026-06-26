@@ -7,7 +7,7 @@ mod tests {
 
     use crate::utilities::{
         calculate_eic::{CentroidScan, EicOptions, SpectrumSummary},
-        find_features::{Feature, FindFeaturesOptions, MzTolerance},
+        find_features::{Feature, FindFeaturesOptions, MzScanGrid, MzTolerance},
         get_features::{
             AlignmentOptions, ConsensusFeature, FeatureClusterer, MzRtCluster, SearchBounds,
             TaggedFeature, aggregate_into_consensus, assign_best_per_sample, collect_filled_slots,
@@ -1009,17 +1009,25 @@ mod tests {
     }
 
     fn feature_cfg_for_mz(mz: f64) -> FindFeaturesOptions {
-        let mut cfg = FindFeaturesOptions::default();
-        cfg.mz_scan_grid.min_mz = (mz - 2.0).max(40.0);
-        cfg.mz_scan_grid.max_mz = (mz + 2.0).min(1000.0);
-        cfg
+        FindFeaturesOptions {
+            mz_scan_grid: MzScanGrid {
+                min_mz: (mz - 2.0).max(40.0),
+                max_mz: (mz + 2.0).min(1000.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
     }
 
     fn feature_cfg_for_mz_range(low: f64, high: f64) -> FindFeaturesOptions {
-        let mut cfg = FindFeaturesOptions::default();
-        cfg.mz_scan_grid.min_mz = (low - 2.0).max(40.0);
-        cfg.mz_scan_grid.max_mz = (high + 2.0).min(1000.0);
-        cfg
+        FindFeaturesOptions {
+            mz_scan_grid: MzScanGrid {
+                min_mz: (low - 2.0).max(40.0),
+                max_mz: (high + 2.0).min(1000.0),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1376,7 +1384,7 @@ mod tests {
             intensity: 0.0,
             n_points: 3,
             noise: 0.0,
-            gaussian_r2: None,
+            r2: None,
         };
         let json = serde_json::to_string(&p).expect("serialise ok");
         assert!(
@@ -1386,10 +1394,7 @@ mod tests {
         assert!(json.contains("\"from\":0"), "NaN from → 0: {json}");
         assert!(json.contains("\"to\":0"), "+Inf to → 0: {json}");
         assert!(json.contains("\"rt\":1.5"), "finite rt unchanged: {json}");
-        assert!(
-            !json.contains("gaussian"),
-            "gaussian_r2 must be skipped: {json}"
-        );
+        assert!(!json.contains("\"r2\""), "r2 must be skipped: {json}");
     }
 
     #[test]
@@ -1406,7 +1411,7 @@ mod tests {
         );
         assert!(json.contains("\"noise\":0"), "noise field present: {json}");
         assert!(!json.contains("null"), "no null values: {json}");
-        assert!(!json.contains("gaussian"), "gaussian_r2 is skipped: {json}");
+        assert!(!json.contains("\"r2\""), "r2 is skipped: {json}");
     }
 
     #[test]

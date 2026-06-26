@@ -531,7 +531,7 @@ fn build_coarse_opts(config: &FindFeaturesOptions) -> FindPeaksOptions {
     filter.min_peak_width_points = Some(config.min_seed_width_points);
     coarse.filter = Some(filter);
     if let Some(artifact) = coarse.artifact_filter.as_mut() {
-        artifact.min_gaussian_r2 = 0.0;
+        artifact.min_r2 = 0.0;
     }
     coarse
 }

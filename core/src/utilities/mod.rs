@@ -15,7 +15,7 @@ pub use find_noise_level::{find_noise_level, find_noise_level_san_plot};
 
 pub mod find_peaks;
 
-pub mod emg_filter;
+pub mod shape_filter;
 
 pub mod fit_peak;
 
