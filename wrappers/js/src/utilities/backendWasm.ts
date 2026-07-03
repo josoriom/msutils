@@ -11,7 +11,7 @@ import { ContainmentCache } from "./containmentCache";
 
 const IS_INLINE_BUILD = typeof __INLINE__ !== "undefined" && __INLINE__;
 const OUTPUT_BUFFER_PAIR_BYTES = 8;
-const PEAK_OPTIONS_STRUCT_BYTES = 72;
+const PEAK_OPTIONS_STRUCT_BYTES = 80;
 const MSUTILS_ABI_VERSION = 1;
 const ERR_FAST_PATH = 6;
 
@@ -108,6 +108,7 @@ function packPeakOptions(opts: PeakOptions): Uint8Array {
   view.setInt32(52, 0, true);
   writeF64(view, 56, opts.minSnr);
   writeF64(view, 64, opts.minR2);
+  writeI32(view, 72, opts.kernelSize);
   return new Uint8Array(view.buffer);
 }
 

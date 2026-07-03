@@ -106,10 +106,16 @@ fn picks_peak_closest_to_target_over_taller_neighbor() {
         let target = gaussian(time, 28.63, 300_000.0, 0.03);
         taller_neighbor + target + ripple(index, 20_000.0)
     });
-    let rt = find_at(&eic, 28.63);
+    let peak = get_peak(&eic, &Roi::new(28.63, 0.2), Some(options()))
+        .expect("expected a peak near rt 28.63");
     assert!(
-        (rt - 28.4).abs() > 0.1,
+        (peak.rt - 28.4).abs() > 0.1,
         "selected the taller neighbor at 28.4 instead of the target at 28.63",
+    );
+    assert!(
+        (peak.rt - 28.63).abs() < 0.1,
+        "found rt {} but expected near 28.63",
+        peak.rt
     );
 }
 

@@ -23,10 +23,12 @@ use ionic::ion::{IonReader, ReadOptions};
 
 use crate::utilities::{
     calculate_eic::{
-        CentroidScan, EicOptions, EicReader, MS1_LEVEL, get_scan_times, lower_bound,
-        mz_tolerance_for, read_mz_window, upper_bound,
+        CentroidScan, EicOptions, EicReader, MS1_LEVEL, SpectrumKind, get_scan_times,
+        get_spectrum_kind, highest_intensity_in_window, lower_bound, mz_tolerance_for,
+        read_mz_window, upper_bound,
     },
     find_features::{Feature, FeatureError, FindFeaturesOptions, MzTolerance, find_features},
+    find_masses::find_masses,
     find_peaks::FindPeaksOptions,
     get_peak::get_peak,
     math::median,
@@ -232,30 +234,50 @@ impl MzRtCluster {
 
 impl FeatureClusterer {
     pub(crate) fn cluster(&self, mut tagged: Vec<TaggedFeature>) -> Vec<Cluster> {
-        tagged.sort_unstable_by(|a, b| {
+        let by_mz = |a: &TaggedFeature, b: &TaggedFeature| {
             a.feature
                 .mz
                 .partial_cmp(&b.feature.mz)
                 .unwrap_or(Ordering::Equal)
-        });
+        };
+
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+        tagged.par_sort_unstable_by(by_mz);
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+        tagged.sort_unstable_by(by_mz);
+
         let mz_groups = self.group_by_mz(tagged);
-        mz_groups
+
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+        {
+            mz_groups
+                .into_par_iter()
+                .flat_map_iter(|group| self.subdivide_by_rt(group.into_items()))
+                .filter_map(|growing| self.keep_cluster(growing))
+                .collect()
+        }
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+        {
+            mz_groups
+                .into_iter()
+                .flat_map(|group| self.subdivide_by_rt(group.into_items()))
+                .filter_map(|growing| self.keep_cluster(growing))
+                .collect()
+        }
+    }
+
+    fn keep_cluster(&self, growing: MzRtCluster) -> Option<Cluster> {
+        let med_mz = growing.cached_median_mz;
+        let med_rt = growing.cached_median_rt;
+        let kept: Vec<TaggedFeature> = growing
+            .into_items()
             .into_iter()
-            .flat_map(|group| self.subdivide_by_rt(group.into_items()))
-            .filter_map(|growing| {
-                let med_mz = growing.cached_median_mz;
-                let med_rt = growing.cached_median_rt;
-                let kept: Vec<TaggedFeature> = growing
-                    .into_items()
-                    .into_iter()
-                    .filter(|t| {
-                        self.tolerance.are_close_to_ref(t.feature.mz, med_mz)
-                            && (t.feature.rt - med_rt).abs() <= self.rt_tolerance
-                    })
-                    .collect();
-                if kept.is_empty() { None } else { Some(kept) }
+            .filter(|t| {
+                self.tolerance.are_close_to_ref(t.feature.mz, med_mz)
+                    && (t.feature.rt - med_rt).abs() <= self.rt_tolerance
             })
-            .collect()
+            .collect();
+        if kept.is_empty() { None } else { Some(kept) }
     }
 
     fn group_by_mz(&self, items: Vec<TaggedFeature>) -> Vec<MzRtCluster> {
@@ -334,11 +356,9 @@ pub fn get_features(
         rt_tolerance: alignment_config.rt_tolerance,
     };
 
-    let mut slots = prepare_slots(
-        clusterer.cluster(collect_tagged(&mut datasets)),
-        datasets.len(),
-        alignment_config.rt_tolerance,
-    );
+    let tagged = collect_tagged(&mut datasets);
+    let clusters = run_with_cores(cores, || clusterer.cluster(tagged));
+    let mut slots = prepare_slots(clusters, datasets.len(), alignment_config.rt_tolerance);
 
     let estimator = make_estimator(&alignment_config.mz_estimator);
 
@@ -347,7 +367,6 @@ pub fn get_features(
         &datasets,
         alignment_config.eic_options,
         alignment_config.peak_options,
-        estimator.as_ref(),
         alignment_config.fill_window_minutes,
         cores,
     )?;
@@ -363,16 +382,20 @@ pub fn get_features(
         alignment_config.eic_options.ppm_tolerance,
     );
 
-    let mut results = dedup(
-        single,
-        &alignment_config.mz_tolerance,
-        alignment_config.rt_tolerance,
-    );
+    let mut results = run_with_cores(cores, || {
+        dedup(
+            single,
+            &alignment_config.mz_tolerance,
+            alignment_config.rt_tolerance,
+        )
+    });
     let same_mass = MzTolerance {
         mz_absolute: 0.0,
         ppm: 0.5 * alignment_config.eic_options.ppm_tolerance,
     };
-    results.extend(dedup(split, &same_mass, alignment_config.rt_tolerance));
+    results.extend(run_with_cores(cores, || {
+        dedup(split, &same_mass, alignment_config.rt_tolerance)
+    }));
     Ok(results)
 }
 
@@ -413,57 +436,81 @@ fn resolve_samples(
     datasets: &[SampleDataset],
     eic_options: EicOptions,
     peak_options: Option<FindPeaksOptions>,
-    estimator: &(dyn MzEstimator + Send + Sync),
     fill_window: f64,
     cores: usize,
 ) -> Result<(), AlignmentError> {
-    let shared_slots: &[ClusterSlot] = slots;
+    if slots.is_empty() {
+        return Ok(());
+    }
 
-    let per_sample: Vec<(usize, Vec<(usize, Resolved)>)> = run_with_cores(cores, || {
-        datasets
-            .par_iter()
-            .enumerate()
-            .map(|(sample_idx, (_, source, _))| {
-                let items = match source {
-                    SampleSourceKind::Mzml(path) => {
-                        let mut mzml = open_mzml(path).map_err(|e| AlignmentError::Parse {
-                            path: path.to_string_lossy().to_string(),
-                            source: e.to_string(),
-                        })?;
-                        let mut reader = EicReader::Mzml(&mut mzml);
-                        resolve_sample(
+    let tiles = build_tiles(slots, eic_options);
+
+    for (sample_idx, (_, source, _)) in datasets.iter().enumerate() {
+        let loaded = match source {
+            SampleSourceKind::Mzml(path) => {
+                let mut mzml = open_mzml(path).map_err(|e| AlignmentError::Parse {
+                    path: path.to_string_lossy().to_string(),
+                    source: e.to_string(),
+                })?;
+                let mut reader = EicReader::Mzml(&mut mzml);
+                load_sample_scans(&mut reader, slots, sample_idx, eic_options, fill_window)?
+            }
+            SampleSourceKind::Ion(path) => {
+                let mut owned = open_ion(path).map_err(|e| AlignmentError::Parse {
+                    path: path.to_string_lossy().to_string(),
+                    source: e.to_string(),
+                })?;
+                let mut reader = EicReader::Ion(&mut owned);
+                load_sample_scans(&mut reader, slots, sample_idx, eic_options, fill_window)?
+            }
+        };
+
+        let Some((kind, all_times, scans)) = loaded else {
+            continue;
+        };
+
+        let shared_slots: &[ClusterSlot] = slots;
+        let items: Vec<(usize, Resolved)> = run_with_cores(cores, || {
+            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+            {
+                tiles
+                    .par_iter()
+                    .flat_map_iter(|tile| {
+                        resolve_tile(
+                            tile,
                             shared_slots,
                             sample_idx,
-                            &mut reader,
+                            &all_times,
+                            &scans,
                             eic_options,
-                            peak_options.clone(),
-                            estimator,
+                            &peak_options,
                             fill_window,
-                        )?
-                    }
-                    SampleSourceKind::Ion(path) => {
-                        let mut owned = open_ion(path).map_err(|e| AlignmentError::Parse {
-                            path: path.to_string_lossy().to_string(),
-                            source: e.to_string(),
-                        })?;
-                        let mut reader = EicReader::Ion(&mut owned);
-                        resolve_sample(
+                            kind,
+                        )
+                    })
+                    .collect()
+            }
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+            {
+                tiles
+                    .iter()
+                    .flat_map(|tile| {
+                        resolve_tile(
+                            tile,
                             shared_slots,
                             sample_idx,
-                            &mut reader,
+                            &all_times,
+                            &scans,
                             eic_options,
-                            peak_options.clone(),
-                            estimator,
+                            &peak_options,
                             fill_window,
-                        )?
-                    }
-                };
-                Ok((sample_idx, items))
-            })
-            .collect::<Result<Vec<_>, AlignmentError>>()
-    })?;
+                            kind,
+                        )
+                    })
+                    .collect()
+            }
+        });
 
-    for (sample_idx, items) in per_sample {
         for (ci, resolved) in items {
             if let Some(feature) = resolved.feature {
                 slots[ci].features[sample_idx] = Some(feature);
@@ -486,19 +533,45 @@ pub(crate) struct Resolved {
     pub(crate) masses: Option<Vec<MassPeak>>,
 }
 
-fn resolve_sample(
+fn build_tiles(slots: &[ClusterSlot], eic_options: EicOptions) -> Vec<Vec<usize>> {
+    let mut jobs: Vec<usize> = (0..slots.len()).collect();
+    jobs.sort_unstable_by(|&a, &b| {
+        slots[a]
+            .bounds
+            .target_mz
+            .partial_cmp(&slots[b].bounds.target_mz)
+            .unwrap_or(Ordering::Equal)
+    });
+
+    let mut tiles: Vec<Vec<usize>> = Vec::new();
+    let mut job_idx = 0;
+    while job_idx < jobs.len() {
+        let tile_center_mz = slots[jobs[job_idx]].bounds.target_mz;
+        let tile_tolerance = mz_tolerance_for(tile_center_mz, eic_options);
+
+        let mut tile = vec![jobs[job_idx]];
+        job_idx += 1;
+        while job_idx < jobs.len()
+            && (slots[jobs[job_idx]].bounds.target_mz - tile_center_mz).abs() <= tile_tolerance * 2.0
+        {
+            tile.push(jobs[job_idx]);
+            job_idx += 1;
+        }
+        tiles.push(tile);
+    }
+    tiles
+}
+
+type LoadedScans = Option<(SpectrumKind, Vec<f64>, Vec<(f64, Vec<f64>, Vec<f64>)>)>;
+
+fn load_sample_scans(
+    reader: &mut EicReader,
     slots: &[ClusterSlot],
     sample_idx: usize,
-    reader: &mut EicReader,
     eic_options: EicOptions,
-    peak_options: Option<FindPeaksOptions>,
-    estimator: &(dyn MzEstimator + Send + Sync),
     fill_window: f64,
-) -> Result<Vec<(usize, Resolved)>, AlignmentError> {
-    if slots.is_empty() {
-        return Ok(Vec::new());
-    }
-
+) -> Result<LoadedScans, AlignmentError> {
+    let kind = get_spectrum_kind(reader);
     let rt_min = slots
         .iter()
         .map(|slot| sample_rt_from(slot, sample_idx, fill_window))
@@ -510,108 +583,106 @@ fn resolve_sample(
 
     let scan_times = get_scan_times(reader, rt_min, rt_max, MS1_LEVEL);
     if scan_times.is_empty() {
-        return Ok(Vec::new());
+        return Ok(None);
     }
 
-    let all_times: Vec<f64> = scan_times.iter().map(|s| s.rt).collect();
-
-    let mut jobs: Vec<usize> = (0..slots.len()).collect();
-    jobs.sort_unstable_by(|&a, &b| {
-        slots[a]
-            .bounds
-            .target_mz
-            .partial_cmp(&slots[b].bounds.target_mz)
-            .unwrap_or(Ordering::Equal)
-    });
-
-    let mut resolved: Vec<(usize, Resolved)> = Vec::new();
-
-    let mut job_idx = 0;
-    while job_idx < jobs.len() {
-        let tile_center_mz = slots[jobs[job_idx]].bounds.target_mz;
-        let tile_tolerance = mz_tolerance_for(tile_center_mz, eic_options);
-
-        let mut tile_jobs = vec![jobs[job_idx]];
-        job_idx += 1;
-        while job_idx < jobs.len()
-            && (slots[jobs[job_idx]].bounds.target_mz - tile_center_mz).abs() <= tile_tolerance * 2.0
-        {
-            tile_jobs.push(jobs[job_idx]);
-            job_idx += 1;
-        }
-
-        let tile_rt_min = tile_jobs
-            .iter()
-            .map(|&ci| sample_rt_from(&slots[ci], sample_idx, fill_window))
-            .fold(f64::INFINITY, f64::min);
-        let tile_rt_max = tile_jobs
-            .iter()
-            .map(|&ci| sample_rt_to(&slots[ci], sample_idx, fill_window))
-            .fold(f64::NEG_INFINITY, f64::max);
-
-        let start = lower_bound(&all_times, tile_rt_min);
-        let end = upper_bound(&all_times, tile_rt_max);
-
-        if start >= end {
-            continue;
-        }
-
-        let tile_mz_lo = tile_center_mz - tile_tolerance;
-        let tile_mz_hi = tile_jobs
-            .iter()
-            .map(|&ci| slots[ci].bounds.target_mz)
-            .fold(f64::NEG_INFINITY, f64::max)
-            + tile_tolerance;
-
-        let mut tile_scans: Vec<(f64, Vec<f64>, Vec<f64>)> = Vec::with_capacity(end - start);
-        for scan_time in scan_times[start..end].iter() {
-            let mut mz = Vec::new();
-            let mut intensity = Vec::new();
-            read_mz_window(
-                reader,
-                scan_time.index,
-                tile_mz_lo,
-                tile_mz_hi,
-                &mut mz,
-                &mut intensity,
-            )
-            .map_err(|e| AlignmentError::FastPath {
-                path: format!("scan {}", scan_time.index),
-                source: e,
-            })?;
-            tile_scans.push((scan_time.rt, mz, intensity));
-        }
-
-        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-        let tile_iter = tile_jobs.par_iter();
-        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-        let tile_iter = tile_jobs.iter();
-
-        let tile_resolved: Vec<(usize, Resolved)> = tile_iter
-            .map(|&ci| {
-                let bounds = &slots[ci].bounds;
-                let tolerance = mz_tolerance_for(bounds.target_mz, eic_options);
-                let mz_lo = bounds.target_mz - tolerance;
-                let mz_hi = bounds.target_mz + tolerance;
-                let existing = slots[ci].features[sample_idx].as_ref();
-                let resolved = resolve_cluster(
-                    &tile_scans,
-                    existing,
-                    bounds,
-                    mz_lo,
-                    mz_hi,
-                    eic_options.ppm_tolerance,
-                    peak_options.clone(),
-                    estimator,
-                );
-                (ci, resolved)
-            })
-            .collect();
-
-        resolved.extend(tile_resolved);
+    let mut mz_lo_all = f64::INFINITY;
+    let mut mz_hi_all = f64::NEG_INFINITY;
+    for slot in slots {
+        let tolerance = mz_tolerance_for(slot.bounds.target_mz, eic_options);
+        mz_lo_all = mz_lo_all.min(slot.bounds.target_mz - tolerance);
+        mz_hi_all = mz_hi_all.max(slot.bounds.target_mz + tolerance);
     }
 
-    Ok(resolved)
+    let mut scans: Vec<(f64, Vec<f64>, Vec<f64>)> = Vec::with_capacity(scan_times.len());
+    let mut mz = Vec::new();
+    let mut intensity = Vec::new();
+    for scan_time in &scan_times {
+        read_mz_window(
+            reader,
+            scan_time.index,
+            mz_lo_all,
+            mz_hi_all,
+            &mut mz,
+            &mut intensity,
+        )
+        .map_err(|e| AlignmentError::FastPath {
+            path: format!("scan {}", scan_time.index),
+            source: e,
+        })?;
+        scans.push((scan_time.rt, mz.clone(), intensity.clone()));
+    }
+
+    let all_times: Vec<f64> = scans.iter().map(|s| s.0).collect();
+    Ok(Some((kind, all_times, scans)))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_tile(
+    tile: &[usize],
+    slots: &[ClusterSlot],
+    sample_idx: usize,
+    all_times: &[f64],
+    scans: &[(f64, Vec<f64>, Vec<f64>)],
+    eic_options: EicOptions,
+    peak_options: &Option<FindPeaksOptions>,
+    fill_window: f64,
+    kind: SpectrumKind,
+) -> Vec<(usize, Resolved)> {
+    let tile_center_mz = slots[tile[0]].bounds.target_mz;
+    let tile_tolerance = mz_tolerance_for(tile_center_mz, eic_options);
+
+    let tile_rt_min = tile
+        .iter()
+        .map(|&ci| sample_rt_from(&slots[ci], sample_idx, fill_window))
+        .fold(f64::INFINITY, f64::min);
+    let tile_rt_max = tile
+        .iter()
+        .map(|&ci| sample_rt_to(&slots[ci], sample_idx, fill_window))
+        .fold(f64::NEG_INFINITY, f64::max);
+
+    let start = lower_bound(all_times, tile_rt_min);
+    let end = upper_bound(all_times, tile_rt_max);
+    if start >= end {
+        return Vec::new();
+    }
+
+    let tile_mz_lo = tile_center_mz - tile_tolerance;
+    let tile_mz_hi = tile
+        .iter()
+        .map(|&ci| slots[ci].bounds.target_mz)
+        .fold(f64::NEG_INFINITY, f64::max)
+        + tile_tolerance;
+
+    let tile_scans: Vec<(f64, Vec<f64>, Vec<f64>)> = scans[start..end]
+        .iter()
+        .map(|(rt, mz, intensity)| {
+            let lo = lower_bound(mz, tile_mz_lo);
+            let hi = upper_bound(mz, tile_mz_hi).min(mz.len());
+            (*rt, mz[lo..hi].to_vec(), intensity[lo..hi].to_vec())
+        })
+        .collect();
+
+    tile.iter()
+        .map(|&ci| {
+            let bounds = &slots[ci].bounds;
+            let tolerance = mz_tolerance_for(bounds.target_mz, eic_options);
+            let mz_lo = bounds.target_mz - tolerance;
+            let mz_hi = bounds.target_mz + tolerance;
+            let existing = slots[ci].features[sample_idx].as_ref();
+            let resolved = resolve_cluster(
+                &tile_scans,
+                existing,
+                bounds,
+                mz_lo,
+                mz_hi,
+                eic_options.ppm_tolerance,
+                peak_options.clone(),
+                kind,
+            );
+            (ci, resolved)
+        })
+        .collect()
 }
 
 fn sample_rt_from(slot: &ClusterSlot, sample_idx: usize, fill_window: f64) -> f64 {
@@ -637,7 +708,7 @@ pub(crate) fn resolve_cluster(
     mz_hi: f64,
     ppm: f64,
     peak_options: Option<FindPeaksOptions>,
-    estimator: &dyn MzEstimator,
+    kind: SpectrumKind,
 ) -> Resolved {
     let (from, to, filled) = match existing {
         Some(feature) => (feature.from, feature.to, None),
@@ -654,12 +725,15 @@ pub(crate) fn resolve_cluster(
     };
 
     let window = crop_scans(tile_scans, from, to);
-    let apex = estimator.per_sample(window, mz_lo, mz_hi);
-    let centroids = apex_scan_centroids(window, mz_lo, mz_hi);
+    let mass_points = find_apex_masses(window, mz_lo, mz_hi, kind);
+    let apex = mass_points
+        .iter()
+        .copied()
+        .max_by(|a, b| a.intensity.partial_cmp(&b.intensity).unwrap_or(Ordering::Equal));
     let peak_feature = existing.or(filled.as_ref());
 
-    let masses: Vec<MassPeak> = if centroids.len() <= 1 {
-        match (centroids.first(), peak_feature) {
+    let masses: Vec<MassPeak> = if mass_points.len() <= 1 {
+        match (mass_points.first(), peak_feature) {
             (Some(centroid), Some(feature)) => vec![MassPeak {
                 mz: centroid.mz,
                 intensity: feature.intensity,
@@ -669,7 +743,7 @@ pub(crate) fn resolve_cluster(
             _ => Vec::new(),
         }
     } else {
-        centroids
+        mass_points
             .iter()
             .filter_map(|centroid| {
                 let gap = same_mass_gap(centroid.mz, ppm);
@@ -711,14 +785,8 @@ fn measure_mass(
     let mut times = Vec::with_capacity(window.len());
     let mut intensities = Vec::with_capacity(window.len());
     for (rt, mz, intensity) in window {
-        let mut sum = 0.0;
-        for (m, i) in mz.iter().zip(intensity.iter()) {
-            if *m >= mz_lo && *m <= mz_hi {
-                sum += *i;
-            }
-        }
         times.push(*rt);
-        intensities.push(sum);
+        intensities.push(highest_intensity_in_window(mz, intensity, mz_lo, mz_hi));
     }
     anchor_edges(&mut intensities);
     get_peak(
@@ -735,32 +803,22 @@ fn measure_mass(
     .filter(|p| p.intensity > 0.0)
 }
 
-fn apex_scan_centroids(
+fn find_apex_masses(
     scans: &[(f64, Vec<f64>, Vec<f64>)],
     mz_lo: f64,
     mz_hi: f64,
+    kind: SpectrumKind,
 ) -> Vec<SampleMz> {
-    let mut best: Vec<SampleMz> = Vec::new();
-    let mut best_sum = 0.0;
+    let mut masses: Vec<SampleMz> = Vec::new();
+    let mut best_intensity = 0.0;
     for (_, mz, intensity) in scans {
-        let mut sum = 0.0;
-        let mut centroids: Vec<SampleMz> = Vec::new();
-        for (m, i) in mz.iter().zip(intensity.iter()) {
-            if !m.is_finite() || !i.is_finite() || *i <= 0.0 || *m < mz_lo || *m > mz_hi {
-                continue;
-            }
-            sum += *i;
-            centroids.push(SampleMz {
-                mz: *m,
-                intensity: *i,
-            });
-        }
-        if !centroids.is_empty() && (best.is_empty() || sum > best_sum) {
-            best_sum = sum;
-            best = centroids;
+        let top = highest_intensity_in_window(mz, intensity, mz_lo, mz_hi);
+        if top > best_intensity {
+            best_intensity = top;
+            masses = find_masses(mz, intensity, mz_lo, mz_hi, kind);
         }
     }
-    best
+    masses
 }
 
 fn detect_peak(
@@ -773,14 +831,8 @@ fn detect_peak(
     let mut times = Vec::with_capacity(tile_scans.len());
     let mut intensities = Vec::with_capacity(tile_scans.len());
     for (rt, mz, intensity) in tile_scans {
-        let mut sum = 0.0;
-        for (m, i) in mz.iter().zip(intensity.iter()) {
-            if *m >= mz_lo && *m <= mz_hi {
-                sum += *i;
-            }
-        }
         times.push(*rt);
-        intensities.push(sum);
+        intensities.push(highest_intensity_in_window(mz, intensity, mz_lo, mz_hi));
     }
 
     anchor_edges(&mut intensities);
@@ -1016,25 +1068,88 @@ fn build_mass_feature(
 }
 
 pub(crate) fn dedup(
-    mut results: Vec<ConsensusFeature>,
+    results: Vec<ConsensusFeature>,
     tolerance: &MzTolerance,
     rt_tol: f64,
 ) -> Vec<ConsensusFeature> {
-    results.sort_unstable_by(|a, b| {
-        b.n_samples.cmp(&a.n_samples).then_with(|| {
-            b.intensity
-                .partial_cmp(&a.intensity)
-                .unwrap_or(Ordering::Equal)
-        })
-    });
+    if results.is_empty() {
+        return results;
+    }
+
+    let mut by_mz = results;
+    let by_mz_cmp =
+        |a: &ConsensusFeature, b: &ConsensusFeature| a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal);
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    by_mz.par_sort_unstable_by(by_mz_cmp);
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    by_mz.sort_unstable_by(by_mz_cmp);
+
+    let bands = split_dedup_bands(by_mz, tolerance);
+
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    let mut kept: Vec<ConsensusFeature> = bands
+        .into_par_iter()
+        .flat_map_iter(|band| dedup_band(band, tolerance, rt_tol))
+        .collect();
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    let mut kept: Vec<ConsensusFeature> = bands
+        .into_iter()
+        .flat_map(|band| dedup_band(band, tolerance, rt_tol))
+        .collect();
+
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    kept.par_sort_unstable_by(dedup_priority);
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    kept.sort_unstable_by(dedup_priority);
+    kept
+}
+
+fn dedup_priority(a: &ConsensusFeature, b: &ConsensusFeature) -> Ordering {
+    b.n_samples.cmp(&a.n_samples).then_with(|| {
+        b.intensity
+            .partial_cmp(&a.intensity)
+            .unwrap_or(Ordering::Equal)
+    })
+}
+
+fn split_dedup_bands(
+    sorted_by_mz: Vec<ConsensusFeature>,
+    tolerance: &MzTolerance,
+) -> Vec<Vec<ConsensusFeature>> {
+    let mut bands: Vec<Vec<ConsensusFeature>> = Vec::new();
+    let mut current: Vec<ConsensusFeature> = Vec::new();
+    for feature in sorted_by_mz {
+        if let Some(previous) = current.last() {
+            let independent = !tolerance.are_close_to_ref(feature.mz, previous.mz)
+                && !tolerance.are_close_to_ref(previous.mz, feature.mz);
+            if independent {
+                bands.push(std::mem::take(&mut current));
+            }
+        }
+        current.push(feature);
+    }
+    if !current.is_empty() {
+        bands.push(current);
+    }
+    bands
+}
+
+fn dedup_band(
+    mut band: Vec<ConsensusFeature>,
+    tolerance: &MzTolerance,
+    rt_tol: f64,
+) -> Vec<ConsensusFeature> {
+    band.sort_unstable_by(dedup_priority);
     let mut kept: Vec<ConsensusFeature> = Vec::new();
-    'outer: for f in results {
-        for k in &kept {
-            if tolerance.are_close_to_ref(f.mz, k.mz) && (f.rt - k.rt).abs() <= rt_tol {
+    'outer: for feature in band {
+        for existing in &kept {
+            if tolerance.are_close_to_ref(feature.mz, existing.mz)
+                && (feature.rt - existing.rt).abs() <= rt_tol
+            {
                 continue 'outer;
             }
         }
-        kept.push(f);
+        kept.push(feature);
     }
     kept
 }

@@ -6,7 +6,7 @@ mod tests {
     use ionic::{ion::encode, mzml::structs::*};
 
     use crate::utilities::{
-        calculate_eic::{CentroidScan, EicOptions, SpectrumSummary},
+        calculate_eic::{CentroidScan, EicOptions, SpectrumKind, SpectrumSummary},
         find_features::{Feature, FindFeaturesOptions, MzScanGrid, MzTolerance},
         get_features::{
             AlignmentOptions, ConsensusFeature, FeatureClusterer, MzRtCluster, SearchBounds,
@@ -15,7 +15,7 @@ mod tests {
             weighted_centroid_mz,
         },
         math::median,
-        mz_estimator::{MedianMzApex, MzEstimatorKind},
+        mz_estimator::MzEstimatorKind,
         structs::FromTo,
     };
 
@@ -822,6 +822,48 @@ mod tests {
         }
     }
 
+    fn build_mzml_profile_peak(
+        center_mz: f64,
+        mz_step: f64,
+        n_mz: usize,
+        mz_sigma: f64,
+        peak_rt: f64,
+        amp: f64,
+        rt_min: f64,
+        rt_max: f64,
+        n_scans: usize,
+    ) -> MzML {
+        let rt_sigma = 0.05;
+        let half = (n_mz / 2) as f64;
+        let mut spectra = Vec::with_capacity(n_scans);
+        for i in 0..n_scans {
+            let rt = rt_min + (rt_max - rt_min) * i as f64 / (n_scans - 1) as f64;
+            let rt_height = gaussian(rt, peak_rt, rt_sigma, amp).max(0.0);
+            let mut mzs = Vec::with_capacity(n_mz);
+            let mut intensities = Vec::with_capacity(n_mz);
+            for k in 0..n_mz {
+                let m = center_mz + (k as f64 - half) * mz_step;
+                mzs.push(m);
+                intensities.push(rt_height * gaussian(m, center_mz, mz_sigma, 1.0));
+            }
+            let mut spectrum = make_spectrum(i, rt, mzs, intensities);
+            spectrum.cv_params.push(cv("MS:1000128", None));
+            spectra.push(spectrum);
+        }
+        MzML {
+            run: Run {
+                id: "test".to_string(),
+                spectrum_list: Some(SpectrumList {
+                    count: Some(spectra.len()),
+                    spectra,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     fn build_mzml_peak_and_flat(
         peak_mz: f64,
         flat_mz: f64,
@@ -933,7 +975,7 @@ mod tests {
             100.01,
             20.0,
             None,
-            &MedianMzApex,
+            SpectrumKind::Centroid,
         );
         assert!(resolved.feature.is_none());
         let apex = resolved.apex.expect("apex measured");
@@ -958,7 +1000,7 @@ mod tests {
             101.0,
             20.0,
             None,
-            &MedianMzApex,
+            SpectrumKind::Centroid,
         );
         let apex = resolved.apex.expect("apex measured");
         assert!((apex.mz - 100.002).abs() < 1e-9);
@@ -973,7 +1015,7 @@ mod tests {
         ];
         let bounds = bounds_at(100.0, 5.0, 4.85, 5.15);
         let resolved =
-            resolve_cluster(&scans, None, &bounds, 99.99, 100.01, 20.0, None, &MedianMzApex);
+            resolve_cluster(&scans, None, &bounds, 99.99, 100.01, 20.0, None, SpectrumKind::Centroid);
         assert!(resolved.feature.is_none());
         assert!(resolved.apex.is_none());
     }
@@ -989,7 +1031,7 @@ mod tests {
             .collect();
         let bounds = bounds_at(peak_mz, 5.0, 4.7, 5.3);
         let resolved =
-            resolve_cluster(&scans, None, &bounds, 299.99, 300.01, 20.0, None, &MedianMzApex);
+            resolve_cluster(&scans, None, &bounds, 299.99, 300.01, 20.0, None, SpectrumKind::Centroid);
 
         let feature = resolved
             .feature
@@ -1607,6 +1649,91 @@ mod tests {
             near, 1,
             "masses closer than the cutoff must stay one feature, got {:?}",
             features.iter().map(|f| f.mz).collect::<Vec<_>>()
+        );
+    }
+
+    // Regression: a single peak in PROFILE mode (one mass sampled at several
+    // evenly-spaced m/z points, like TripleTOF data) must resolve to ONE mass,
+    // not one per profile point. Currently `apex_scan_centroids` returns every
+    // raw profile point, so resolve_cluster takes the multi-mass path and shatters
+    // the peak. See mtbls733 m/z 325.177 @ rt 6.
+    #[test]
+    fn test_single_profile_peak_is_one_mass() {
+        let center = 325.177;
+        let step = 0.00253;
+        let n_mz = 13;
+        let mz_sigma = 0.005;
+        let scans: Vec<(f64, Vec<f64>, Vec<f64>)> = (0..41)
+            .map(|i| {
+                let rt = 4.0 + 2.0 * i as f64 / 40.0;
+                let rt_height = gaussian(rt, 5.0, 0.1, 100_000.0);
+                let mut mzs = Vec::with_capacity(n_mz);
+                let mut intensities = Vec::with_capacity(n_mz);
+                for k in 0..n_mz {
+                    let m = center + (k as f64 - (n_mz / 2) as f64) * step;
+                    mzs.push(m);
+                    intensities.push(rt_height * gaussian(m, center, mz_sigma, 1.0));
+                }
+                (rt, mzs, intensities)
+            })
+            .collect();
+        let bounds = bounds_at(center, 5.0, 4.85, 5.15);
+        let resolved = resolve_cluster(
+            &scans,
+            None,
+            &bounds,
+            center - 0.0065,
+            center + 0.0065,
+            20.0,
+            None,
+            SpectrumKind::Profile,
+        );
+        let masses = resolved.masses.expect("a real peak should measure a mass");
+        let mzs: Vec<f64> = masses.iter().map(|m| m.mz).collect();
+        assert_eq!(
+            masses.len(),
+            1,
+            "one profile peak is a single mass, but it split into {} at m/z {:?}",
+            masses.len(),
+            mzs
+        );
+    }
+
+    // Same defect end to end: one profile peak across several samples must be a
+    // single consensus feature present in all of them, not a scatter of fragments.
+    #[test]
+    fn test_single_profile_peak_yields_one_feature() {
+        let center = 325.177;
+        let peak_rt = 5.0;
+        let samples: Vec<Vec<u8>> = (0..6)
+            .map(|_| {
+                to_ion_bytes(&build_mzml_profile_peak(
+                    center, 0.00253, 13, 0.005, peak_rt, 100_000.0, 4.0, 6.0, 60,
+                ))
+            })
+            .collect();
+        let dir = write_ion_dir("profile_single_mass", &samples);
+        let features = get_features(
+            dir.to_str().unwrap(),
+            FromTo { from: 3.0, to: 7.0 },
+            feature_cfg_for_mz(center),
+            alignment_cfg(),
+            1,
+        )
+        .expect("get_features should succeed");
+        let _ = fs::remove_dir_all(&dir);
+
+        let near: Vec<_> = features
+            .iter()
+            .filter(|f| (f.mz - center).abs() < 0.01 && (f.rt - peak_rt).abs() < 0.2)
+            .collect();
+        assert_eq!(
+            near.len(),
+            1,
+            "one profile peak must be one feature, got {:?}",
+            near.iter()
+                .map(|f| (f.mz, f.rt, f.frequency))
+                .collect::<Vec<_>>()
         );
     }
 

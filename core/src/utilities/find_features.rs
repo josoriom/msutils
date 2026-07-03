@@ -12,10 +12,11 @@ use std::{
 
 use crate::utilities::{
     calculate_eic::{
-        CentroidScan, EicOptions, EicReader, FastError, MS1_LEVEL, get_scan_times, lower_bound,
-        mz_tolerance_for, read_mz_window, summed_intensity_in_window, upper_bound,
-        with_eic_apex_intensity,
+        CentroidScan, EicOptions, EicReader, FastError, MS1_LEVEL, SpectrumKind, get_scan_times,
+        get_spectrum_kind, highest_intensity_in_window, lower_bound, mz_tolerance_for,
+        read_mz_window, upper_bound, with_eic_apex_intensity,
     },
+    find_masses::find_masses,
     find_peaks::{FindPeaksOptions, find_peaks},
     parallel::run_with_cores,
     structs::{DataXY, FromTo},
@@ -232,6 +233,7 @@ pub fn find_features(
 
     let time: Vec<f64> = scan_times.iter().map(|scan| scan.rt).collect();
 
+    let kind = get_spectrum_kind(reader);
     let scans = read_grid_scans(reader, &scan_times, &grid, &opts)?;
 
     run_with_cores(cores, || {
@@ -250,7 +252,7 @@ pub fn find_features(
             return Err(FeatureError::TooManyCandidateMasses(masses.len()));
         }
 
-        let features = extract_features(&scans, &masses, &time, &opts);
+        let features = extract_features(&scans, &masses, &time, &opts, kind);
         if features.is_empty() {
             return Err(FeatureError::NoCandidateMasses);
         }
@@ -316,7 +318,7 @@ fn eic_row_for_mass(scans: &Scans, target_mz: f64, options: EicOptions) -> Vec<f
     let mz_high = target_mz + tolerance;
     scans
         .iter()
-        .map(|(mz, intensity)| summed_intensity_in_window(mz, intensity, mz_low, mz_high))
+        .map(|(mz, intensity)| highest_intensity_in_window(mz, intensity, mz_low, mz_high))
         .collect()
 }
 
@@ -420,6 +422,7 @@ fn extract_features(
     masses: &[f64],
     time: &[f64],
     opts: &FindFeaturesOptions,
+    kind: SpectrumKind,
 ) -> Vec<Feature> {
     let min_width = opts
         .peak_options
@@ -440,15 +443,15 @@ fn extract_features(
             .filter(|peak| min_width == 0 || peak.n_points >= min_width)
             .map(|peak| {
                 let peak = with_eic_apex_intensity(&data.x, &data.y, peak);
-                let measured_mz = weighted_mz_in_window(
+                let measured_mz = peak_apex_mz(
                     scans,
                     time,
-                    center_mz,
                     peak.from,
                     peak.to,
+                    center_mz,
                     opts.final_eic_options,
-                )
-                .unwrap_or(center_mz);
+                    kind,
+                );
                 Feature {
                     mz: measured_mz,
                     rt: peak.rt,
@@ -496,33 +499,45 @@ fn recenter_mass(scans: &Scans, target_mz: f64, options: EicOptions) -> f64 {
     }
 }
 
-fn weighted_mz_in_window(
+fn peak_apex_mz(
     scans: &Scans,
     time: &[f64],
-    target_mz: f64,
     rt_from: f64,
     rt_to: f64,
+    center_mz: f64,
     options: EicOptions,
-) -> Option<f64> {
-    let tolerance = mz_tolerance_for(target_mz, options);
-    let lo = target_mz - tolerance;
-    let hi = target_mz + tolerance;
+    kind: SpectrumKind,
+) -> f64 {
+    let tolerance = mz_tolerance_for(center_mz, options);
+    let mz_lo = center_mz - tolerance;
+    let mz_hi = center_mz + tolerance;
 
-    let mut weighted = 0.0f64;
-    let mut total = 0.0f64;
-    for ((mz, intensity), &rt) in scans.iter().zip(time.iter()) {
+    let mut apex_scan: Option<&(Vec<f64>, Vec<f64>)> = None;
+    let mut best_intensity = 0.0;
+    for (scan, &rt) in scans.iter().zip(time.iter()) {
         if rt < rt_from || rt > rt_to {
             continue;
         }
-        let start = lower_bound(mz, lo);
-        let end = upper_bound(mz, hi);
-        for k in start..end {
-            weighted += mz[k] * intensity[k];
-            total += intensity[k];
+        let top = highest_intensity_in_window(&scan.0, &scan.1, mz_lo, mz_hi);
+        if top > best_intensity {
+            best_intensity = top;
+            apex_scan = Some(scan);
         }
     }
 
-    (total > 0.0).then(|| weighted / total)
+    let Some(scan) = apex_scan else {
+        return center_mz;
+    };
+    find_masses(&scan.0, &scan.1, mz_lo, mz_hi, kind)
+        .into_iter()
+        .min_by(|a, b| {
+            (a.mz - center_mz)
+                .abs()
+                .partial_cmp(&(b.mz - center_mz).abs())
+                .unwrap_or(Ordering::Equal)
+        })
+        .map(|mass| mass.mz)
+        .unwrap_or(center_mz)
 }
 
 fn build_coarse_opts(config: &FindFeaturesOptions) -> FindPeaksOptions {

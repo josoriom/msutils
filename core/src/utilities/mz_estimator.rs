@@ -10,55 +10,12 @@ pub struct SampleMz {
 }
 
 pub trait MzEstimator {
-    fn per_sample(
-        &self,
-        scans: &[(f64, Vec<f64>, Vec<f64>)],
-        mz_lo: f64,
-        mz_hi: f64,
-    ) -> Option<SampleMz>;
-
     fn combine(&self, values: &[SampleMz], tolerance: &MzTolerance) -> Option<f64>;
 }
 
 pub struct MedianMzApex;
 
 impl MzEstimator for MedianMzApex {
-    fn per_sample(
-        &self,
-        scans: &[(f64, Vec<f64>, Vec<f64>)],
-        mz_lo: f64,
-        mz_hi: f64,
-    ) -> Option<SampleMz> {
-        let mut apex: Option<SampleMz> = None;
-        let mut best_sum = 0.0;
-        for (_, mz, intensity) in scans {
-            let mut summed = 0.0;
-            let mut highest: Option<SampleMz> = None;
-            for (m, i) in mz.iter().zip(intensity.iter()) {
-                if !m.is_finite() || !i.is_finite() {
-                    continue;
-                }
-                if *m < mz_lo || *m > mz_hi {
-                    continue;
-                }
-                summed += *i;
-                if *i > 0.0 && highest.is_none_or(|h| *i > h.intensity) {
-                    highest = Some(SampleMz {
-                        mz: *m,
-                        intensity: *i,
-                    });
-                }
-            }
-            if let Some(highest) = highest
-                && (apex.is_none() || summed > best_sum)
-            {
-                best_sum = summed;
-                apex = Some(highest);
-            }
-        }
-        apex
-    }
-
     fn combine(&self, values: &[SampleMz], tolerance: &MzTolerance) -> Option<f64> {
         let kept = keep_near_anchor(values, tolerance);
         if kept.is_empty() {
@@ -72,34 +29,6 @@ impl MzEstimator for MedianMzApex {
 pub struct WeightedIntensityMedian;
 
 impl MzEstimator for WeightedIntensityMedian {
-    fn per_sample(
-        &self,
-        scans: &[(f64, Vec<f64>, Vec<f64>)],
-        mz_lo: f64,
-        mz_hi: f64,
-    ) -> Option<SampleMz> {
-        let mut points: Vec<SampleMz> = Vec::new();
-        for (_, mz, intensity) in scans {
-            for (m, i) in mz.iter().zip(intensity.iter()) {
-                if !m.is_finite() || !i.is_finite() {
-                    continue;
-                }
-                if *m < mz_lo || *m > mz_hi {
-                    continue;
-                }
-                points.push(SampleMz {
-                    mz: *m,
-                    intensity: *i,
-                });
-            }
-        }
-        let total: f64 = points.iter().map(|p| p.intensity).sum();
-        weighted_median(&points).map(|mz| SampleMz {
-            mz,
-            intensity: total,
-        })
-    }
-
     fn combine(&self, values: &[SampleMz], tolerance: &MzTolerance) -> Option<f64> {
         let kept = keep_near_anchor(values, tolerance);
         weighted_median(&kept)

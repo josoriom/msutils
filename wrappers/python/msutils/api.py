@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import math
+import os
 from ctypes import POINTER, c_double, c_float, c_int32, c_size_t, c_uint8, c_uint32
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -158,23 +159,39 @@ def parse_mzml(data: bytes) -> SampleFile:
     return SampleFile(ptr, abi)
 
 
-def parse_ion(data: bytes, max_cache_size: int = 0) -> SampleFile:
-    """Load an ion file.
-
-    Args:
-        data: Raw bytes from one ion file.
-        max_cache_size: Cache size in bytes. 0 sets no limit. Larger valuesspeed up repeated reads at the cost of RAM (default 0).
-
-    Returns: A SampleFile for use in other msutils functions.
-    """
-    abi = _get_abi()
+def parse_ion(source, max_cache_size: int = 0) -> SampleFile:
+    """Load an ion file from a path (read lazily from disk) or from raw bytes."""
+    if isinstance(source, (str, os.PathLike)):
+        return parse_ion_path(source, max_cache_size)
+    if not isinstance(source, (bytes, bytearray, memoryview)):
+        raise TypeError("parse_ion: source must be a file path or ion bytes")
     if not isinstance(max_cache_size, int) or max_cache_size < 0:
         raise ValueError("parse_ion: max_cache_size must be a non-negative integer")
-    arr = (c_uint8 * len(data)).from_buffer_copy(data)
+    abi = _get_abi()
+    arr = (c_uint8 * len(source)).from_buffer_copy(source)
     ptr = ctypes.c_void_p()
     _check("parse_bin", abi.parse_bin(
         ctypes.cast(arr, POINTER(c_uint8)),
-        c_size_t(len(data)),
+        c_size_t(len(source)),
+        c_size_t(max_cache_size),
+        ctypes.byref(ptr),
+    ))
+    return SampleFile(ptr, abi)
+
+
+def parse_ion_path(path, max_cache_size: int = 0) -> SampleFile:
+    """Load an ion file from a path, reading only what it needs from disk."""
+    if not isinstance(max_cache_size, int) or max_cache_size < 0:
+        raise ValueError("parse_ion_path: max_cache_size must be a non-negative integer")
+    file_path = os.fspath(path)
+    if not file_path:
+        raise ValueError("parse_ion_path: path must be a non-empty string")
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"parse_ion_path: no file at {file_path}")
+    abi = _get_abi()
+    ptr = ctypes.c_void_p()
+    _check("parse_ion_path", abi.parse_ion_path(
+        os.fsencode(file_path),
         c_size_t(max_cache_size),
         ctypes.byref(ptr),
     ))

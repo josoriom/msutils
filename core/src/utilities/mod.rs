@@ -10,6 +10,8 @@ pub mod parallel;
 pub mod find_features;
 pub use find_features::find_features;
 
+pub mod find_masses;
+
 pub mod find_noise_level;
 pub use find_noise_level::{find_noise_level, find_noise_level_san_plot};
 

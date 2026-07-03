@@ -410,11 +410,22 @@ find_features <- function(
   df
 }
 
-parse_ion <- function(bin, max_cache_size = 0) {
-  if (!is.raw(bin)) stop("`bin` must be a raw vector (ion bytes)")
+parse_ion <- function(input, max_cache_size = 0) {
+  if (is.character(input)) return(parse_ion_path(input, max_cache_size))
+  if (!is.raw(input)) stop("`input` must be a file path or a raw vector of ion bytes")
   if (!is.numeric(max_cache_size) || length(max_cache_size) != 1 || is.na(max_cache_size) || max_cache_size < 0)
     stop("`max_cache_size` must be a single non-negative number")
-  .Call("C_parse_ion", bin, as.numeric(max_cache_size), PACKAGE = "msutils")
+  .Call("C_parse_ion", input, as.numeric(max_cache_size), PACKAGE = "msutils")
+}
+
+parse_ion_path <- function(path, max_cache_size = 0) {
+  if (!is.character(path) || length(path) != 1 || is.na(path) || nchar(path) == 0)
+    stop("`path` must be a single non-empty string")
+  full_path <- path.expand(path)
+  if (!file.exists(full_path)) stop("`path` does not point to an existing file: ", path)
+  if (!is.numeric(max_cache_size) || length(max_cache_size) != 1 || is.na(max_cache_size) || max_cache_size < 0)
+    stop("`max_cache_size` must be a single non-negative number")
+  .Call("C_parse_ion_path", full_path, as.numeric(max_cache_size), PACKAGE = "msutils")
 }
 
 parse_ion_url <- function(url, max_cache_size = 0) {

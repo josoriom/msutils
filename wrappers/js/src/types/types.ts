@@ -14,6 +14,7 @@ export type PeakOptions = Partial<{
   minSnr: number;
   minR2: number;
   shape: 'gaussian' | 'emg' | number;
+  kernelSize: number;
 }>;
 
 export type BaselineOptions = Partial<{

@@ -74,6 +74,7 @@ class _ABI:
             [POINTER(c_uint8), c_size_t, POINTER(c_void_p)], c_int32),
         "parse_bin": ([POINTER(c_uint8), c_size_t, c_size_t, POINTER(c_void_p)], c_int32),
         "parse_ion_url": ([ctypes.c_char_p, c_size_t, POINTER(c_void_p)], c_int32),
+        "parse_ion_path": ([ctypes.c_char_p, c_size_t, POINTER(c_void_p)], c_int32),
         "free_mzml": ([c_void_p], None),
         "free_": ([POINTER(c_uint8), c_size_t], None),
         "bin_to_json": ([c_void_p, POINTER(_Buf)], c_int32),

@@ -423,9 +423,12 @@ export async function getIonImage(
   assertFile(file, "getIonImage");
   const tolerance = options.tolerance ?? 0.125;
   const level = options.level ?? 1;
-  if (!Number.isFinite(mz)) throw new RangeError("getIonImage: mz must be finite");
+  if (!Number.isFinite(mz))
+    throw new RangeError("getIonImage: mz must be finite");
   if (!Number.isFinite(tolerance) || tolerance < 0)
-    throw new RangeError("getIonImage: tolerance must be a non-negative number");
+    throw new RangeError(
+      "getIonImage: tolerance must be a non-negative number",
+    );
   assertLevel(level, "getIonImage");
   return (await file._backend.getIonImage(
     file._handle!,

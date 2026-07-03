@@ -62,6 +62,10 @@ use utilities::{
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use utilities::get_features::{AlignmentOptions, get_features as get_features_rs};
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use crate::utilities::parallel::run_with_cores;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::prelude::*;
 use utilities::mz_estimator::MzEstimatorKind;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
@@ -1549,13 +1553,16 @@ pub unsafe extern "C" fn get_features(
         )
         .map_err(|_| ERR_FAST_PATH)?;
 
-        write_buf(
-            out,
-            serde_json::to_string(&feats)
-                .map_err(|_| ERR_PARSE)?
-                .into_bytes()
-                .into_boxed_slice(),
-        );
+        let core_count = if cores > 0 { cores as usize } else { 1 };
+        let json = run_with_cores(core_count, || {
+            feats
+                .par_iter()
+                .map(serde_json::to_string)
+                .collect::<Result<Vec<_>, _>>()
+                .map(|parts| format!("[{}]", parts.join(",")))
+        })
+        .map_err(|_| ERR_PARSE)?;
+        write_buf(out, json.into_bytes().into_boxed_slice());
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -1981,6 +1988,7 @@ fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ionic::encoder::write_mzml_to_ion;
     use ionic::mzml::structs::{
         BinaryDataArray, BinaryDataArrayList, CvParam, NumericArray, NumericType, Run, Scan,
         ScanList, Spectrum, SpectrumList,
@@ -2161,8 +2169,8 @@ mod tests {
         }
     }
 
-    fn current_a3_ion_bytes() -> Vec<u8> {
-        let mzml = MzML {
+    fn sample_mzml() -> MzML {
+        MzML {
             run: Run {
                 id: "test".to_string(),
                 spectrum_list: Some(SpectrumList {
@@ -2173,28 +2181,36 @@ mod tests {
                 ..Default::default()
             },
             ..Default::default()
-        };
+        }
+    }
 
+    fn build_ion(mz_window: f64, block_size: usize) -> Vec<u8> {
+        let options = WriteOptions {
+            compression_level: 0,
+            force_f32: false,
+            block_size,
+            parallel: true,
+            section_storage: SectionStorage::Memory,
+            mz_window,
+        };
         let mut bytes = Vec::new();
-        encode(&mzml, 0, false, &mut bytes).expect("ion encode should succeed");
+        write_mzml_to_ion(&sample_mzml(), options, &mut bytes).expect("ion encode should succeed");
         bytes
     }
 
-    fn open_current_a3_ion() -> *mut ParsedFile {
-        let bytes = current_a3_ion_bytes();
+    fn open_ion(bytes: Vec<u8>) -> *mut ParsedFile {
         let bytes_arc = Arc::from(bytes.into_boxed_slice());
         let ion = IonReader::open_bytes(bytes_arc, ReadOptions::default())
             .expect("IonReader::open_bytes failed");
         Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
     }
 
-    fn open_old_ion_without_a3() -> *mut ParsedFile {
-        let mut bytes = current_a3_ion_bytes();
-        const HEADER_LEN_SPEC_SEGMENT_BOUNDS_OFFSET: usize = 56;
-        bytes[HEADER_LEN_SPEC_SEGMENT_BOUNDS_OFFSET..HEADER_LEN_SPEC_SEGMENT_BOUNDS_OFFSET + 8].fill(0);
-        let bytes_arc = Arc::from(bytes.into_boxed_slice());
-        let ion = IonReader::open_bytes(bytes_arc, ReadOptions::default()).expect("open no-a3 ion failed");
-        Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
+    fn windowed_ion_bytes() -> Vec<u8> {
+        build_ion(DEFAULT_MZ_WINDOW, ION_BLOCK_SIZE_BYTES)
+    }
+
+    fn open_windowed_ion() -> *mut ParsedFile {
+        open_ion(windowed_ion_bytes())
     }
 
     #[test]
@@ -2274,7 +2290,7 @@ mod tests {
 
     #[test]
     fn plan_eic_rejects_invalid_target_mz() {
-        let handle = open_current_a3_ion();
+        let handle = open_windowed_ion();
         let out = new_buf_out();
         let code = unsafe { plan_eic(handle, -1.0, 0.0, 10.0, 20.0, 0.005, out) };
         assert_eq!(code, ERR_INVALID_ARGS);
@@ -2284,7 +2300,7 @@ mod tests {
 
     #[test]
     fn plan_eic_rejects_zero_tolerance() {
-        let handle = open_current_a3_ion();
+        let handle = open_windowed_ion();
         let out = new_buf_out();
         let code = unsafe { plan_eic(handle, 500.0, 0.0, 10.0, 0.0, 0.0, out) };
         assert_eq!(code, ERR_INVALID_ARGS);
@@ -2293,8 +2309,8 @@ mod tests {
     }
 
     #[test]
-    fn plan_eic_returns_ranges_for_current_a3_ion() {
-        let handle = open_current_a3_ion();
+    fn plan_eic_returns_ranges_for_windowed_ion() {
+        let handle = open_windowed_ion();
         let out = new_buf_out();
 
         let code = unsafe { plan_eic(handle, 500.0, 0.0, 10.0, 20.0, 0.005, out) };
@@ -2313,13 +2329,20 @@ mod tests {
     }
 
     #[test]
-    fn plan_eic_requires_spectrum_bounds_for_ion() {
-        let handle = open_old_ion_without_a3();
+    fn plan_eic_works_for_wide_window_large_block_ion() {
+        let handle = open_ion(build_ion(250.0, 8 * 1024 * 1024));
         let out = new_buf_out();
 
-        let code = unsafe { plan_eic(handle, 500.0, 0.0, 9999.0, 20.0, 0.005, out) };
+        let code = unsafe { plan_eic(handle, 500.0, 0.0, 10.0, 20.0, 0.005, out) };
 
-        assert_eq!(code, ERR_FAST_PATH);
+        assert_eq!(code, OK);
+
+        let bytes = unsafe { slice::from_raw_parts((*out).ptr, (*out).len).to_vec() };
+        assert_eq!(bytes.len() % 16, 0);
+
+        let ranges = decode_byte_ranges(&bytes);
+        assert!(!ranges.is_empty());
+        assert!(ranges.iter().all(|(_, length)| *length > 0));
 
         drop_buf_out(out);
         unsafe { free_mzml(handle) };
@@ -2399,7 +2422,7 @@ mod tests {
         }
     }
 
-    fn open_local_a3_handle(bytes: &[u8]) -> *mut ParsedFile {
+    fn open_local_windowed_handle(bytes: &[u8]) -> *mut ParsedFile {
         let arc: Arc<[u8]> = Arc::from(bytes.to_vec().into_boxed_slice());
         let ion = IonReader::open_bytes(arc, ReadOptions::default()).expect("open bytes failed");
         Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
@@ -2407,7 +2430,7 @@ mod tests {
 
     #[test]
     fn remote_eic_over_http_matches_local() {
-        let bytes = current_a3_ion_bytes();
+        let bytes = windowed_ion_bytes();
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback failed");
         let port = listener.local_addr().unwrap().port();
@@ -2420,7 +2443,7 @@ mod tests {
         assert_eq!(code, OK);
         assert!(!remote_handle.is_null());
 
-        let local_handle = open_local_a3_handle(&bytes);
+        let local_handle = open_local_windowed_handle(&bytes);
 
         let remote = run_eic_at_500(remote_handle);
         let local = run_eic_at_500(local_handle);
@@ -2464,7 +2487,7 @@ mod tests {
 
     #[test]
     fn remote_peaks_over_http_match_local_for_spread_rois() {
-        let bytes = current_a3_ion_bytes();
+        let bytes = windowed_ion_bytes();
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback failed");
         let port = listener.local_addr().unwrap().port();
@@ -2476,7 +2499,7 @@ mod tests {
         let code = unsafe { parse_ion_url(url.as_ptr(), 0, &mut remote_handle) };
         assert_eq!(code, OK);
 
-        let local_handle = open_local_a3_handle(&bytes);
+        let local_handle = open_local_windowed_handle(&bytes);
 
         let remote = run_spread_peaks(remote_handle);
         let local = run_spread_peaks(local_handle);
@@ -2537,7 +2560,7 @@ mod tests {
 
     #[test]
     fn eic_compute_reads_are_within_plan() {
-        let bytes = current_a3_ion_bytes();
+        let bytes = windowed_ion_bytes();
         let file_len = bytes.len() as u64;
         let reader = std::sync::Arc::new(RecordingReader::new(bytes));
         let read_source = reader.clone();
@@ -2584,7 +2607,7 @@ mod tests {
 
     #[test]
     fn open_remote_fails_cleanly_when_range_read_fails() {
-        let reader = std::sync::Arc::new(RecordingReader::new(current_a3_ion_bytes()));
+        let reader = std::sync::Arc::new(RecordingReader::new(windowed_ion_bytes()));
         reader.set_fail(true);
         let read_source = reader.clone();
         let result = ionic::ion::IonReader::open_remote(
@@ -2596,7 +2619,7 @@ mod tests {
 
     #[test]
     fn eic_compute_errors_cleanly_when_data_read_fails() {
-        let reader = std::sync::Arc::new(RecordingReader::new(current_a3_ion_bytes()));
+        let reader = std::sync::Arc::new(RecordingReader::new(windowed_ion_bytes()));
         let read_source = reader.clone();
         let mut ion = ionic::ion::IonReader::open_remote(
             move |range| read_range(&*read_source, range),

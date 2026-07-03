@@ -18,7 +18,7 @@ strip = "symbols"
 [dependencies]
 bytemuck = "1.25.0"
 bytes = "1.5"
-ionic = { git = "https://github.com/josoriom/ionic", rev = "687e13c8a764957b2adbaa9b6d692bad090b6caf", version = "0.1.0" }
+ionic = { git = "https://github.com/josoriom/ionic", branch = "main", version = "0.1.0" }
 memmap2 = "0.9.10"
 pollster = "0.4.0"
 serde = { version = "1", features = ["derive", "rc"] }

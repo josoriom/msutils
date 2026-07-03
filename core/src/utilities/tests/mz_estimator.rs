@@ -118,10 +118,6 @@ mod tests {
         SampleMz { mz, intensity }
     }
 
-    fn scan(rt: f64, mz: Vec<f64>, intensity: Vec<f64>) -> (f64, Vec<f64>, Vec<f64>) {
-        (rt, mz, intensity)
-    }
-
     fn close(a: f64, b: f64) -> bool {
         (a - b).abs() < 1e-9
     }
@@ -210,56 +206,6 @@ mod tests {
     }
 
     #[test]
-    fn test_apex_per_sample_picks_apex_scan_most_intense_point() {
-        let scans = [
-            scan(4.9, vec![100.000, 100.004], vec![10.0, 5.0]),
-            scan(5.0, vec![100.001, 100.005], vec![80.0, 20.0]),
-            scan(5.1, vec![100.002, 100.006], vec![15.0, 7.0]),
-        ];
-        let result = MedianMzApex.per_sample(&scans, 99.99, 100.01).unwrap();
-        assert!(close(result.mz, 100.001));
-        assert!(close(result.intensity, 80.0));
-    }
-
-    #[test]
-    fn test_apex_per_sample_single_scan() {
-        let scans = [scan(5.0, vec![100.001, 100.005], vec![80.0, 20.0])];
-        let result = MedianMzApex.per_sample(&scans, 99.99, 100.01).unwrap();
-        assert!(close(result.mz, 100.001));
-    }
-
-    #[test]
-    fn test_apex_per_sample_includes_point_on_window_edge() {
-        let scans = [scan(5.0, vec![100.001, 100.005], vec![20.0, 80.0])];
-        let result = MedianMzApex.per_sample(&scans, 99.99, 100.005).unwrap();
-        assert!(close(result.mz, 100.005));
-    }
-
-    #[test]
-    fn test_apex_per_sample_no_points_in_window_is_none() {
-        let scans = [scan(5.0, vec![200.0, 201.0], vec![80.0, 20.0])];
-        assert!(MedianMzApex.per_sample(&scans, 99.99, 100.01).is_none());
-    }
-
-    #[test]
-    fn test_apex_per_sample_all_zero_intensity_is_none() {
-        let scans = [scan(5.0, vec![100.001, 100.002], vec![0.0, 0.0])];
-        assert!(MedianMzApex.per_sample(&scans, 99.99, 100.01).is_none());
-    }
-
-    #[test]
-    fn test_apex_per_sample_skips_non_finite_points() {
-        let scans = [scan(
-            5.0,
-            vec![f64::NAN, 100.002],
-            vec![999.0, 50.0],
-        )];
-        let result = MedianMzApex.per_sample(&scans, 99.99, 100.01).unwrap();
-        assert!(close(result.mz, 100.002));
-        assert!(close(result.intensity, 50.0));
-    }
-
-    #[test]
     fn test_weighted_median_non_finite_total_is_none() {
         let values = [sample(100.0, f64::INFINITY)];
         assert!(weighted_median(&values).is_none());
@@ -305,38 +251,6 @@ mod tests {
         ];
         let result = MedianMzApex.combine(&values, &tol()).unwrap();
         assert!(close(result, 100.030));
-    }
-
-    #[test]
-    fn test_weighted_per_sample_intensity_weighted_median_over_window() {
-        let scans = [
-            scan(5.0, vec![100.000, 100.004], vec![1.0, 1.0]),
-            scan(5.1, vec![100.008], vec![10.0]),
-        ];
-        let result = WeightedIntensityMedian
-            .per_sample(&scans, 99.99, 100.01)
-            .unwrap();
-        assert!(close(result.mz, 100.008));
-        assert!(close(result.intensity, 12.0));
-    }
-
-    #[test]
-    fn test_weighted_per_sample_single_point() {
-        let scans = [scan(5.0, vec![100.002], vec![5.0])];
-        let result = WeightedIntensityMedian
-            .per_sample(&scans, 99.99, 100.01)
-            .unwrap();
-        assert!(close(result.mz, 100.002));
-    }
-
-    #[test]
-    fn test_weighted_per_sample_zero_intensity_is_none() {
-        let scans = [scan(5.0, vec![100.002], vec![0.0])];
-        assert!(
-            WeightedIntensityMedian
-                .per_sample(&scans, 99.99, 100.01)
-                .is_none()
-        );
     }
 
     #[test]

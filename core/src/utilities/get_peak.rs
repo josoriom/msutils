@@ -2,6 +2,7 @@ use crate::utilities::find_peaks::{FindPeaksOptions, find_peaks};
 use crate::utilities::structs::{DataXY, Peak, Roi};
 
 const LOCAL_WINDOW_MINUTES: f64 = 2.0;
+const DEFAULT_MAX_DRIFT: f64 = 0.5;
 
 pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> Option<Peak> {
     let target = roi.rt;
@@ -19,36 +20,38 @@ pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> 
     }
 
     let peaks = find_peaks(section, options);
-    let half_width = if roi.half_width.is_finite() && roi.half_width > 0.0 {
+    let max_drift = if roi.half_width.is_finite() && roi.half_width > 0.0 {
         roi.half_width
     } else {
-        0.0
+        DEFAULT_MAX_DRIFT
     };
 
-    find_closest_peak(&peaks, target, half_width).copied()
+    pick_peak(&peaks, target, max_drift).copied()
 }
 
-fn find_closest_peak(peaks: &[Peak], target: f64, half_width: f64) -> Option<&Peak> {
-    let mut closest: Option<&Peak> = None;
+fn position_weight(peak_rt: f64, target: f64, max_drift: f64) -> f64 {
+    let drift = (peak_rt - target) / max_drift;
+    1.0 - drift * drift
+}
+
+fn pick_peak(peaks: &[Peak], target: f64, max_drift: f64) -> Option<&Peak> {
+    let mut best_peak: Option<&Peak> = None;
+    let mut best_score = 0.0;
     for peak in peaks {
-        if half_width > 0.0 && (!peak.rt.is_finite() || (peak.rt - target).abs() > half_width) {
+        if !peak.rt.is_finite() {
             continue;
         }
-        match closest {
-            None => closest = Some(peak),
-            Some(best) => {
-                let best_distance = (best.rt - target).abs();
-                let peak_distance = (peak.rt - target).abs();
-                let same_distance = (peak_distance - best_distance).abs() <= f64::EPSILON;
-                if peak_distance < best_distance
-                    || (same_distance && peak.intensity > best.intensity)
-                {
-                    closest = Some(peak);
-                }
-            }
+        let weight = position_weight(peak.rt, target, max_drift);
+        if weight <= 0.0 {
+            continue;
+        }
+        let score = peak.intensity * weight;
+        if best_peak.is_none() || score > best_score {
+            best_peak = Some(peak);
+            best_score = score;
         }
     }
-    closest
+    best_peak
 }
 
 fn crop_around(data: &DataXY, center: f64, half_width: f64) -> DataXY {

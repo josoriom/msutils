@@ -64,6 +64,7 @@ def pack_peak_options(opts: Optional[Dict[str, Any]]) -> Optional[PeakOptions]:
     options_struct._pad2                 = 0
     options_struct.min_snr               = _get_float("min_snr")
     options_struct.min_r2                = _get_float("min_r2")
+    options_struct.kernel_size           = _get_int("kernel_size")
     return options_struct
 
 
