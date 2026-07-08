@@ -143,13 +143,16 @@ mod tests {
     }
 
     #[test]
-    fn misses_isolated_peak_without_local_baseline() {
+    fn finds_isolated_peak_without_local_baseline_1() {
         let center = 28.6;
         let eic = build_eic(28.1, 29.1, 120, |rt| bell(rt, center, 0.05, 350_000.0));
         let roi = Roi {
             rt: center,
             half_width: 1.0,
         };
-        assert!(get_peak(&eic, &roi, Some(default_options())).is_none());
+        let peak = get_peak(&eic, &roi, Some(default_options()))
+            .expect("isolated peak on a flat baseline should be found");
+        assert!((peak.rt - center).abs() < 0.05);
+        assert!(peak.intensity > 100_000.0);
     }
 }

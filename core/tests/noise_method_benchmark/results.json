@@ -1,0 +1,60 @@
+{
+  "title": "Noise estimator benchmark: find_noise_level vs noise_san_plot",
+  "date": "2026-07-04",
+  "question": "Should the isolated-peak bug be fixed by switching the noise estimator to noise_san_plot instead of repairing find_noise_level?",
+  "verdict": "No. Keep find_noise_level. SanPlot gives identical recall (968/970) but returns about 1.85x more peaks (junk). The right fix is to repair the single-segment branch in find_noise_level, which recovers the isolated peaks without SanPlot's extra peaks.",
+  "how_it_was_run": "One process ran find_peaks twice on every EIC, once with NoiseMethod::FindNoiseLevel and once with NoiseMethod::SanPlot, on the exact same real data. Only the noise method differs. Code in core/examples/noise_bench.rs.",
+  "dataset": {
+    "name": "MTBLS733 TripleTOF 6600",
+    "ion_dir": "/Users/josoriom/Documents/pqc/mtbls733/tripletof6600",
+    "truth_tsv": "/Users/josoriom/Documents/pqc/mtbls733/truth-tripletof6600.tsv",
+    "samples": 8,
+    "truth_features": 970,
+    "eics_computed": 7760
+  },
+  "settings": {
+    "time_from_min": 0.4,
+    "time_to_min": 35.0,
+    "eic_ppm_tolerance": 20.0,
+    "eic_mz_tolerance": 0.005,
+    "min_intensity": 1000.0,
+    "min_peak_width_points": 5,
+    "min_snr": 3.0,
+    "min_r2": 0.0,
+    "shape": "emg",
+    "auto_noise": true,
+    "auto_baseline": true,
+    "frequency_to_keep": 1,
+    "rt_match_window_min": 0.5,
+    "note": "Same detection settings as the real TripleTOF get_features run (scripts/run_gf_full.R)."
+  },
+  "reproduce": "cargo run --manifest-path core/Cargo.toml --release --example noise_bench /Users/josoriom/Documents/pqc/mtbls733/tripletof6600 /Users/josoriom/Documents/pqc/mtbls733/truth-tripletof6600.tsv",
+  "results": {
+    "find_noise_level": { "features_found": 968, "sample_detections": 7716, "peaks_returned": 56455 },
+    "noise_san_plot":   { "features_found": 968, "sample_detections": 7724, "peaks_returned": 104646 }
+  },
+  "derived": {
+    "features_found_total": 970,
+    "recall_delta_features": 0,
+    "sample_detection_delta": 8,
+    "junk_ratio_sanplot_over_findnoise": 1.854,
+    "extra_peaks_from_sanplot": 48191
+  },
+  "isolated_cases": [
+    { "id": "TTOF0222", "mz": 464.3071, "rt": 0.72, "n_samples": 8, "find_noise_level_samples": 4, "san_plot_samples": 6 },
+    { "id": "TTOF0248", "mz": 1135.377, "rt": 0.97, "n_samples": 8, "find_noise_level_samples": 7, "san_plot_samples": 7 },
+    { "id": "TTOF0459", "mz": 168.0326, "rt": 35.89, "n_samples": 8, "find_noise_level_samples": 0, "san_plot_samples": 0, "note": "rt 35.89 is past the 35 min window cutoff for both arms; not a noise-method effect" }
+  ],
+  "why_sanplot_underperforms": "SanPlot assumes noise is symmetric around a center. Our EIC is baseline-subtracted and clamped at zero, so the lower half of that shape is gone. On a sparse window SanPlot reports a near-zero noise floor, so it finds weak isolated peaks but also lets real noise through everywhere else, which is the extra 48191 peaks.",
+  "caveats": [
+    "This is the find_peaks level (targeted EIC per truth feature). The noise method acts only here, so the full get_features numbers move with it. peaks_returned is the junk proxy: same EICs, more peaks = more false detections.",
+    "TripleTOF has only 3 isolated-peak cases, so this run mainly measures the downside (junk). The upside (recovering the 27 QE HF isolated-peak cases) is delivered by the find_noise_level single-segment fix, not by SanPlot.",
+    "TTOF0459 is missed by both because its rt 35.89 is outside the 0.4-35 min window; it is a window artifact, not a noise-method result."
+  ],
+  "related": {
+    "root_cause_report": "core/tests/get_peak_isolated_peak_bug.md",
+    "failing_tests": "core/tests/get_peak_isolated_peak.rs",
+    "failure_catalog": "core/tests/fixtures/get_peak_isolated_peak_failures.json",
+    "benchmark_code": "core/examples/noise_bench.rs"
+  }
+}

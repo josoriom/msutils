@@ -1,17 +1,18 @@
 use msutils::utilities::find_peaks::{FindPeaksOptions, PeakFilter, find_peaks};
 use msutils::utilities::get_boundaries::{BoundariesOptions, get_boundaries};
 use msutils::utilities::structs::DataXY;
-use serde::Deserialize;
-use std::path::PathBuf;
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
-#[derive(Deserialize)]
+mod helpers;
+use helpers::load_chromatograms_from;
+
 struct Feature {
     id: String,
     fc_benchmark: f64,
     samples: Vec<Sample>,
 }
 
-#[derive(Deserialize)]
 struct Sample {
     sample: String,
     peak_x: f64,
@@ -26,11 +27,50 @@ const ACCURACY_TOLERANCE: f64 = 0.20;
 const ALLOWED_GAP: usize = 4;
 const MIN_DETECTION_RATE: f64 = 0.95;
 
+fn ion_path() -> PathBuf {
+    if let Ok(path) = std::env::var("TEST_ION") {
+        return PathBuf::from(path);
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("test.ion")
+}
+
 fn load_cases() -> Vec<Feature> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/get_boundaries_cases.json");
-    let text = std::fs::read_to_string(&path).expect("read get_boundaries_cases.json");
-    serde_json::from_str(&text).expect("parse get_boundaries_cases.json")
+    let cases = load_chromatograms_from(&ion_path());
+    let mut features: BTreeMap<String, Feature> = BTreeMap::new();
+    for (_, eic) in cases {
+        if eic.params.get("kind").map(String::as_str) != Some("boundaries") {
+            continue;
+        }
+        let get = |key: &str| {
+            eic.params
+                .get(key)
+                .unwrap_or_else(|| panic!("get_boundaries.ion case missing param {key}"))
+        };
+        let feature_id = get("feature_id").clone();
+        let fc_benchmark: f64 = get("fc_benchmark").parse().expect("fc_benchmark");
+        let sample = Sample {
+            sample: get("sample").clone(),
+            peak_x: get("peak_x").parse().expect("peak_x"),
+            noise: get("noise").parse().expect("noise"),
+            expected_from: get("expected_from").parse().expect("expected_from"),
+            expected_to: get("expected_to").parse().expect("expected_to"),
+            x: eic.time.clone(),
+            y: eic.intensity.clone(),
+        };
+        features
+            .entry(feature_id.clone())
+            .or_insert_with(|| Feature {
+                id: feature_id,
+                fc_benchmark,
+                samples: Vec::new(),
+            })
+            .samples
+            .push(sample);
+    }
+    features.into_values().collect()
 }
 
 fn area(x: &[f64], y: &[f64], from: usize, to: usize) -> f64 {

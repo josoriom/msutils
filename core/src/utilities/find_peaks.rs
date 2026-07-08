@@ -134,6 +134,7 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
 
     let auto_baseline = filter.auto_baseline.unwrap_or(false);
     let auto_noise = filter.auto_noise.unwrap_or(false);
+    let allow_overlap = filter.allow_overlap.unwrap_or(false);
 
     let baseline: Vec<f64> = if auto_baseline {
         let mut b = base_opts;
@@ -243,8 +244,17 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
     }
 
     if peaks.len() > 1 {
-        peaks = suppress_contained_peaks(data, peaks);
+        peaks = suppress_contained_peaks(data, &normalized_data.y, noise, peaks);
     }
+
+    if peaks.len() > 1 {
+        peaks = keep_prominent_peaks(data, &normalized_data.y, noise, peaks);
+    }
+
+    if !allow_overlap && peaks.len() > 1 {
+        peaks = split_overlapping_windows(data, &normalized_data.y, peaks);
+    }
+
     peaks
 }
 
@@ -388,7 +398,12 @@ fn dedupe_near_identical(peaks: Vec<Peak>) -> Vec<Peak> {
     out
 }
 
-fn suppress_contained_peaks(data: &DataXY, mut peaks: Vec<Peak>) -> Vec<Peak> {
+fn suppress_contained_peaks(
+    data: &DataXY,
+    centered: &[f64],
+    noise: f64,
+    mut peaks: Vec<Peak>,
+) -> Vec<Peak> {
     let m = peaks.len();
     if m <= 1 {
         return peaks;
@@ -412,13 +427,12 @@ fn suppress_contained_peaks(data: &DataXY, mut peaks: Vec<Peak>) -> Vec<Peak> {
     while a_rank < order.len() {
         let ia = order[a_rank];
         if keep[ia] {
-            let la = peaks[ia].from;
-            let ra = peaks[ia].to;
-
             let mut b_rank = a_rank + 1;
             while b_rank < order.len() {
                 let ib = order[b_rank];
                 if keep[ib] {
+                    let la = peaks[ia].from;
+                    let ra = peaks[ia].to;
                     let lb = peaks[ib].from;
                     let rb = peaks[ib].to;
 
@@ -437,9 +451,17 @@ fn suppress_contained_peaks(data: &DataXY, mut peaks: Vec<Peak>) -> Vec<Peak> {
                     let apex_b_inside_a = peaks[ib].rt >= la && peaks[ib].rt <= ra;
                     let rel = peaks[ib].intensity / peaks[ia].intensity;
 
+                    let apex_a = closest_index(&data.x, peaks[ia].rt);
+                    let apex_b = closest_index(&data.x, peaks[ib].rt);
+                    let valley = valley_between(centered, apex_a, apex_b);
+                    let smaller = height_at(centered, apex_a).min(height_at(centered, apex_b));
+                    let prominence = (smaller - valley).max(0.0);
+                    let strongly_resolved =
+                        noise > 0.0 && prominence > SEPARATE_PROMINENCE_NOISE_MULT * noise;
+
                     let enough_overlap = frac >= OVERLAP_FRAC_SHOULDER;
                     let inside_and_small = apex_b_inside_a && rel <= INTENSITY_RATIO_SHOULDER;
-                    let is_shoulder = enough_overlap || inside_and_small;
+                    let is_shoulder = (enough_overlap || inside_and_small) && !strongly_resolved;
 
                     if is_shoulder {
                         if MERGE_SHOULDERS {
@@ -478,4 +500,133 @@ fn suppress_contained_peaks(data: &DataXY, mut peaks: Vec<Peak>) -> Vec<Peak> {
     }
     out.sort_by(|a, b| a.rt.partial_cmp(&b.rt).unwrap_or(Ordering::Equal));
     out
+}
+
+const SEPARATE_VALLEY_DROP: f64 = 0.70;
+const COMPARABLE_HEIGHT_RATIO: f64 = 0.50;
+const COMPARABLE_MIN_VALLEY_DROP: f64 = 0.10;
+const SEPARATE_PROMINENCE_NOISE_MULT: f64 = 5.0;
+
+fn keep_prominent_peaks(
+    data: &DataXY,
+    centered: &[f64],
+    noise: f64,
+    peaks: Vec<Peak>,
+) -> Vec<Peak> {
+    let mut kept: Vec<Peak> = Vec::with_capacity(peaks.len());
+    for peak in peaks {
+        if let Some(&last) = kept.last() {
+            let last_apex = closest_index(&data.x, last.rt);
+            let peak_apex = closest_index(&data.x, peak.rt);
+            let valley = valley_between(centered, last_apex, peak_apex);
+            let last_height = height_at(centered, last_apex);
+            let peak_height = height_at(centered, peak_apex);
+            let smaller = last_height.min(peak_height);
+            let taller = last_height.max(peak_height);
+            let prominence = (smaller - valley).max(0.0);
+            if !peaks_are_separate(prominence, smaller, taller, noise) {
+                let merged = merge_peaks(data, last, peak);
+                kept.pop();
+                kept.push(merged);
+                continue;
+            }
+        }
+        kept.push(peak);
+    }
+    kept
+}
+
+fn valley_between(values: &[f64], first: usize, second: usize) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let lo = first.min(second);
+    let hi = first.max(second).min(values.len() - 1);
+    let mut lowest = f64::INFINITY;
+    for &value in &values[lo..=hi] {
+        if value < lowest {
+            lowest = value;
+        }
+    }
+    lowest
+}
+
+fn height_at(values: &[f64], index: usize) -> f64 {
+    values.get(index).copied().unwrap_or(0.0)
+}
+
+fn peaks_are_separate(prominence: f64, smaller_height: f64, taller_height: f64, noise: f64) -> bool {
+    if smaller_height <= 0.0 {
+        return false;
+    }
+    let well_resolved = prominence >= SEPARATE_VALLEY_DROP * smaller_height;
+    let comparable_pair = smaller_height >= COMPARABLE_HEIGHT_RATIO * taller_height
+        && prominence >= COMPARABLE_MIN_VALLEY_DROP * smaller_height;
+    let far_above_noise = noise > 0.0 && prominence > SEPARATE_PROMINENCE_NOISE_MULT * noise;
+    well_resolved || comparable_pair || far_above_noise
+}
+
+fn merge_peaks(data: &DataXY, keeper: Peak, other: Peak) -> Peak {
+    let taller = if keeper.intensity >= other.intensity {
+        keeper
+    } else {
+        other
+    };
+    let from = keeper.from.min(other.from);
+    let to = keeper.to.max(other.to);
+    let left = closest_index(&data.x, from);
+    let right = closest_index(&data.x, to);
+    let (lo, hi) = if left <= right { (left, right) } else { (right, left) };
+    let (integral, _) = xy_integration(&data.x[lo..=hi], &data.y[lo..=hi]);
+    Peak {
+        from,
+        to,
+        integral,
+        n_points: hi - lo + 1,
+        ..taller
+    }
+}
+
+fn split_overlapping_windows(data: &DataXY, centered: &[f64], mut peaks: Vec<Peak>) -> Vec<Peak> {
+    let mut i = 0;
+    while i + 1 < peaks.len() {
+        if peaks[i].to > peaks[i + 1].from {
+            let apex_left = closest_index(&data.x, peaks[i].rt);
+            let apex_right = closest_index(&data.x, peaks[i + 1].rt);
+            let split = valley_index(centered, apex_left, apex_right);
+            let boundary = data.x[split];
+            peaks[i] = reframe(data, peaks[i], peaks[i].from, boundary);
+            peaks[i + 1] = reframe(data, peaks[i + 1], boundary, peaks[i + 1].to);
+        }
+        i += 1;
+    }
+    peaks
+}
+
+fn valley_index(values: &[f64], first: usize, second: usize) -> usize {
+    let lo = first.min(second);
+    let hi = first.max(second).min(values.len().saturating_sub(1));
+    let mut best = lo;
+    let mut lowest = f64::INFINITY;
+    for k in lo..=hi {
+        if values[k] < lowest {
+            lowest = values[k];
+            best = k;
+        }
+    }
+    best
+}
+
+fn reframe(data: &DataXY, peak: Peak, from: f64, to: f64) -> Peak {
+    let left = closest_index(&data.x, from);
+    let right = closest_index(&data.x, to);
+    let (lo, hi) = if left <= right { (left, right) } else { (right, left) };
+    let (integral, _) = xy_integration(&data.x[lo..=hi], &data.y[lo..=hi]);
+    Peak {
+        from,
+        to,
+        integral,
+        n_points: hi - lo + 1,
+        ..peak
+    }
 }

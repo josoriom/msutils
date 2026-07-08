@@ -26,7 +26,7 @@ static const char *last_err = NULL;
 typedef struct MzML MzML;
 
 typedef uint32_t (*fn_msutils_abi_version)(void);
-typedef size_t   (*fn_msutils_sizeof_peak_options)(void);
+typedef size_t (*fn_msutils_sizeof_peak_options)(void);
 typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
 typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *);
 typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *);
@@ -293,7 +293,8 @@ static int fill_options(SEXP opts, CPeakOptions *out)
   if (v != R_NilValue)
     out->min_r2 = asReal(v);
   v = list_get(opts, "shape");
-  if (v != R_NilValue) {
+  if (v != R_NilValue)
+  {
     if (TYPEOF(v) == STRSXP && XLENGTH(v) > 0)
       out->shape = (strcmp(CHAR(STRING_ELT(v, 0)), "gaussian") == 0) ? 0 : 1;
     else
@@ -850,6 +851,31 @@ SEXP C_parse_ion_url(SEXP url, SEXP max_cache_size)
   MzML *handle = NULL;
   int code = ABI.parse_ion_url(value, cache, &handle);
   die_code("parse_ion_url", code);
+
+  SEXP ptr = PROTECT(R_MakeExternalPtr(handle, R_NilValue, R_NilValue));
+  R_RegisterCFinalizerEx(ptr, finalize_mzml, TRUE);
+  UNPROTECT(1);
+  return ptr;
+}
+
+SEXP C_parse_ion_path(SEXP path, SEXP max_cache_size)
+{
+  if (TYPEOF(path) != STRSXP || LENGTH(path) != 1)
+    error("msutils: path must be a single string");
+  if (!abi_handle)
+    error("msutils: native library not loaded");
+
+  typedef int32_t (*fn_pip)(const char *, size_t, MzML **);
+  fn_pip parse_ion_path_fn = (fn_pip)DLSYM(abi_handle, "parse_ion_path");
+  if (!parse_ion_path_fn)
+    error("msutils: native symbol 'parse_ion_path' not found in loaded library");
+
+  const char *value = CHAR(STRING_ELT(path, 0));
+  size_t cache = (max_cache_size == R_NilValue) ? 0 : (size_t)asReal(max_cache_size);
+
+  MzML *handle = NULL;
+  int code = parse_ion_path_fn(value, cache, &handle);
+  die_code("parse_ion_path", code);
 
   SEXP ptr = PROTECT(R_MakeExternalPtr(handle, R_NilValue, R_NilValue));
   R_RegisterCFinalizerEx(ptr, finalize_mzml, TRUE);

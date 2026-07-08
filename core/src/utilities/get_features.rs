@@ -24,18 +24,15 @@ use ionic::ion::{IonReader, ReadOptions};
 use crate::utilities::{
     calculate_eic::{
         CentroidScan, EicOptions, EicReader, MS1_LEVEL, SpectrumKind, get_scan_times,
-        get_spectrum_kind, highest_intensity_in_window, lower_bound, mz_tolerance_for,
-        read_mz_window, upper_bound,
+        get_spectrum_kind, lower_bound, mz_tolerance_for, read_mz_window,
+        summed_intensity_in_window, upper_bound,
     },
     find_features::{Feature, FeatureError, FindFeaturesOptions, MzTolerance, find_features},
     find_masses::find_masses,
     find_peaks::FindPeaksOptions,
     get_peak::get_peak,
     math::median,
-    mz_estimator::{
-        MzEstimator, MzEstimatorKind, SampleMz, has_multiple_masses, make_estimator,
-        same_mass_gap, split_by_gap,
-    },
+    mz_estimator::{MzEstimator, MzEstimatorKind, SampleMz, make_estimator, same_mass_gap},
     structs::{DataXY, FromTo, Peak, Roi},
 };
 
@@ -382,20 +379,15 @@ pub fn get_features(
         alignment_config.eic_options.ppm_tolerance,
     );
 
-    let mut results = run_with_cores(cores, || {
-        dedup(
-            single,
-            &alignment_config.mz_tolerance,
-            alignment_config.rt_tolerance,
-        )
-    });
     let same_mass = MzTolerance {
         mz_absolute: 0.0,
         ppm: 0.5 * alignment_config.eic_options.ppm_tolerance,
     };
-    results.extend(run_with_cores(cores, || {
-        dedup(split, &same_mass, alignment_config.rt_tolerance)
-    }));
+    let mut features = single;
+    features.extend(split);
+    let results = run_with_cores(cores, || {
+        dedup(features, &same_mass, alignment_config.rt_tolerance)
+    });
     Ok(results)
 }
 
@@ -786,7 +778,7 @@ fn measure_mass(
     let mut intensities = Vec::with_capacity(window.len());
     for (rt, mz, intensity) in window {
         times.push(*rt);
-        intensities.push(highest_intensity_in_window(mz, intensity, mz_lo, mz_hi));
+        intensities.push(summed_intensity_in_window(mz, intensity, mz_lo, mz_hi));
     }
     anchor_edges(&mut intensities);
     get_peak(
@@ -812,7 +804,7 @@ fn find_apex_masses(
     let mut masses: Vec<SampleMz> = Vec::new();
     let mut best_intensity = 0.0;
     for (_, mz, intensity) in scans {
-        let top = highest_intensity_in_window(mz, intensity, mz_lo, mz_hi);
+        let top = summed_intensity_in_window(mz, intensity, mz_lo, mz_hi);
         if top > best_intensity {
             best_intensity = top;
             masses = find_masses(mz, intensity, mz_lo, mz_hi, kind);
@@ -832,7 +824,7 @@ fn detect_peak(
     let mut intensities = Vec::with_capacity(tile_scans.len());
     for (rt, mz, intensity) in tile_scans {
         times.push(*rt);
-        intensities.push(highest_intensity_in_window(mz, intensity, mz_lo, mz_hi));
+        intensities.push(summed_intensity_in_window(mz, intensity, mz_lo, mz_hi));
     }
 
     anchor_edges(&mut intensities);
@@ -958,6 +950,75 @@ struct BuildContext<'a> {
     total_samples: usize,
 }
 
+fn distinct_samples(group: &[(usize, MassPeak)]) -> usize {
+    let mut samples: Vec<usize> = group.iter().map(|(sample, _)| *sample).collect();
+    samples.sort_unstable();
+    samples.dedup();
+    samples.len()
+}
+
+fn distance_to_nearest_mass(group: &[(usize, MassPeak)], mz: f64) -> f64 {
+    group
+        .iter()
+        .map(|(_, peak)| (peak.mz - mz).abs())
+        .fold(f64::INFINITY, f64::min)
+}
+
+fn group_by_gap(pool: &[(usize, MassPeak)], cutoff: f64) -> Vec<Vec<(usize, MassPeak)>> {
+    let mut sorted = pool.to_vec();
+    sorted.sort_by(|a, b| a.1.mz.partial_cmp(&b.1.mz).unwrap_or(Ordering::Equal));
+    let mut groups: Vec<Vec<(usize, MassPeak)>> = Vec::new();
+    for item in sorted {
+        let start_new = match groups.last() {
+            Some(group) => item.1.mz - group.last().unwrap().1.mz > cutoff,
+            None => true,
+        };
+        if start_new {
+            groups.push(vec![item]);
+        } else {
+            groups.last_mut().unwrap().push(item);
+        }
+    }
+    groups
+}
+
+fn nearest_group_within(groups: &[Vec<(usize, MassPeak)>], mz: f64, cutoff: f64) -> Option<usize> {
+    groups
+        .iter()
+        .enumerate()
+        .map(|(index, group)| (index, distance_to_nearest_mass(group, mz)))
+        .filter(|(_, distance)| *distance <= cutoff)
+        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(Ordering::Equal))
+        .map(|(index, _)| index)
+}
+
+fn merge_lone_masses(
+    groups: Vec<Vec<(usize, MassPeak)>>,
+    detection_mz: &[Option<f64>],
+    cutoff: f64,
+) -> Vec<Vec<(usize, MassPeak)>> {
+    let mut supported: Vec<Vec<(usize, MassPeak)>> = groups
+        .iter()
+        .filter(|group| distinct_samples(group) > 1)
+        .cloned()
+        .collect();
+    if supported.is_empty() {
+        return vec![groups.into_iter().flatten().collect()];
+    }
+    let mut kept_apart: Vec<Vec<(usize, MassPeak)>> = Vec::new();
+    for lone in groups.into_iter().filter(|group| distinct_samples(group) <= 1) {
+        for item in lone {
+            let detection = detection_mz.get(item.0).copied().flatten();
+            match detection.and_then(|mz| nearest_group_within(&supported, mz, cutoff)) {
+                Some(index) => supported[index].push(item),
+                None => kept_apart.push(vec![item]),
+            }
+        }
+    }
+    supported.append(&mut kept_apart);
+    supported
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_results(
     slots: Vec<ClusterSlot>,
@@ -992,10 +1053,14 @@ fn build_results(
                 }
             }
         }
-        let pool_mz: Vec<f64> = pool.iter().map(|(_, o)| o.mz).collect();
         let cutoff = same_mass_gap(bounds.target_mz, ppm);
+        let detection_mz: Vec<Option<f64>> = features
+            .iter()
+            .map(|slot| slot.as_ref().map(|feature| feature.mz))
+            .collect();
+        let masses = merge_lone_masses(group_by_gap(&pool, cutoff), &detection_mz, cutoff);
 
-        if pool.is_empty() || !has_multiple_masses(&pool_mz, cutoff) {
+        if masses.len() <= 1 {
             let dominant_apex: Vec<SampleMz> = apex_values.iter().flatten().copied().collect();
             let hits = collect_filled_slots(features);
             if let Some(hits) = require_minimum_frequency(hits, min_samples) {
@@ -1010,15 +1075,8 @@ fn build_results(
         }
 
         let mut group_features: Vec<ConsensusFeature> = Vec::new();
-        for group in split_by_gap(&pool_mz, cutoff) {
-            let low = group.iter().copied().fold(f64::INFINITY, f64::min);
-            let high = group.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            let entries: Vec<(usize, MassPeak)> = pool
-                .iter()
-                .copied()
-                .filter(|(_, o)| o.mz >= low && o.mz <= high)
-                .collect();
-            if let Some(feature) = build_mass_feature(&entries, &bounds, &context)
+        for group in &masses {
+            if let Some(feature) = build_mass_feature(group, &bounds, &context)
                 && feature.n_samples >= min_samples
             {
                 group_features.push(feature);

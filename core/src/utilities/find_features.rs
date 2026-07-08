@@ -13,8 +13,8 @@ use std::{
 use crate::utilities::{
     calculate_eic::{
         CentroidScan, EicOptions, EicReader, FastError, MS1_LEVEL, SpectrumKind, get_scan_times,
-        get_spectrum_kind, highest_intensity_in_window, lower_bound, mz_tolerance_for,
-        read_mz_window, upper_bound, with_eic_apex_intensity,
+        get_spectrum_kind, lower_bound, mz_tolerance_for, read_mz_window,
+        summed_intensity_in_window, upper_bound, with_eic_apex_intensity,
     },
     find_masses::find_masses,
     find_peaks::{FindPeaksOptions, find_peaks},
@@ -189,27 +189,6 @@ pub fn find_features(
 ) -> Result<Vec<Feature>, FeatureError> {
     let opts = options.unwrap_or_default();
 
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    let gpu_context = if opts.use_gpu {
-        opts.gpu_context.clone().or_else(|| {
-            let context = GpuContext::try_init().map(Arc::new);
-            if context.is_none() {
-                eprintln!("[find_features] GPU requested but initialization failed, using CPU");
-            }
-            context
-        })
-    } else {
-        None
-    };
-
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    let gpu_batch = GpuBatchOptions {
-        batch_size: opts
-            .batch_size
-            .unwrap_or_else(|| GpuBatchOptions::default().batch_size),
-        vram_override: None,
-    };
-
     if !opts.mz_scan_grid.step.is_finite() || opts.mz_scan_grid.step <= 0.0 {
         return Err(FeatureError::InvalidStepSize(opts.mz_scan_grid.step));
     }
@@ -232,9 +211,40 @@ pub fn find_features(
     }
 
     let time: Vec<f64> = scan_times.iter().map(|scan| scan.rt).collect();
-
     let kind = get_spectrum_kind(reader);
     let scans = read_grid_scans(reader, &scan_times, &grid, &opts)?;
+
+    detect_features(&scans, &grid, &time, kind, &opts, cores)
+}
+
+pub fn detect_features(
+    scans: &[Scan],
+    grid: &[f64],
+    time: &[f64],
+    kind: SpectrumKind,
+    opts: &FindFeaturesOptions,
+    cores: usize,
+) -> Result<Vec<Feature>, FeatureError> {
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    let gpu_context = if opts.use_gpu {
+        opts.gpu_context.clone().or_else(|| {
+            let context = GpuContext::try_init().map(Arc::new);
+            if context.is_none() {
+                eprintln!("[find_features] GPU requested but initialization failed, using CPU");
+            }
+            context
+        })
+    } else {
+        None
+    };
+
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    let gpu_batch = GpuBatchOptions {
+        batch_size: opts
+            .batch_size
+            .unwrap_or_else(|| GpuBatchOptions::default().batch_size),
+        vram_override: None,
+    };
 
     run_with_cores(cores, || {
         #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
@@ -242,7 +252,7 @@ pub fn find_features(
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         let gpu: GpuArgs = None;
 
-        let candidates = collect_candidates(&scans, &grid, &time, &opts, gpu);
+        let candidates = collect_candidates(scans, grid, time, opts, gpu);
         if candidates.is_empty() {
             return Err(FeatureError::NoCandidateMasses);
         }
@@ -252,7 +262,7 @@ pub fn find_features(
             return Err(FeatureError::TooManyCandidateMasses(masses.len()));
         }
 
-        let features = extract_features(&scans, &masses, &time, &opts, kind);
+        let features = extract_features(scans, &masses, time, opts, kind);
         if features.is_empty() {
             return Err(FeatureError::NoCandidateMasses);
         }
@@ -262,7 +272,13 @@ pub fn find_features(
     })
 }
 
-type Scans = Vec<(Vec<f64>, Vec<f64>)>;
+#[derive(Clone, Debug, Default)]
+pub struct Scan {
+    pub mz: Vec<f64>,
+    pub intensity: Vec<f64>,
+}
+
+type Scans = Vec<Scan>;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 type GpuArgs<'a> = Option<(&'a GpuContext, &'a GpuBatchOptions)>;
@@ -298,7 +314,7 @@ fn read_grid_scans(
             &mut mz,
             &mut intensity,
         )?;
-        scans.push((mz, intensity));
+        scans.push(Scan { mz, intensity });
     }
 
     Ok(scans)
@@ -312,13 +328,13 @@ fn seed_intensity_threshold(opts: &FindFeaturesOptions) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn eic_row_for_mass(scans: &Scans, target_mz: f64, options: EicOptions) -> Vec<f64> {
+fn eic_row_for_mass(scans: &[Scan], target_mz: f64, options: EicOptions) -> Vec<f64> {
     let tolerance = mz_tolerance_for(target_mz, options);
     let mz_low = target_mz - tolerance;
     let mz_high = target_mz + tolerance;
     scans
         .iter()
-        .map(|(mz, intensity)| highest_intensity_in_window(mz, intensity, mz_low, mz_high))
+        .map(|scan| summed_intensity_in_window(&scan.mz, &scan.intensity, mz_low, mz_high))
         .collect()
 }
 
@@ -342,7 +358,7 @@ fn row_has_peak(
 }
 
 fn collect_candidates(
-    scans: &Scans,
+    scans: &[Scan],
     grid: &[f64],
     time: &[f64],
     opts: &FindFeaturesOptions,
@@ -360,7 +376,7 @@ fn collect_candidates(
 }
 
 fn collect_candidates_cpu(
-    scans: &Scans,
+    scans: &[Scan],
     grid: &[f64],
     time: &[f64],
     opts: &FindFeaturesOptions,
@@ -389,7 +405,7 @@ fn collect_candidates_cpu(
 fn collect_candidates_gpu(
     context: &GpuContext,
     batch: &GpuBatchOptions,
-    scans: &Scans,
+    scans: &[Scan],
     grid: &[f64],
     time: &[f64],
     opts: &FindFeaturesOptions,
@@ -418,7 +434,7 @@ fn collect_candidates_gpu(
 }
 
 fn extract_features(
-    scans: &Scans,
+    scans: &[Scan],
     masses: &[f64],
     time: &[f64],
     opts: &FindFeaturesOptions,
@@ -476,19 +492,19 @@ fn extract_features(
     }
 }
 
-fn recenter_mass(scans: &Scans, target_mz: f64, options: EicOptions) -> f64 {
+fn recenter_mass(scans: &[Scan], target_mz: f64, options: EicOptions) -> f64 {
     let tolerance = mz_tolerance_for(target_mz, options);
     let low = target_mz - tolerance;
     let high = target_mz + tolerance;
 
     let mut weighted = 0.0f64;
     let mut total = 0.0f64;
-    for (mz, intensity) in scans {
-        let start = lower_bound(mz, low);
-        let end = upper_bound(mz, high);
+    for scan in scans {
+        let start = lower_bound(&scan.mz, low);
+        let end = upper_bound(&scan.mz, high);
         for k in start..end {
-            weighted += mz[k] * intensity[k];
-            total += intensity[k];
+            weighted += scan.mz[k] * scan.intensity[k];
+            total += scan.intensity[k];
         }
     }
 
@@ -500,7 +516,7 @@ fn recenter_mass(scans: &Scans, target_mz: f64, options: EicOptions) -> f64 {
 }
 
 fn peak_apex_mz(
-    scans: &Scans,
+    scans: &[Scan],
     time: &[f64],
     rt_from: f64,
     rt_to: f64,
@@ -512,13 +528,13 @@ fn peak_apex_mz(
     let mz_lo = center_mz - tolerance;
     let mz_hi = center_mz + tolerance;
 
-    let mut apex_scan: Option<&(Vec<f64>, Vec<f64>)> = None;
+    let mut apex_scan: Option<&Scan> = None;
     let mut best_intensity = 0.0;
     for (scan, &rt) in scans.iter().zip(time.iter()) {
         if rt < rt_from || rt > rt_to {
             continue;
         }
-        let top = highest_intensity_in_window(&scan.0, &scan.1, mz_lo, mz_hi);
+        let top = summed_intensity_in_window(&scan.mz, &scan.intensity, mz_lo, mz_hi);
         if top > best_intensity {
             best_intensity = top;
             apex_scan = Some(scan);
@@ -528,7 +544,7 @@ fn peak_apex_mz(
     let Some(scan) = apex_scan else {
         return center_mz;
     };
-    find_masses(&scan.0, &scan.1, mz_lo, mz_hi, kind)
+    find_masses(&scan.mz, &scan.intensity, mz_lo, mz_hi, kind)
         .into_iter()
         .min_by(|a, b| {
             (a.mz - center_mz)

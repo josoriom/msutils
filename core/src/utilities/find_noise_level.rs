@@ -31,8 +31,8 @@ where
     }
     if segments.len() == 1 {
         return Noise {
-            width: segments[0].width,
-            intensity: segments[0].intensity,
+            width: 0,
+            intensity: floor,
         };
     }
 

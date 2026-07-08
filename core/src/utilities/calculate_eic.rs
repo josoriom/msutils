@@ -665,26 +665,6 @@ pub(crate) fn summed_intensity_in_window(
     unsafe { intensity.get_unchecked(start..end) }.iter().sum()
 }
 
-pub(crate) fn highest_intensity_in_window(
-    mz: &[f64],
-    intensity: &[f64],
-    mz_lower: f64,
-    mz_upper: f64,
-) -> f64 {
-    if mz.is_empty() || intensity.is_empty() || mz.len() != intensity.len() {
-        return 0.0;
-    }
-    let start = lower_bound(mz, mz_lower);
-    let end = upper_bound(mz, mz_upper);
-    let mut highest = 0.0f64;
-    for value in &intensity[start..end] {
-        if *value > highest {
-            highest = *value;
-        }
-    }
-    highest
-}
-
 fn max_in_range(retention_times: &[f64], intensities: &[f64], from_rt: f64, to_rt: f64) -> f64 {
     let start = lower_bound(retention_times, from_rt);
     let end = upper_bound(retention_times, to_rt).min(intensities.len());
