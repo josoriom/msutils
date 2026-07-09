@@ -17,7 +17,8 @@ get_peak(
   lambda = 0L,
   max_iterations = 0L,
   allow_overlap = FALSE,
-  min_snr = 1
+  min_snr = 1,
+  min_r2 = 0.3
 )
 }
 \arguments{
@@ -35,6 +36,7 @@ get_peak(
   \item{max_iterations}{Maximum airPLS iterations. \code{0} uses a default.}
   \item{allow_overlap}{If \code{TRUE}, keep peaks whose boundaries overlap. Default \code{FALSE}.}
   \item{min_snr}{Minimum signal-to-noise ratio. Default 1.}
+  \item{min_r2}{Minimum fit R-squared (Gaussian or EMG) for the artifact filter; \code{0} disables it (keep peaks regardless of shape). Default 0.3.}
 }
 \value{
 A list describing the detected peak, or an empty result if no peak was found.

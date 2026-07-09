@@ -3,12 +3,11 @@ include_version = true
 pragma_once = true
 
 [export]
+item_types = ["constants", "enums", "structs", "unions", "typedefs", "opaque"]
 include = [
   "CPeakOptions",
   "Buf",
   "MSUTILS_ABI_VERSION",
-  "plan_open",
-  "plan_eic",
 ]
 
 [parse]

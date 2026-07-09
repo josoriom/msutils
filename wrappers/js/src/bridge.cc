@@ -37,7 +37,7 @@ struct MzMLWrapper
   size_t estimated_size;
 };
 
-static_assert(sizeof(CPeakOptions) == 64, "CPeakOptions must be 64 bytes");
+static_assert(sizeof(CPeakOptions) == 80, "CPeakOptions must be 80 bytes");
 
 typedef uint32_t (*fn_msutils_abi_version)(void);
 typedef size_t   (*fn_msutils_sizeof_peak_options)(void);
@@ -392,6 +392,26 @@ static int32_t GetI32(const Napi::Object &o, const char *key, int32_t fallback)
   return fallback;
 }
 
+static const int32_t SHAPE_GAUSSIAN = 0;
+static const int32_t SHAPE_EMG = 1;
+
+static int32_t GetShapeCode(const Napi::Object &o, const char *key)
+{
+  if (!o.Has(key))
+    return SHAPE_EMG;
+  Napi::Value v = o.Get(key);
+  if (v.IsNumber())
+    return v.As<Napi::Number>().Int32Value();
+  if (v.IsString())
+  {
+    std::string name = v.As<Napi::String>().Utf8Value();
+    if (name == "gaussian")
+      return SHAPE_GAUSSIAN;
+    return SHAPE_EMG;
+  }
+  return SHAPE_EMG;
+}
+
 static const CPeakOptions *ReadPeakOptionsObject(Napi::Value value, CPeakOptions *out)
 {
   if (value.IsUndefined() || value.IsNull())
@@ -402,6 +422,7 @@ static const CPeakOptions *ReadPeakOptionsObject(Napi::Value value, CPeakOptions
   out->min_integral          = GetF64(o, "minIntegral",         NAN);
   out->min_intensity         = GetF64(o, "minIntensity",        NAN);
   out->min_peak_width_points = GetI32(o, "minPeakWidthPoints",  0);
+  out->shape                 = GetShapeCode(o, "shape");
   out->noise                 = GetF64(o, "noise",               NAN);
   out->auto_noise            = GetI32(o, "autoNoise",           0);
   out->auto_baseline         = GetI32(o, "autoBaseline",        0);
@@ -409,6 +430,8 @@ static const CPeakOptions *ReadPeakOptionsObject(Napi::Value value, CPeakOptions
   out->max_iterations        = GetI32(o, "maxIterations",       0);
   out->allow_overlap         = GetI32(o, "allowOverlap",        0);
   out->min_snr               = GetF64(o, "minSnr",              NAN);
+  out->min_r2                = GetF64(o, "minR2",               NAN);
+  out->kernel_size           = GetI32(o, "kernelSize",         0);
   return out;
 }
 

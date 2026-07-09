@@ -180,17 +180,17 @@ mod tests {
     }
 
     #[test]
-    fn test_deduplicate_masses_two_elements_picks_upper_index() {
+    fn test_deduplicate_masses_two_elements_centers_on_mean() {
         let result = deduplicate_masses(vec![100.0, 100.005], eic_abs(0.01));
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], 100.005);
+        assert!((result[0] - 100.0025).abs() < 1e-9);
     }
 
     #[test]
-    fn test_deduplicate_masses_three_elements_picks_middle() {
+    fn test_deduplicate_masses_cluster_centers_on_mean() {
         let result = deduplicate_masses(vec![100.0, 100.005, 100.009], eic_abs(0.01));
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0], 100.005);
+        assert!((result[0] - (100.0 + 100.005 + 100.009) / 3.0).abs() < 1e-9);
     }
 
     // --- group_by_mz ---

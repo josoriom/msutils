@@ -2,7 +2,7 @@
 
 use std::mem::size_of;
 
-use crate::utilities::find_features::FindFeaturesOptions;
+use crate::utilities::find_features::{FindFeaturesOptions, Scan};
 
 use super::{context::GpuContext, kernel::EicKernel};
 use std::fmt::{Display, Formatter};
@@ -118,8 +118,8 @@ pub(crate) struct FlattenedScans {
 }
 
 impl FlattenedScans {
-    pub(crate) fn from_windows(windows: &[(Vec<f64>, Vec<f64>)]) -> Self {
-        let total: usize = windows.iter().map(|(mz, _)| mz.len()).sum();
+    pub(crate) fn from_windows(windows: &[Scan]) -> Self {
+        let total: usize = windows.iter().map(|scan| scan.mz.len()).sum();
 
         let mut mz = Vec::with_capacity(total);
         let mut intensity = Vec::with_capacity(total);
@@ -127,12 +127,12 @@ impl FlattenedScans {
         let mut lengths = Vec::with_capacity(windows.len());
         let mut cursor = 0u32;
 
-        for (scan_mz, scan_intensity) in windows {
-            let count = scan_mz.len() as u32;
+        for scan in windows {
+            let count = scan.mz.len() as u32;
             offsets.push(cursor);
             lengths.push(count);
-            mz.extend(scan_mz.iter().map(|&value| value as f32));
-            intensity.extend(scan_intensity.iter().map(|&value| value as f32));
+            mz.extend(scan.mz.iter().map(|&value| value as f32));
+            intensity.extend(scan.intensity.iter().map(|&value| value as f32));
             cursor += count;
         }
 

@@ -5,6 +5,7 @@ from msutils import api as _api
 from msutils.api import (
     parse_mzml,
     parse_ion,
+    parse_ion_path,
     parse_ion_url,
     ion_to_json,
     ion_to_mzml,
@@ -14,6 +15,8 @@ from msutils.api import (
     get_scans,
     find_peaks,
     get_peak,
+    fit_peak,
+    draw_peak,
     find_noise_level,
     calculate_baseline,
     get_peaks_from_eic,
@@ -30,6 +33,7 @@ __all__ = [
     "MsUtils",
     "parse_mzml",
     "parse_ion",
+    "parse_ion_path",
     "parse_ion_url",
     "ion_to_json",
     "ion_to_mzml",
@@ -39,6 +43,8 @@ __all__ = [
     "get_scans",
     "find_peaks",
     "get_peak",
+    "fit_peak",
+    "draw_peak",
     "find_noise_level",
     "calculate_baseline",
     "get_peaks_from_eic",
@@ -62,8 +68,11 @@ class MsUtils:
     def parse_mzml(self, data: bytes) -> SampleFile:
         return parse_mzml(data)
 
-    def parse_ion(self, data: bytes) -> SampleFile:
-        return parse_ion(data)
+    def parse_ion(self, source, max_cache_size: int = 0) -> SampleFile:
+        return parse_ion(source, max_cache_size)
+
+    def parse_ion_path(self, path, max_cache_size: int = 0) -> SampleFile:
+        return parse_ion_path(path, max_cache_size)
 
     def parse_ion_url(self, url: str, max_cache_size: int = 0) -> SampleFile:
         return parse_ion_url(url, max_cache_size)
@@ -91,6 +100,12 @@ class MsUtils:
 
     def get_peak(self, x, y, rt: float, range_: float, options=None):
         return get_peak(x, y, rt, range_, options)
+
+    def fit_peak(self, x, y, rt: float, intensity: float, shape: str = "emg"):
+        return fit_peak(x, y, rt, intensity, shape)
+
+    def draw_peak(self, x, params):
+        return draw_peak(x, params)
 
     def find_noise_level(self, y) -> float:
         return find_noise_level(y)

@@ -31,7 +31,7 @@ class PeakOptions(ctypes.Structure):
         ("min_integral",          c_double),
         ("min_intensity",         c_double),
         ("min_peak_width_points", c_int32),
-        ("_pad",                  c_int32),
+        ("shape",                 c_int32),
         ("noise",                 c_double),
         ("auto_noise",            c_int32),
         ("auto_baseline",         c_int32),
@@ -40,14 +40,16 @@ class PeakOptions(ctypes.Structure):
         ("allow_overlap",         c_int32),
         ("_pad2",                 c_int32),
         ("min_snr",               c_double),
+        ("min_r2",                c_double),
+        ("kernel_size",           c_int32),
     ]
 
 
-assert ctypes.sizeof(PeakOptions) == 64, (
-    f"PeakOptions is {ctypes.sizeof(PeakOptions)} bytes — expected 64"
+assert ctypes.sizeof(PeakOptions) == 80, (
+    f"PeakOptions is {ctypes.sizeof(PeakOptions)} bytes — expected 80"
 )
 
-MSUTILS_ABI_VERSION = 2
+MSUTILS_ABI_VERSION = 1
 
 _CODE_MSG = {
     1: "invalid arguments",
@@ -72,6 +74,7 @@ class _ABI:
             [POINTER(c_uint8), c_size_t, POINTER(c_void_p)], c_int32),
         "parse_bin": ([POINTER(c_uint8), c_size_t, c_size_t, POINTER(c_void_p)], c_int32),
         "parse_ion_url": ([ctypes.c_char_p, c_size_t, POINTER(c_void_p)], c_int32),
+        "parse_ion_path": ([ctypes.c_char_p, c_size_t, POINTER(c_void_p)], c_int32),
         "free_mzml": ([c_void_p], None),
         "free_": ([POINTER(c_uint8), c_size_t], None),
         "bin_to_json": ([c_void_p, POINTER(_Buf)], c_int32),
@@ -95,6 +98,10 @@ class _ABI:
              c_size_t, POINTER(PeakOptions), c_size_t, POINTER(_Buf)], c_int32),
         "find_peaks": ([POINTER(c_double), POINTER(c_double), c_size_t,
              POINTER(PeakOptions), POINTER(_Buf)], c_int32),
+        "fit_peak": ([POINTER(c_double), POINTER(c_double), c_size_t,
+             c_double, c_double, c_int32, POINTER(_Buf)], c_int32),
+        "draw_peak": ([POINTER(c_double), c_size_t, c_int32,
+             c_double, c_double, c_double, c_double, POINTER(_Buf)], c_int32),
         "calculate_baseline": ([POINTER(c_double), c_size_t, c_int32, c_int32,
              POINTER(_Buf)], c_int32),
         "find_feature": ([c_void_p,

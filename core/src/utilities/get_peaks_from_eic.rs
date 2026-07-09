@@ -5,8 +5,7 @@ use crate::utilities::{
         EicOptions, EicReader, FastError, MS1_LEVEL, get_scan_times, lower_bound, mz_tolerance_for,
         plan_window_ranges, read_mz_window, upper_bound,
     },
-    find_noise_level,
-    find_peaks::{FindPeaksOptions, PeakFilter},
+    find_peaks::FindPeaksOptions,
     get_peak::get_peak,
     structs::{DataXY, EicRoi, FromTo, Peak, Roi},
 };
@@ -132,31 +131,6 @@ fn compute_peak_for_job(
         return Peak::default();
     }
 
-    let noise = find_noise_level(y_full);
-    let max_y = y_full[start..end]
-        .iter()
-        .copied()
-        .fold(f64::NEG_INFINITY, f64::max);
-    let snr = if noise.intensity > 0.0 {
-        max_y / noise.intensity
-    } else {
-        0.0
-    };
-
-    let mut local_options = options.clone().unwrap_or_default();
-    let filter = local_options.filter.get_or_insert_with(Default::default);
-    let mut min_peak_width_points = filter.min_peak_width_points.unwrap_or_default();
-    let mut min_intensity = filter.min_intensity.unwrap_or_default();
-    if snr <= 5.0 {
-        min_peak_width_points /= 2;
-        min_intensity /= 2.0;
-    }
-    local_options.filter = Some(PeakFilter {
-        min_peak_width_points: Some(min_peak_width_points),
-        min_intensity: Some(min_intensity),
-        ..local_options.filter.unwrap_or_default()
-    });
-
     let roi_hint = Roi {
         rt: job.rt,
         half_width: job.half_width,
@@ -168,7 +142,7 @@ fn compute_peak_for_job(
             y: y_full.to_vec(),
         },
         &roi_hint,
-        Some(local_options),
+        options.clone(),
     )
     .unwrap_or_default()
 }

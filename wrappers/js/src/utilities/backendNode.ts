@@ -182,6 +182,7 @@ export class NodeBackend implements Backend {
     mz: number,
     tolerance: number,
     level: number,
+    _onProgress?: (fetched: number, total: number, heldBytes: number) => void,
   ): any {
     return parseAndCamelize(
       this.native.getIonImage(handle, mz, tolerance, level) as string,

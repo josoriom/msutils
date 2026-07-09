@@ -5,14 +5,17 @@
   grid_end             = 1000,
   grid_step            = 0.005,
   group_ppm_tol        = 5.0,
-  group_da_tol         = 0.0025,
+  group_mz_tol         = 0.0025,
   group_rt_tol         = 0.05,
   frequency            = 1L,
-  min_intensity        = 1000,
-  min_peak_width_points = 5L,
+  min_intensity        = 500,
+  min_peak_width_points = 3L,
   auto_noise           = TRUE,
   auto_baseline        = TRUE,
-  min_snr              = 1
+  min_snr              = 2,
+  min_r2               = 0.0,
+  shape                = "emg",
+  kernel_size          = 0L
 )
 
 dispose <- function(bin) {
@@ -82,7 +85,10 @@ get_peak <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_r2                = .DEFAULTS$min_r2,
+  shape                 = .DEFAULTS$shape,
+  kernel_size           = .DEFAULTS$kernel_size
 ) {
   stopifnot(is.numeric(x), is.numeric(y))
   if (length(x) != length(y) || length(x) < 3) stop("x and y must have the same length (>= 3)")
@@ -94,7 +100,8 @@ get_peak <- function(
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
-    allow_overlap=allow_overlap, min_snr=min_snr
+    allow_overlap=allow_overlap, min_snr=min_snr, min_r2=min_r2, shape=shape,
+    kernel_size=kernel_size
   )
   out_json <- .Call("C_get_peak", as.numeric(x), as.numeric(y), as.numeric(rt), as.numeric(range), opt, PACKAGE="msutils")
   jsonlite::fromJSON(out_json, simplifyVector=TRUE)
@@ -111,7 +118,10 @@ get_peaks_from_eic <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_r2                = .DEFAULTS$min_r2,
+  shape                 = .DEFAULTS$shape,
+  kernel_size           = .DEFAULTS$kernel_size
 ) {
   stopifnot(typeof(bin) == "externalptr")
   if (!is.data.frame(df)) stop("`df` must be a data.frame")
@@ -132,7 +142,8 @@ get_peaks_from_eic <- function(
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
-    allow_overlap=allow_overlap, min_snr=min_snr
+    allow_overlap=allow_overlap, min_snr=min_snr, min_r2=min_r2, shape=shape,
+    kernel_size=kernel_size
   )
   cores <- .validate_cores(cores)
   out_json <- .Call("C_get_peaks_from_eic",
@@ -160,7 +171,9 @@ get_peaks_from_chrom <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_r2                = .DEFAULTS$min_r2,
+  shape                 = .DEFAULTS$shape
 ) {
   stopifnot(typeof(bin) == "externalptr")
   if (is.null(items) || !(is.list(items) || is.data.frame(items))) stop("items must be a list/data.frame")
@@ -176,7 +189,7 @@ get_peaks_from_chrom <- function(
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
-    allow_overlap=allow_overlap, min_snr=min_snr
+    allow_overlap=allow_overlap, min_snr=min_snr, min_r2=min_r2, shape=shape
   )
   cores <- .validate_cores(cores)
   out_json <- .Call("C_get_peaks_from_chrom",
@@ -214,7 +227,10 @@ find_peaks <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_r2                = .DEFAULTS$min_r2,
+  shape                 = .DEFAULTS$shape,
+  kernel_size           = .DEFAULTS$kernel_size
 ) {
   stopifnot(is.numeric(x), is.numeric(y))
   if (length(x) != length(y) || length(x) < 3) stop("x and y must have the same length >= 3")
@@ -226,7 +242,8 @@ find_peaks <- function(
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
-    allow_overlap=allow_overlap, min_snr=min_snr
+    allow_overlap=allow_overlap, min_snr=min_snr, min_r2=min_r2, shape=shape,
+    kernel_size=kernel_size
   )
   out_json <- .Call("C_find_peaks", as.numeric(x), as.numeric(y), opt, PACKAGE="msutils")
   jsonlite::fromJSON(out_json, simplifyVector=TRUE)
@@ -238,6 +255,32 @@ calculate_baseline <- function(y, lambda=0L, max_iterations=0L) {
         as.numeric(y),
         as.integer(lambda),
         as.integer(max_iterations),
+        PACKAGE="msutils")
+}
+
+.shape_code <- function(shape) {
+  s <- tolower(as.character(shape))
+  if (s == "gaussian") return(0L)
+  if (s == "emg")      return(1L)
+  stop("shape must be 'gaussian' or 'emg'")
+}
+
+fit_peak <- function(x, y, rt, intensity, shape = "emg") {
+  stopifnot(is.numeric(x), is.numeric(y), length(x) == length(y), length(x) >= 5)
+  out_json <- .Call("C_fit_peak",
+        as.numeric(x), as.numeric(y),
+        as.numeric(rt), as.numeric(intensity), .shape_code(shape),
+        PACKAGE="msutils")
+  jsonlite::fromJSON(out_json, simplifyVector = TRUE)
+}
+
+draw_peak <- function(x, params) {
+  stopifnot(is.numeric(x), is.list(params))
+  tail <- if (is.null(params$tail)) 0 else params$tail
+  .Call("C_draw_peak",
+        as.numeric(x), .shape_code(params$shape),
+        as.numeric(params$height), as.numeric(params$center),
+        as.numeric(params$fwhm), as.numeric(tail),
         PACKAGE="msutils")
 }
 
@@ -255,7 +298,9 @@ find_feature <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_r2                = .DEFAULTS$min_r2,
+  shape                 = .DEFAULTS$shape
 ) {
   stopifnot(typeof(bin) == "externalptr")
   if (!is.numeric(rt)) stop("rt must be numeric")
@@ -287,7 +332,7 @@ find_feature <- function(
     lambda=lambda,
     max_iterations=max_iterations,
     allow_overlap=allow_overlap,
-    min_snr=min_snr
+    min_snr=min_snr, min_r2=min_r2, shape=shape
   )
 
   cores <- .validate_cores(cores)
@@ -331,7 +376,9 @@ find_features <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_r2                = .DEFAULTS$min_r2,
+  shape                 = .DEFAULTS$shape
 ) {
   stopifnot(typeof(data) == "externalptr")
   if (!is.logical(use_gpu) || length(use_gpu) != 1 || is.na(use_gpu)) stop("use_gpu must be logical TRUE/FALSE")
@@ -342,7 +389,7 @@ find_features <- function(
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
-    allow_overlap=allow_overlap, min_snr=min_snr
+    allow_overlap=allow_overlap, min_snr=min_snr, min_r2=min_r2, shape=shape
   )
 
   out_json <- .Call(
@@ -363,11 +410,22 @@ find_features <- function(
   df
 }
 
-parse_ion <- function(bin, max_cache_size = 0) {
-  if (!is.raw(bin)) stop("`bin` must be a raw vector (ion bytes)")
+parse_ion <- function(input, max_cache_size = 0) {
+  if (is.character(input)) return(parse_ion_path(input, max_cache_size))
+  if (!is.raw(input)) stop("`input` must be a file path or a raw vector of ion bytes")
   if (!is.numeric(max_cache_size) || length(max_cache_size) != 1 || is.na(max_cache_size) || max_cache_size < 0)
     stop("`max_cache_size` must be a single non-negative number")
-  .Call("C_parse_ion", bin, as.numeric(max_cache_size), PACKAGE = "msutils")
+  .Call("C_parse_ion", input, as.numeric(max_cache_size), PACKAGE = "msutils")
+}
+
+parse_ion_path <- function(path, max_cache_size = 0) {
+  if (!is.character(path) || length(path) != 1 || is.na(path) || nchar(path) == 0)
+    stop("`path` must be a single non-empty string")
+  full_path <- path.expand(path)
+  if (!file.exists(full_path)) stop("`path` does not point to an existing file: ", path)
+  if (!is.numeric(max_cache_size) || length(max_cache_size) != 1 || is.na(max_cache_size) || max_cache_size < 0)
+    stop("`max_cache_size` must be a single non-negative number")
+  .Call("C_parse_ion_path", full_path, as.numeric(max_cache_size), PACKAGE = "msutils")
 }
 
 parse_ion_url <- function(url, max_cache_size = 0) {
@@ -436,7 +494,7 @@ get_features <- function(
   grid_end              = .DEFAULTS$grid_end,
   grid_step             = .DEFAULTS$grid_step,
   group_ppm_tol         = .DEFAULTS$group_ppm_tol,
-  group_da_tol          = .DEFAULTS$group_da_tol,
+  group_mz_tol          = .DEFAULTS$group_mz_tol,
   group_rt_tol          = .DEFAULTS$group_rt_tol,
   frequency             = .DEFAULTS$frequency,
   cores                 = 1L,
@@ -451,7 +509,9 @@ get_features <- function(
   lambda                = 0L,
   max_iterations        = 0L,
   allow_overlap         = FALSE,
-  min_snr               = .DEFAULTS$min_snr
+  min_snr               = .DEFAULTS$min_snr,
+  min_r2                = .DEFAULTS$min_r2,
+  shape                 = .DEFAULTS$shape
 ) {
   if (!is.character(dir_path) || length(dir_path) != 1) stop("dir_path must be a single string")
   if (!is.logical(use_gpu) || length(use_gpu) != 1 || is.na(use_gpu)) stop("use_gpu must be logical TRUE/FALSE")
@@ -462,7 +522,7 @@ get_features <- function(
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
-    allow_overlap=allow_overlap, min_snr=min_snr
+    allow_overlap=allow_overlap, min_snr=min_snr, min_r2=min_r2, shape=shape
   )
 
   out_json <- .Call("C_get_features",
@@ -470,7 +530,7 @@ get_features <- function(
     as.numeric(from), as.numeric(to),
     as.numeric(eic_ppm_tol), as.numeric(eic_mz_tol),
     as.numeric(grid_start), as.numeric(grid_end), as.numeric(grid_step),
-    as.numeric(group_ppm_tol), as.numeric(group_da_tol), as.numeric(group_rt_tol),
+    as.numeric(group_ppm_tol), as.numeric(group_mz_tol), as.numeric(group_rt_tol),
     as.integer(frequency),
     opt, as.integer(cores), as.logical(use_gpu), as.integer(batch_size),
     PACKAGE = "msutils"

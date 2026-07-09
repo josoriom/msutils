@@ -57,7 +57,8 @@ export interface Backend {
     mz: number,
     tolerance: number,
     level: number,
-  ): any;
+    onProgress?: (fetched: number, total: number, heldBytes: number) => void,
+  ): MaybePromise<any>;
 
   findPeaks(
     x: Float64Array,

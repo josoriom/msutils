@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import math
+import os
 from ctypes import POINTER, c_double, c_float, c_int32, c_size_t, c_uint8, c_uint32
 from typing import Any, Dict, List, Optional, Sequence
 
@@ -55,11 +56,13 @@ class _GroupingDefaults:
     frequency: int       = 1
 
 class _FindPeakDefaults:
-    min_intensity: float        = 150.0
-    min_peak_width_points: int  = 5
+    min_intensity: float        = 500.0
+    min_peak_width_points: int  = 3
     auto_noise: bool            = True
     auto_baseline: bool         = True
-    min_snr: float              = 1.0
+    min_snr: float              = 2.0
+    min_r2: float               = 0.0
+    shape: str                  = "emg"
 
 
 def _as_f64_ptr(array: np.ndarray) -> POINTER(c_double):
@@ -156,23 +159,39 @@ def parse_mzml(data: bytes) -> SampleFile:
     return SampleFile(ptr, abi)
 
 
-def parse_ion(data: bytes, max_cache_size: int = 0) -> SampleFile:
-    """Load an ion file.
-
-    Args:
-        data: Raw bytes from one ion file.
-        max_cache_size: Cache size in bytes. 0 sets no limit. Larger valuesspeed up repeated reads at the cost of RAM (default 0).
-
-    Returns: A SampleFile for use in other msutils functions.
-    """
-    abi = _get_abi()
+def parse_ion(source, max_cache_size: int = 0) -> SampleFile:
+    """Load an ion file from a path (read lazily from disk) or from raw bytes."""
+    if isinstance(source, (str, os.PathLike)):
+        return parse_ion_path(source, max_cache_size)
+    if not isinstance(source, (bytes, bytearray, memoryview)):
+        raise TypeError("parse_ion: source must be a file path or ion bytes")
     if not isinstance(max_cache_size, int) or max_cache_size < 0:
         raise ValueError("parse_ion: max_cache_size must be a non-negative integer")
-    arr = (c_uint8 * len(data)).from_buffer_copy(data)
+    abi = _get_abi()
+    arr = (c_uint8 * len(source)).from_buffer_copy(source)
     ptr = ctypes.c_void_p()
     _check("parse_bin", abi.parse_bin(
         ctypes.cast(arr, POINTER(c_uint8)),
-        c_size_t(len(data)),
+        c_size_t(len(source)),
+        c_size_t(max_cache_size),
+        ctypes.byref(ptr),
+    ))
+    return SampleFile(ptr, abi)
+
+
+def parse_ion_path(path, max_cache_size: int = 0) -> SampleFile:
+    """Load an ion file from a path, reading only what it needs from disk."""
+    if not isinstance(max_cache_size, int) or max_cache_size < 0:
+        raise ValueError("parse_ion_path: max_cache_size must be a non-negative integer")
+    file_path = os.fspath(path)
+    if not file_path:
+        raise ValueError("parse_ion_path: path must be a non-empty string")
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(f"parse_ion_path: no file at {file_path}")
+    abi = _get_abi()
+    ptr = ctypes.c_void_p()
+    _check("parse_ion_path", abi.parse_ion_path(
+        os.fsencode(file_path),
         c_size_t(max_cache_size),
         ctypes.byref(ptr),
     ))
@@ -411,6 +430,81 @@ def get_peak(
         ctypes.byref(buf),
     ))
     return buf_to_json(abi, buf)
+
+
+def _shape_code(shape: str) -> int:
+    name = str(shape).lower()
+    if name == "gaussian":
+        return 0
+    if name == "emg":
+        return 1
+    raise ValueError(f"shape must be 'gaussian' or 'emg', got {shape!r}")
+
+
+def fit_peak(
+    x: Sequence,
+    y: Sequence,
+    rt: float,
+    intensity: float,
+    shape: str = "emg",
+) -> Optional[Dict]:
+    """Fit a Gaussian or EMG model to one peak.
+
+    The apex (rt, intensity) from peak picking seeds the fit, so the optimizer
+    only has to find the shape.
+
+    Args:
+        x: Retention-time sequence. Minimum 5 points.
+        y: Intensity sequence, same length as x.
+        rt: Apex retention time.
+        intensity: Apex intensity.
+        shape: 'gaussian' or 'emg'. Default 'emg'.
+
+    Returns:
+        Dict with keys shape, height, center, fwhm, tail, r2.
+        None if the peak could not be fit.
+    """
+    abi = _get_abi()
+    x_array, y_array = _to_f64_array(x), _to_f64_array(y)
+    if len(x_array) != len(y_array) or len(x_array) < 5:
+        raise ValueError("x and y must have equal length >= 5")
+    buf = _Buf()
+    _check("fit_peak", abi.fit_peak(
+        _as_f64_ptr(x_array),
+        _as_f64_ptr(y_array),
+        c_size_t(len(x_array)),
+        c_double(rt),
+        c_double(intensity),
+        c_int32(_shape_code(shape)),
+        ctypes.byref(buf),
+    ))
+    return buf_to_json(abi, buf)
+
+
+def draw_peak(x: Sequence, params: Dict) -> np.ndarray:
+    """Render a fitted peak model over x.
+
+    Args:
+        x: Retention-time sequence to draw on.
+        params: Result of fit_peak (shape, height, center, fwhm, tail).
+
+    Returns:
+        Intensity array with the same length and x as the input.
+    """
+    abi = _get_abi()
+    x_array = _to_f64_array(x)
+    buf = _Buf()
+    _check("draw_peak", abi.draw_peak(
+        _as_f64_ptr(x_array),
+        c_size_t(len(x_array)),
+        c_int32(_shape_code(params["shape"])),
+        c_double(params["height"]),
+        c_double(params["center"]),
+        c_double(params["fwhm"]),
+        c_double(params.get("tail", 0.0)),
+        ctypes.byref(buf),
+    ))
+    return buf_to_f64(abi, buf)
 
 
 def find_noise_level(y: Sequence) -> float:
@@ -677,6 +771,8 @@ def find_features(
         "auto_noise":           _FindPeakDefaults.auto_noise,
         "auto_baseline":        _FindPeakDefaults.auto_baseline,
         "min_snr":              _FindPeakDefaults.min_snr,
+        "min_r2":               _FindPeakDefaults.min_r2,
+        "shape":                _FindPeakDefaults.shape,
     }
     if options:
         peak_defaults.update(options)
@@ -737,6 +833,8 @@ def find_feature(
         "auto_noise":           _FindPeakDefaults.auto_noise,
         "auto_baseline":        _FindPeakDefaults.auto_baseline,
         "min_snr":              _FindPeakDefaults.min_snr,
+        "min_r2":               _FindPeakDefaults.min_r2,
+        "shape":                _FindPeakDefaults.shape,
     }
     if options:
         peak_defaults.update(options)
@@ -844,6 +942,8 @@ def get_features(
         "auto_noise":           _FindPeakDefaults.auto_noise,
         "auto_baseline":        _FindPeakDefaults.auto_baseline,
         "min_snr":              _FindPeakDefaults.min_snr,
+        "min_r2":               _FindPeakDefaults.min_r2,
+        "shape":                _FindPeakDefaults.shape,
     }
     if options:
         peak_defaults.update(options)

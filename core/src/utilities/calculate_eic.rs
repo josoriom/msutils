@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use ionic::ion::{ByteRange, IonError, IonReader, Range};
-use ionic::mzml::structs::MzML;
+use ionic::mzml::structs::{CvParam, MzML};
 use ionic::{ScanSource, ScanSummary};
 use serde::Serialize;
 
@@ -76,6 +76,44 @@ pub enum EicReader<'a> {
     Mzml(&'a mut MzML),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpectrumKind {
+    Centroid,
+    Profile,
+}
+
+const CENTROID_ACCESSION: &str = "MS:1000127";
+const PROFILE_ACCESSION: &str = "MS:1000128";
+
+pub fn get_spectrum_kind(reader: &mut EicReader) -> SpectrumKind {
+    match reader {
+        EicReader::Ion(ion) => match ion.spectrum(0) {
+            Ok(Some(spectrum)) => kind_from_params(&spectrum.cv_params),
+            _ => SpectrumKind::Centroid,
+        },
+        EicReader::Mzml(mzml) => match first_spectrum_params(mzml) {
+            Some(params) => kind_from_params(params),
+            None => SpectrumKind::Centroid,
+        },
+    }
+}
+
+fn kind_from_params(params: &[CvParam]) -> SpectrumKind {
+    for param in params {
+        match param.accession.as_deref() {
+            Some(PROFILE_ACCESSION) => return SpectrumKind::Profile,
+            Some(CENTROID_ACCESSION) => return SpectrumKind::Centroid,
+            _ => {}
+        }
+    }
+    SpectrumKind::Centroid
+}
+
+fn first_spectrum_params(mzml: &MzML) -> Option<&[CvParam]> {
+    let list = mzml.run.spectrum_list.as_ref()?;
+    list.spectra.first().map(|spectrum| spectrum.cv_params.as_slice())
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct ScanTime {
     pub index: usize,
@@ -86,9 +124,9 @@ pub struct ScanTime {
 pub enum FastError {
     InvalidRequest,
     UnsupportedBackend,
-    MissingBounds,
-    BadBoundsChecksum,
-    MalformedBounds(String),
+    MissingWindows,
+    BadWindowsChecksum,
+    MalformedWindows(String),
     ReadFailed(String),
 }
 
@@ -97,13 +135,13 @@ impl std::fmt::Display for FastError {
         match self {
             FastError::InvalidRequest => write!(f, "invalid EIC request"),
             FastError::UnsupportedBackend => write!(f, "unsupported file backend"),
-            FastError::MissingBounds => write!(
+            FastError::MissingWindows => write!(
                 f,
-                "spectrum has no segment bounds (A3); re-encode the file with the current Ionic"
+                "spectrum has no window directory; re-encode the file with the current Ionic"
             ),
-            FastError::BadBoundsChecksum => write!(f, "spectrum bounds (A3) checksum failed"),
-            FastError::MalformedBounds(reason) => {
-                write!(f, "spectrum bounds (A3) malformed: {}", reason)
+            FastError::BadWindowsChecksum => write!(f, "spectrum window directory checksum failed"),
+            FastError::MalformedWindows(reason) => {
+                write!(f, "spectrum window directory malformed: {}", reason)
             }
             FastError::ReadFailed(reason) => write!(f, "read failed: {}", reason),
         }
@@ -115,9 +153,9 @@ impl std::error::Error for FastError {}
 impl From<IonError> for FastError {
     fn from(error: IonError) -> Self {
         match error {
-            IonError::MissingSpectrumBounds => FastError::MissingBounds,
-            IonError::BadSpectrumBoundsChecksum => FastError::BadBoundsChecksum,
-            IonError::MalformedSpectrumBounds(reason) => FastError::MalformedBounds(reason),
+            IonError::MissingSpectrumBounds => FastError::MissingWindows,
+            IonError::BadSpectrumBoundsChecksum => FastError::BadWindowsChecksum,
+            IonError::MalformedSpectrumBounds(reason) => FastError::MalformedWindows(reason),
             other => FastError::ReadFailed(other.to_string()),
         }
     }

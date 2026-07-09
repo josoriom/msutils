@@ -12,6 +12,9 @@ export type PeakOptions = Partial<{
   maxIterations: number;
   allowOverlap: boolean | number;
   minSnr: number;
+  minR2: number;
+  shape: 'gaussian' | 'emg' | number;
+  kernelSize: number;
 }>;
 
 export type BaselineOptions = Partial<{
@@ -142,6 +145,7 @@ export type ScanQuery =
 export type IonImageOptions = {
   tolerance?: number;
   level?: number;
+  onProgress?: (fetched: number, total: number, heldBytes: number) => void;
 };
 
 export type IonImage = {

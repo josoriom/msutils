@@ -7,6 +7,7 @@ interface CachedRange {
   start: bigint;
   end: bigint;
   bytes: Uint8Array;
+  pinned: boolean;
 }
 
 const COALESCE_GAP_THRESHOLD = 65536n;
@@ -28,7 +29,7 @@ export class ContainmentCache {
     const new_start = range.offset;
     const new_end = range.offset + range.length;
 
-    this.cached.push({ start: new_start, end: new_end, bytes });
+    this.cached.push({ start: new_start, end: new_end, bytes, pinned: false });
     this.cached.sort((a, b) => (a.start < b.start ? -1 : 1));
   }
 
@@ -83,5 +84,19 @@ export class ContainmentCache {
 
   clear(): void {
     this.cached = [];
+  }
+
+  pin(): void {
+    for (const cached of this.cached) cached.pinned = true;
+  }
+
+  dropUnpinned(): void {
+    this.cached = this.cached.filter((cached) => cached.pinned);
+  }
+
+  bytes(): number {
+    let total = 0;
+    for (const cached of this.cached) total += cached.bytes.length;
+    return total;
   }
 }

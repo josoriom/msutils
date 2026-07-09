@@ -10,10 +10,16 @@ pub mod parallel;
 pub mod find_features;
 pub use find_features::find_features;
 
+pub mod find_masses;
+
 pub mod find_noise_level;
 pub use find_noise_level::{find_noise_level, find_noise_level_san_plot};
 
 pub mod find_peaks;
+
+pub mod shape_filter;
+
+pub mod fit_peak;
 
 pub mod functions;
 
@@ -42,6 +48,7 @@ pub use find_feature::find_feature;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub mod get_features;
+pub mod mz_estimator;
 pub mod tests;
 
 pub mod gpu;

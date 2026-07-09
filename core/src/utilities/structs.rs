@@ -32,7 +32,7 @@ pub struct Peak {
     #[serde(serialize_with = "ser_finite_f64")]
     pub noise: f64,
     #[serde(skip)]
-    pub gaussian_r2: Option<f64>,
+    pub r2: Option<f64>,
 }
 
 impl Default for Peak {
@@ -43,7 +43,7 @@ impl Default for Peak {
             rt: 0.0,
             integral: 0.0,
             intensity: 0.0,
-            gaussian_r2: None,
+            r2: None,
             n_points: 0,
             noise: 0.0,
         }

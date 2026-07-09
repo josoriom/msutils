@@ -333,7 +333,9 @@ impl EicKernel {
         rx2.recv().unwrap().map_err(|_| GpuError::MapFailed)?;
 
         let survivor_count: u32 = {
-            let mapped = count_slice.get_mapped_range();
+            let mapped = count_slice
+                .get_mapped_range()
+                .map_err(|_| GpuError::MapFailed)?;
             let c = u32::from_le_bytes([mapped[0], mapped[1], mapped[2], mapped[3]]);
             drop(mapped);
             c
@@ -341,7 +343,9 @@ impl EicKernel {
         staging_count.unmap();
 
         let result: Vec<u32> = {
-            let mapped = idx_slice.get_mapped_range();
+            let mapped = idx_slice
+                .get_mapped_range()
+                .map_err(|_| GpuError::MapFailed)?;
             let rows = if survivor_count == 0 {
                 Vec::new()
             } else {

@@ -49,7 +49,10 @@ use utilities::{
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
     find_features::{FindFeaturesOptions, find_features as find_features_rs},
     find_noise_level::find_noise_level as find_noise_level_rs,
-    find_peaks::{FindPeaksOptions, PeakFilter, find_peaks as find_peaks_rs},
+    find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter, find_peaks as find_peaks_rs},
+    fit_peak::{
+        PeakParameters, PeakSeed, PeakShape, draw_peak as draw_peak_rs, fit_peak as fit_peak_rs,
+    },
     get_peak::get_peak as get_peak_rs,
     get_peaks_from_chrom::get_peaks_from_chrom as get_peaks_from_chrom_rs,
     get_peaks_from_eic::{get_peaks_from_eic as get_peaks_from_eic_rs, plan_peaks_ranges},
@@ -59,6 +62,11 @@ use utilities::{
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use utilities::get_features::{AlignmentOptions, get_features as get_features_rs};
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use crate::utilities::parallel::run_with_cores;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::prelude::*;
+use utilities::mz_estimator::MzEstimatorKind;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::find_features::MzTolerance;
@@ -125,7 +133,7 @@ struct FoundFeatureOut<'a> {
     noise: f64,
 }
 
-pub const MSUTILS_ABI_VERSION: u32 = 2;
+pub const MSUTILS_ABI_VERSION: u32 = 1;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn msutils_abi_version() -> u32 {
@@ -163,6 +171,7 @@ pub struct CPeakOptions {
     pub min_integral: f64,
     pub min_intensity: f64,
     pub min_peak_width_points: c_int,
+    pub shape: c_int,
     pub noise: f64,
     pub auto_noise: c_int,
     pub auto_baseline: c_int,
@@ -170,14 +179,12 @@ pub struct CPeakOptions {
     pub max_iterations: c_int,
     pub allow_overlap: c_int,
     pub min_snr: f64,
+    pub min_r2: f64,
+    pub kernel_size: c_int,
 }
 
-// Compile-time guard: if any field is added/removed/reordered and the size
-// changes, the build fails immediately. Every wrapper hardcodes 64 bytes
-// (Python ctypes layout, WASM packing, C++ static_assert). When this fires:
-// 1) Bump MSUTILS_ABI_VERSION, 2) Update the wrapper structs to match.
 const _: () = assert!(
-    core::mem::size_of::<CPeakOptions>() == 64,
+    core::mem::size_of::<CPeakOptions>() == 80,
     "CPeakOptions size drifted — bump MSUTILS_ABI_VERSION and update all wrappers"
 );
 
@@ -755,6 +762,95 @@ pub unsafe extern "C" fn get_peak(
     }
 }
 
+fn peak_shape_from_code(shape: c_int) -> PeakShape {
+    if shape == 0 {
+        PeakShape::Gaussian
+    } else {
+        PeakShape::EMG
+    }
+}
+
+/// Fit a Gaussian or EMG model to a peak and write the parameters JSON to `out`.
+///
+/// `shape` is 0 for Gaussian, 1 for EMG.
+///
+/// # Safety
+/// `x_ptr` and `y_ptr` must point to `len` readable `f64` values.
+/// `out` must be a valid writable `Buf` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fit_peak(
+    x_ptr: *const f64,
+    y_ptr: *const f64,
+    len: usize,
+    rt: f64,
+    intensity: f64,
+    shape: c_int,
+    out: *mut Buf,
+) -> c_int {
+    if x_ptr.is_null() || y_ptr.is_null() || out.is_null() || len < 5 {
+        return ERR_INVALID_ARGS;
+    }
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let data = DataXY {
+            x: unsafe { slice::from_raw_parts(x_ptr, len) }.to_vec(),
+            y: unsafe { slice::from_raw_parts(y_ptr, len) }.to_vec(),
+        };
+        let params = fit_peak_rs(&data, &PeakSeed { rt, intensity }, peak_shape_from_code(shape));
+        let json = serde_json::to_string(&params).map_err(|_| ERR_ENCODE)?;
+        write_buf(out, json.into_bytes().into_boxed_slice());
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(c)) => c,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+/// Render a fitted peak model over `x` and write the y curve to `out_y`.
+///
+/// `shape` is 0 for Gaussian, 1 for EMG. The output has the same length as `x`.
+///
+/// # Safety
+/// `x_ptr` must point to `len` readable `f64` values.
+/// `out_y` must be a valid writable `Buf` pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn draw_peak(
+    x_ptr: *const f64,
+    len: usize,
+    shape: c_int,
+    height: f64,
+    center: f64,
+    fwhm: f64,
+    tail: f64,
+    out_y: *mut Buf,
+) -> c_int {
+    if x_ptr.is_null() || out_y.is_null() || len == 0 {
+        return ERR_INVALID_ARGS;
+    }
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let x = unsafe { slice::from_raw_parts(x_ptr, len) }.to_vec();
+        let params = PeakParameters {
+            shape: peak_shape_from_code(shape),
+            height,
+            center,
+            fwhm,
+            tail,
+            r2: 0.0,
+        };
+        let data = DataXY {
+            x: x.clone(),
+            y: vec![0.0; len],
+        };
+        let drawn = draw_peak_rs(&data, &params);
+        write_buf(out_y, f64_to_u8(&drawn.y));
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(c)) => c,
+        Err(_) => ERR_PANIC,
+    }
+}
+
 /// Find peaks from EIC data and write the result to `out`.
 ///
 /// # Safety
@@ -1191,7 +1287,30 @@ pub unsafe extern "C" fn get_ion_image(
     }
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
-        let image = crate::utilities::ion_image::compute_ion_image(file, target, tolerance, level);
+
+        let mut reader = match file {
+            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            ParsedFile::Remote(remote) => {
+                let prefetcher = remote.prefetcher.clone();
+                let ion = remote.ion_mut();
+                prefetcher
+                    .prefetch(&mut || {
+                        crate::utilities::ion_image::plan_ion_image_ranges(
+                            ion, target, tolerance, level,
+                        )
+                    })
+                    .map_err(fast_error_to_code)?;
+                EicReader::Ion(ion)
+            }
+        };
+
+        let image = crate::utilities::ion_image::compute_ion_image(
+            &mut reader,
+            target,
+            tolerance,
+            level,
+        );
         let json = serde_json::to_string(&image).map_err(|_| ERR_ENCODE)?;
         write_buf(out, json.into_bytes().into_boxed_slice());
         Ok(())
@@ -1199,6 +1318,144 @@ pub unsafe extern "C" fn get_ion_image(
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
         Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn image_begin(
+    h: *mut ParsedFile,
+    target: f64,
+    tolerance: f64,
+    level: u8,
+    out_session: *mut usize,
+) -> c_int {
+    if h.is_null() || out_session.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+    if !target.is_finite() || !tolerance.is_finite() || tolerance < 0.0 {
+        return ERR_INVALID_ARGS;
+    }
+
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let file = unsafe { &mut *h };
+        let mut reader = match file {
+            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            ParsedFile::Remote(remote) => EicReader::Ion(remote.ion_mut()),
+        };
+        let session =
+            crate::utilities::ion_image::image_session_begin(&mut reader, target, tolerance, level);
+        let pointer = Box::into_raw(Box::new(session)) as usize;
+        unsafe { *out_session = pointer };
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn image_scan_count(
+    session: *mut crate::utilities::ion_image::ImageSession,
+    out_count: *mut usize,
+) -> c_int {
+    if session.is_null() || out_count.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+    let session = unsafe { &*session };
+    unsafe { *out_count = session.scan_count() };
+    OK
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn image_ranges(
+    h: *mut ParsedFile,
+    session: *mut crate::utilities::ion_image::ImageSession,
+    from: usize,
+    count: usize,
+    out: *mut Buf,
+) -> c_int {
+    if h.is_null() || session.is_null() || out.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let file = unsafe { &mut *h };
+        let session = unsafe { &*session };
+        let ranges = match file {
+            ParsedFile::Lazy(ion) => session.ranges(ion.as_mut(), from, count),
+            ParsedFile::Remote(remote) => session.ranges(remote.ion_mut(), from, count),
+            ParsedFile::Full(_) => Err(FastError::UnsupportedBackend),
+        }
+        .map_err(fast_error_to_code)?;
+
+        let bytes = pack_byte_ranges(&ranges);
+        write_buf(out, bytes);
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn image_fold(
+    h: *mut ParsedFile,
+    session: *mut crate::utilities::ion_image::ImageSession,
+    from: usize,
+    count: usize,
+) -> c_int {
+    if h.is_null() || session.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let file = unsafe { &mut *h };
+        let session = unsafe { &mut *session };
+        let mut reader = match file {
+            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            ParsedFile::Remote(remote) => EicReader::Ion(remote.ion_mut()),
+        };
+        session.fold(&mut reader, from, count);
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn image_finish(
+    session: *mut crate::utilities::ion_image::ImageSession,
+    out: *mut Buf,
+) -> c_int {
+    if session.is_null() || out.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let session = unsafe { &*session };
+        let image = session.finish();
+        let json = serde_json::to_string(&image).map_err(|_| ERR_ENCODE)?;
+        write_buf(out, json.into_bytes().into_boxed_slice());
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn image_free(session: *mut crate::utilities::ion_image::ImageSession) {
+    if !session.is_null() {
+        unsafe {
+            drop(Box::from_raw(session));
+        }
     }
 }
 
@@ -1283,6 +1540,8 @@ pub unsafe extern "C" fn get_features(
             },
             eic_options: feature_opts.final_eic_options,
             peak_options: Some(peak_options),
+            mz_estimator: MzEstimatorKind::MedianMzApex,
+            ..AlignmentOptions::default()
         };
 
         let feats = get_features_rs(
@@ -1294,13 +1553,16 @@ pub unsafe extern "C" fn get_features(
         )
         .map_err(|_| ERR_FAST_PATH)?;
 
-        write_buf(
-            out,
-            serde_json::to_string(&feats)
-                .map_err(|_| ERR_PARSE)?
-                .into_bytes()
-                .into_boxed_slice(),
-        );
+        let core_count = if cores > 0 { cores as usize } else { 1 };
+        let json = run_with_cores(core_count, || {
+            feats
+                .par_iter()
+                .map(serde_json::to_string)
+                .collect::<Result<Vec<_>, _>>()
+                .map(|parts| format!("[{}]", parts.join(",")))
+        })
+        .map_err(|_| ERR_PARSE)?;
+        write_buf(out, json.into_bytes().into_boxed_slice());
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -1576,6 +1838,8 @@ fn write_scans_json(
     Ok(())
 }
 
+const DEFAULT_EIC_HALF_WIDTH: f64 = 0.5;
+
 fn build_eic_rois(
     rts: &[f64],
     mzs: &[f64],
@@ -1600,8 +1864,13 @@ fn build_eic_rois(
 
     (0..n)
         .map(|i| {
-            let (rt, mz, w) = (rts[i], mzs[i], wins[i]);
-            let ok = rt.is_finite() && mz.is_finite() && w.is_finite() && w > 0.0;
+            let (rt, mz, window) = (rts[i], mzs[i], wins[i]);
+            let has_target = rt.is_finite() && mz.is_finite();
+            let half_width = if window.is_finite() && window > 0.0 {
+                window
+            } else {
+                DEFAULT_EIC_HALF_WIDTH
+            };
             let id = ibuf
                 .and_then(|buf| {
                     let (o, l) = (offs[i] as usize, lens[i] as usize);
@@ -1613,12 +1882,12 @@ fn build_eic_rois(
                 })
                 .unwrap_or_default();
 
-            if ok {
+            if has_target {
                 EicRoi {
                     id,
                     rt,
                     mz,
-                    half_width: w,
+                    half_width,
                 }
             } else {
                 EicRoi {
@@ -1678,6 +1947,7 @@ fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
         };
     }
     let o = unsafe { *opts };
+    let default_artifact = ArtifactFilter::default();
     FindPeaksOptions {
         boundaries: Some(Default::default()),
         filter: Some(PeakFilter {
@@ -1697,19 +1967,28 @@ fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
                 1.5
             }),
             noise_method: None,
+            kernel_size: (o.kernel_size > 0).then_some(o.kernel_size as usize),
         }),
         baseline: Some(BaselineOptions {
             lambda: (o.lambda > 0).then_some(o.lambda as f64),
             max_iterations: (o.max_iterations > 0).then_some(o.max_iterations as usize),
             edge_slope_level: Some(1),
         }),
-        artifact_filter: Some(Default::default()),
+        artifact_filter: Some(ArtifactFilter {
+            min_r2: if o.min_r2.is_finite() && o.min_r2 >= 0.0 {
+                o.min_r2
+            } else {
+                default_artifact.min_r2
+            },
+            shape: peak_shape_from_code(o.shape),
+        }),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ionic::encoder::write_mzml_to_ion;
     use ionic::mzml::structs::{
         BinaryDataArray, BinaryDataArrayList, CvParam, NumericArray, NumericType, Run, Scan,
         ScanList, Spectrum, SpectrumList,
@@ -1890,8 +2169,8 @@ mod tests {
         }
     }
 
-    fn current_a3_ion_bytes() -> Vec<u8> {
-        let mzml = MzML {
+    fn sample_mzml() -> MzML {
+        MzML {
             run: Run {
                 id: "test".to_string(),
                 spectrum_list: Some(SpectrumList {
@@ -1902,28 +2181,36 @@ mod tests {
                 ..Default::default()
             },
             ..Default::default()
-        };
+        }
+    }
 
+    fn build_ion(mz_window: f64, block_size: usize) -> Vec<u8> {
+        let options = WriteOptions {
+            compression_level: 0,
+            force_f32: false,
+            block_size,
+            parallel: true,
+            section_storage: SectionStorage::Memory,
+            mz_window,
+        };
         let mut bytes = Vec::new();
-        encode(&mzml, 0, false, &mut bytes).expect("ion encode should succeed");
+        write_mzml_to_ion(&sample_mzml(), options, &mut bytes).expect("ion encode should succeed");
         bytes
     }
 
-    fn open_current_a3_ion() -> *mut ParsedFile {
-        let bytes = current_a3_ion_bytes();
+    fn open_ion(bytes: Vec<u8>) -> *mut ParsedFile {
         let bytes_arc = Arc::from(bytes.into_boxed_slice());
         let ion = IonReader::open_bytes(bytes_arc, ReadOptions::default())
             .expect("IonReader::open_bytes failed");
         Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
     }
 
-    fn open_old_ion_without_a3() -> *mut ParsedFile {
-        let mut bytes = current_a3_ion_bytes();
-        const HEADER_LEN_SPEC_SEGMENT_BOUNDS_OFFSET: usize = 56;
-        bytes[HEADER_LEN_SPEC_SEGMENT_BOUNDS_OFFSET..HEADER_LEN_SPEC_SEGMENT_BOUNDS_OFFSET + 8].fill(0);
-        let bytes_arc = Arc::from(bytes.into_boxed_slice());
-        let ion = IonReader::open_bytes(bytes_arc, ReadOptions::default()).expect("open no-a3 ion failed");
-        Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
+    fn windowed_ion_bytes() -> Vec<u8> {
+        build_ion(DEFAULT_MZ_WINDOW, ION_BLOCK_SIZE_BYTES)
+    }
+
+    fn open_windowed_ion() -> *mut ParsedFile {
+        open_ion(windowed_ion_bytes())
     }
 
     #[test]
@@ -2003,7 +2290,7 @@ mod tests {
 
     #[test]
     fn plan_eic_rejects_invalid_target_mz() {
-        let handle = open_current_a3_ion();
+        let handle = open_windowed_ion();
         let out = new_buf_out();
         let code = unsafe { plan_eic(handle, -1.0, 0.0, 10.0, 20.0, 0.005, out) };
         assert_eq!(code, ERR_INVALID_ARGS);
@@ -2013,7 +2300,7 @@ mod tests {
 
     #[test]
     fn plan_eic_rejects_zero_tolerance() {
-        let handle = open_current_a3_ion();
+        let handle = open_windowed_ion();
         let out = new_buf_out();
         let code = unsafe { plan_eic(handle, 500.0, 0.0, 10.0, 0.0, 0.0, out) };
         assert_eq!(code, ERR_INVALID_ARGS);
@@ -2022,8 +2309,8 @@ mod tests {
     }
 
     #[test]
-    fn plan_eic_returns_ranges_for_current_a3_ion() {
-        let handle = open_current_a3_ion();
+    fn plan_eic_returns_ranges_for_windowed_ion() {
+        let handle = open_windowed_ion();
         let out = new_buf_out();
 
         let code = unsafe { plan_eic(handle, 500.0, 0.0, 10.0, 20.0, 0.005, out) };
@@ -2042,13 +2329,20 @@ mod tests {
     }
 
     #[test]
-    fn plan_eic_requires_spectrum_bounds_for_ion() {
-        let handle = open_old_ion_without_a3();
+    fn plan_eic_works_for_wide_window_large_block_ion() {
+        let handle = open_ion(build_ion(250.0, 8 * 1024 * 1024));
         let out = new_buf_out();
 
-        let code = unsafe { plan_eic(handle, 500.0, 0.0, 9999.0, 20.0, 0.005, out) };
+        let code = unsafe { plan_eic(handle, 500.0, 0.0, 10.0, 20.0, 0.005, out) };
 
-        assert_eq!(code, ERR_FAST_PATH);
+        assert_eq!(code, OK);
+
+        let bytes = unsafe { slice::from_raw_parts((*out).ptr, (*out).len).to_vec() };
+        assert_eq!(bytes.len() % 16, 0);
+
+        let ranges = decode_byte_ranges(&bytes);
+        assert!(!ranges.is_empty());
+        assert!(ranges.iter().all(|(_, length)| *length > 0));
 
         drop_buf_out(out);
         unsafe { free_mzml(handle) };
@@ -2128,7 +2422,7 @@ mod tests {
         }
     }
 
-    fn open_local_a3_handle(bytes: &[u8]) -> *mut ParsedFile {
+    fn open_local_windowed_handle(bytes: &[u8]) -> *mut ParsedFile {
         let arc: Arc<[u8]> = Arc::from(bytes.to_vec().into_boxed_slice());
         let ion = IonReader::open_bytes(arc, ReadOptions::default()).expect("open bytes failed");
         Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
@@ -2136,7 +2430,7 @@ mod tests {
 
     #[test]
     fn remote_eic_over_http_matches_local() {
-        let bytes = current_a3_ion_bytes();
+        let bytes = windowed_ion_bytes();
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback failed");
         let port = listener.local_addr().unwrap().port();
@@ -2149,7 +2443,7 @@ mod tests {
         assert_eq!(code, OK);
         assert!(!remote_handle.is_null());
 
-        let local_handle = open_local_a3_handle(&bytes);
+        let local_handle = open_local_windowed_handle(&bytes);
 
         let remote = run_eic_at_500(remote_handle);
         let local = run_eic_at_500(local_handle);
@@ -2193,7 +2487,7 @@ mod tests {
 
     #[test]
     fn remote_peaks_over_http_match_local_for_spread_rois() {
-        let bytes = current_a3_ion_bytes();
+        let bytes = windowed_ion_bytes();
 
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback failed");
         let port = listener.local_addr().unwrap().port();
@@ -2205,7 +2499,7 @@ mod tests {
         let code = unsafe { parse_ion_url(url.as_ptr(), 0, &mut remote_handle) };
         assert_eq!(code, OK);
 
-        let local_handle = open_local_a3_handle(&bytes);
+        let local_handle = open_local_windowed_handle(&bytes);
 
         let remote = run_spread_peaks(remote_handle);
         let local = run_spread_peaks(local_handle);
@@ -2266,7 +2560,7 @@ mod tests {
 
     #[test]
     fn eic_compute_reads_are_within_plan() {
-        let bytes = current_a3_ion_bytes();
+        let bytes = windowed_ion_bytes();
         let file_len = bytes.len() as u64;
         let reader = std::sync::Arc::new(RecordingReader::new(bytes));
         let read_source = reader.clone();
@@ -2313,7 +2607,7 @@ mod tests {
 
     #[test]
     fn open_remote_fails_cleanly_when_range_read_fails() {
-        let reader = std::sync::Arc::new(RecordingReader::new(current_a3_ion_bytes()));
+        let reader = std::sync::Arc::new(RecordingReader::new(windowed_ion_bytes()));
         reader.set_fail(true);
         let read_source = reader.clone();
         let result = ionic::ion::IonReader::open_remote(
@@ -2325,7 +2619,7 @@ mod tests {
 
     #[test]
     fn eic_compute_errors_cleanly_when_data_read_fails() {
-        let reader = std::sync::Arc::new(RecordingReader::new(current_a3_ion_bytes()));
+        let reader = std::sync::Arc::new(RecordingReader::new(windowed_ion_bytes()));
         let read_source = reader.clone();
         let mut ion = ionic::ion::IonReader::open_remote(
             move |range| read_range(&*read_source, range),

@@ -16,7 +16,7 @@ get_features(
   grid_end = 1000,
   grid_step = 0.005,
   group_ppm_tol = 5,
-  group_da_tol = 0.0025,
+  group_mz_tol = 0.0025,
   group_rt_tol = 0.05,
   frequency = 1L,
   cores = 1L,
@@ -31,7 +31,8 @@ get_features(
   lambda = 0L,
   max_iterations = 0L,
   allow_overlap = FALSE,
-  min_snr = 1
+  min_snr = 1,
+  min_r2 = 0.3
 )
 }
 \arguments{
@@ -44,7 +45,7 @@ get_features(
   \item{grid_end}{Upper m/z bound of the search grid (Da). Default 1000.}
   \item{grid_step}{Grid step size (ppm). Default 0.005.}
   \item{group_ppm_tol}{PPM tolerance used when grouping features across samples. Default 5.}
-  \item{group_da_tol}{Absolute m/z tolerance (Da) used when grouping features. Default 0.0025.}
+  \item{group_mz_tol}{Absolute m/z tolerance (Da) used when grouping features. Default 0.0025.}
   \item{group_rt_tol}{RT tolerance (minutes) used when grouping features. Default 0.05.}
   \item{frequency}{Minimum number of samples in which a feature must appear to be kept. Default 1.}
   \item{cores}{Number of CPU cores to use. Default 1.}
@@ -60,6 +61,7 @@ get_features(
   \item{max_iterations}{Maximum airPLS iterations. \code{0} uses a default.}
   \item{allow_overlap}{Allow overlapping peak boundaries. Default \code{FALSE}.}
   \item{min_snr}{Minimum signal-to-noise ratio. Default 1.}
+  \item{min_r2}{Minimum fit R-squared (Gaussian or EMG) for the artifact filter; \code{0} disables it (keep peaks regardless of shape). Default 0.3.}
 }
 \value{
 A data frame with one row per consensus feature and the following columns:
