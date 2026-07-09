@@ -213,6 +213,7 @@ pub fn find_features(
     let time: Vec<f64> = scan_times.iter().map(|scan| scan.rt).collect();
     let kind = get_spectrum_kind(reader);
     let scans = read_grid_scans(reader, &scan_times, &grid, &opts)?;
+    let grid = keep_masses_with_signal(&grid, &scans, seed_intensity_threshold(&opts), opts.seed_eic_options);
 
     detect_features(&scans, &grid, &time, kind, &opts, cores)
 }
@@ -326,6 +327,34 @@ fn seed_intensity_threshold(opts: &FindFeaturesOptions) -> f64 {
         .as_ref()
         .and_then(|filter| filter.min_intensity)
         .unwrap_or(0.0)
+}
+
+fn keep_masses_with_signal(
+    grid: &[f64],
+    scans: &[Scan],
+    min_intensity: f64,
+    eic_options: EicOptions,
+) -> Vec<f64> {
+    let mut found_masses: Vec<f64> = Vec::new();
+    for scan in scans {
+        for (mass, intensity) in scan.mz.iter().zip(scan.intensity.iter()) {
+            if *intensity >= min_intensity {
+                found_masses.push(*mass);
+            }
+        }
+    }
+    found_masses.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+
+    grid.iter()
+        .copied()
+        .filter(|&mass| {
+            let tolerance = mz_tolerance_for(mass, eic_options);
+            let start = lower_bound(&found_masses, mass - tolerance);
+            found_masses
+                .get(start)
+                .is_some_and(|&found| found <= mass + tolerance)
+        })
+        .collect()
 }
 
 fn eic_row_for_mass(scans: &[Scan], target_mz: f64, options: EicOptions) -> Vec<f64> {
