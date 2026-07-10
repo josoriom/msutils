@@ -216,7 +216,13 @@ pub fn find_features(
     let time: Vec<f64> = scan_times.iter().map(|scan| scan.rt).collect();
     let kind = get_spectrum_kind(reader);
     let scans = read_grid_scans(reader, &scan_times, &grid, &opts)?;
-    let grid = keep_masses_with_signal(&grid, &scans, seed_intensity_threshold(&opts), opts.seed_eic_options);
+    let grid = keep_masses_with_signal(
+        &grid,
+        &scans,
+        seed_intensity_threshold(&opts),
+        opts.seed_eic_options,
+        cores,
+    );
 
     detect_features(&scans, &grid, &time, kind, &opts, cores)
 }
@@ -335,32 +341,103 @@ fn seed_intensity_threshold(opts: &FindFeaturesOptions) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn keep_masses_with_signal(
+pub(crate) fn keep_masses_with_signal(
     grid: &[f64],
     scans: &[Scan],
     min_intensity: f64,
     eic_options: EicOptions,
+    cores: usize,
 ) -> Vec<f64> {
-    let mut found_masses: Vec<f64> = Vec::new();
-    for scan in scans {
-        for (mass, intensity) in scan.mz.iter().zip(scan.intensity.iter()) {
-            if *intensity >= min_intensity {
-                found_masses.push(*mass);
-            }
-        }
-    }
-    found_masses.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+    let low_bounds: Vec<f64> = grid
+        .iter()
+        .map(|&mass| mass - mz_tolerance_for(mass, eic_options))
+        .collect();
+    let high_bounds: Vec<f64> = grid
+        .iter()
+        .map(|&mass| mass + mz_tolerance_for(mass, eic_options))
+        .collect();
+
+    let has_signal = find_masses_with_signal(&low_bounds, &high_bounds, scans, min_intensity, cores);
 
     grid.iter()
         .copied()
-        .filter(|&mass| {
-            let tolerance = mz_tolerance_for(mass, eic_options);
-            let start = lower_bound(&found_masses, mass - tolerance);
-            found_masses
-                .get(start)
-                .is_some_and(|&found| found <= mass + tolerance)
-        })
+        .zip(has_signal)
+        .filter_map(|(mass, found)| found.then_some(mass))
         .collect()
+}
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+fn find_masses_with_signal(
+    low_bounds: &[f64],
+    high_bounds: &[f64],
+    scans: &[Scan],
+    min_intensity: f64,
+    cores: usize,
+) -> Vec<bool> {
+    let width = low_bounds.len();
+    run_with_cores(cores, || {
+        scans
+            .par_iter()
+            .fold(
+                || vec![false; width],
+                |mut found, scan| {
+                    mark_signal_for_scan(scan, low_bounds, high_bounds, min_intensity, &mut found);
+                    found
+                },
+            )
+            .reduce(
+                || vec![false; width],
+                |mut base, other| {
+                    for (slot, value) in base.iter_mut().zip(other) {
+                        *slot |= value;
+                    }
+                    base
+                },
+            )
+    })
+}
+
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+fn find_masses_with_signal(
+    low_bounds: &[f64],
+    high_bounds: &[f64],
+    scans: &[Scan],
+    min_intensity: f64,
+    _cores: usize,
+) -> Vec<bool> {
+    let mut found = vec![false; low_bounds.len()];
+    for scan in scans {
+        mark_signal_for_scan(scan, low_bounds, high_bounds, min_intensity, &mut found);
+    }
+    found
+}
+
+fn mark_signal_for_scan(
+    scan: &Scan,
+    low_bounds: &[f64],
+    high_bounds: &[f64],
+    min_intensity: f64,
+    found: &mut [bool],
+) {
+    let masses = &scan.mz;
+    let intensities = &scan.intensity;
+    if masses.len() != intensities.len() {
+        return;
+    }
+    let mut point = 0usize;
+    for index in 0..found.len() {
+        while point < masses.len()
+            && (masses[point] < low_bounds[index] || intensities[point] < min_intensity)
+        {
+            point += 1;
+        }
+        if point >= masses.len() {
+            break;
+        }
+        if masses[point] <= high_bounds[index] {
+            found[index] = true;
+        }
+    }
 }
 
 fn eic_row_for_mass(scans: &[Scan], target_mz: f64, options: EicOptions) -> Vec<f64> {
@@ -373,35 +450,44 @@ fn eic_row_for_mass(scans: &[Scan], target_mz: f64, options: EicOptions) -> Vec<
         .collect()
 }
 
-fn max_eic_per_mass(scans: &[Scan], masses: &[f64], options: EicOptions) -> Vec<f64> {
-    let lo: Vec<f64> = masses.iter().map(|&m| m - mz_tolerance_for(m, options)).collect();
-    let hi: Vec<f64> = masses.iter().map(|&m| m + mz_tolerance_for(m, options)).collect();
-    let mut max_value = vec![0.0f64; masses.len()];
+pub(crate) fn max_eic_per_mass(scans: &[Scan], masses: &[f64], options: EicOptions) -> Vec<f64> {
+    if masses.is_empty() {
+        return Vec::new();
+    }
+    let window_low: Vec<f64> = masses
+        .iter()
+        .map(|&mass| mass - mz_tolerance_for(mass, options))
+        .collect();
+    let window_high: Vec<f64> = masses
+        .iter()
+        .map(|&mass| mass + mz_tolerance_for(mass, options))
+        .collect();
+    let mut max_sum = vec![0.0f64; masses.len()];
     for scan in scans {
-        let mz = &scan.mz;
-        let intensity = &scan.intensity;
-        let mut left = 0usize;
-        let mut right = 0usize;
-        for i in 0..masses.len() {
-            while left < mz.len() && mz[left] < lo[i] {
-                left += 1;
+        let points = &scan.mz;
+        let intensities = &scan.intensity;
+        if points.len() != intensities.len() {
+            continue;
+        }
+        let mut start = lower_bound(points, window_low[0]);
+        let mut end = start;
+        for index in 0..masses.len() {
+            while start < points.len() && points[start] < window_low[index] {
+                start += 1;
             }
-            if right < left {
-                right = left;
+            if end < start {
+                end = start;
             }
-            while right < mz.len() && mz[right] <= hi[i] {
-                right += 1;
+            while end < points.len() && points[end] <= window_high[index] {
+                end += 1;
             }
-            let mut sum = 0.0;
-            for k in left..right {
-                sum += intensity[k];
-            }
-            if sum > max_value[i] {
-                max_value[i] = sum;
+            let window_sum: f64 = intensities[start..end].iter().sum();
+            if window_sum > max_sum[index] {
+                max_sum[index] = window_sum;
             }
         }
     }
-    max_value
+    max_sum
 }
 
 fn keep_reaching(scans: &[Scan], masses: &[f64], threshold: f64, options: EicOptions) -> Vec<f64> {
@@ -413,13 +499,17 @@ fn keep_reaching(scans: &[Scan], masses: &[f64], threshold: f64, options: EicOpt
         .collect()
 }
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+const CHUNKS_PER_THREAD: usize = 8;
+
 fn filter_by_max(scans: &[Scan], masses: &[f64], threshold: f64, options: EicOptions) -> Vec<f64> {
     if masses.is_empty() {
         return Vec::new();
     }
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     {
-        let chunk = (masses.len() / 64).max(1);
+        let threads = rayon::current_num_threads().max(1);
+        let chunk = masses.len().div_ceil(threads * CHUNKS_PER_THREAD).max(1);
         masses
             .par_chunks(chunk)
             .flat_map_iter(|part| keep_reaching(scans, part, threshold, options))
