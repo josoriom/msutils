@@ -14,7 +14,7 @@ use crate::utilities::{
     calculate_eic::{
         CentroidScan, EicOptions, EicReader, FastError, MS1_LEVEL, SpectrumKind, get_scan_times,
         get_spectrum_kind, lower_bound, mz_tolerance_for, read_mz_window,
-        summed_intensity_in_window, upper_bound, with_eic_apex_intensity,
+        summed_intensity_in_window, with_eic_apex_intensity,
     },
     find_masses::find_masses,
     find_peaks::{FindPeaksOptions, find_peaks},
@@ -126,6 +126,7 @@ pub struct MzScanGrid {
     pub min_mz: f64,
     pub max_mz: f64,
     pub step: f64,
+    pub ppm: f64,
 }
 
 impl Default for MzScanGrid {
@@ -134,6 +135,7 @@ impl Default for MzScanGrid {
             min_mz: 40.0,
             max_mz: 1000.0,
             step: 0.006,
+            ppm: 20.0,
         }
     }
 }
@@ -197,6 +199,7 @@ pub fn find_features(
         opts.mz_scan_grid.min_mz,
         opts.mz_scan_grid.max_mz,
         opts.mz_scan_grid.step,
+        opts.mz_scan_grid.ppm,
     );
     if grid.is_empty() {
         return Err(FeatureError::EmptyGrid);
@@ -253,7 +256,10 @@ pub fn detect_features(
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
         let gpu: GpuArgs = None;
 
-        let candidates = collect_candidates(scans, grid, time, opts, gpu);
+        let candidates = match kind {
+            SpectrumKind::Centroid => grid.to_vec(),
+            SpectrumKind::Profile => collect_candidates(scans, grid, opts, gpu),
+        };
         if candidates.is_empty() {
             return Err(FeatureError::NoCandidateMasses);
         }
@@ -367,67 +373,84 @@ fn eic_row_for_mass(scans: &[Scan], target_mz: f64, options: EicOptions) -> Vec<
         .collect()
 }
 
-fn row_has_peak(
-    eic_row: &[f64],
-    time: &[f64],
-    intensity_threshold: f64,
-    coarse_opts: &FindPeaksOptions,
-) -> bool {
-    let max_intensity = eic_row.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    if max_intensity <= intensity_threshold {
-        return false;
+fn max_eic_per_mass(scans: &[Scan], masses: &[f64], options: EicOptions) -> Vec<f64> {
+    let lo: Vec<f64> = masses.iter().map(|&m| m - mz_tolerance_for(m, options)).collect();
+    let hi: Vec<f64> = masses.iter().map(|&m| m + mz_tolerance_for(m, options)).collect();
+    let mut max_value = vec![0.0f64; masses.len()];
+    for scan in scans {
+        let mz = &scan.mz;
+        let intensity = &scan.intensity;
+        let mut left = 0usize;
+        let mut right = 0usize;
+        for i in 0..masses.len() {
+            while left < mz.len() && mz[left] < lo[i] {
+                left += 1;
+            }
+            if right < left {
+                right = left;
+            }
+            while right < mz.len() && mz[right] <= hi[i] {
+                right += 1;
+            }
+            let mut sum = 0.0;
+            for k in left..right {
+                sum += intensity[k];
+            }
+            if sum > max_value[i] {
+                max_value[i] = sum;
+            }
+        }
     }
-    let data = DataXY {
-        x: time.to_vec(),
-        y: eic_row.to_vec(),
-    };
-    find_peaks(&data, Some(coarse_opts.clone()))
+    max_value
+}
+
+fn keep_reaching(scans: &[Scan], masses: &[f64], threshold: f64, options: EicOptions) -> Vec<f64> {
+    let max_value = max_eic_per_mass(scans, masses, options);
+    masses
         .iter()
-        .any(|peak| peak.intensity >= intensity_threshold)
+        .zip(max_value)
+        .filter_map(|(&mass, value)| if value > threshold { Some(mass) } else { None })
+        .collect()
+}
+
+fn filter_by_max(scans: &[Scan], masses: &[f64], threshold: f64, options: EicOptions) -> Vec<f64> {
+    if masses.is_empty() {
+        return Vec::new();
+    }
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+    {
+        let chunk = (masses.len() / 64).max(1);
+        masses
+            .par_chunks(chunk)
+            .flat_map_iter(|part| keep_reaching(scans, part, threshold, options))
+            .collect()
+    }
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+    {
+        keep_reaching(scans, masses, threshold, options)
+    }
 }
 
 fn collect_candidates(
     scans: &[Scan],
     grid: &[f64],
-    time: &[f64],
     opts: &FindFeaturesOptions,
     gpu: GpuArgs<'_>,
 ) -> Vec<f64> {
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     if let Some((context, batch)) = gpu {
-        return collect_candidates_gpu(context, batch, scans, grid, time, opts);
+        return collect_candidates_gpu(context, batch, scans, grid, opts);
     }
 
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     let _ = gpu;
 
-    collect_candidates_cpu(scans, grid, time, opts)
+    collect_candidates_cpu(scans, grid, opts)
 }
 
-fn collect_candidates_cpu(
-    scans: &[Scan],
-    grid: &[f64],
-    time: &[f64],
-    opts: &FindFeaturesOptions,
-) -> Vec<f64> {
-    let coarse_opts = build_coarse_opts(opts);
-    let intensity_threshold = seed_intensity_threshold(opts);
-
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    let candidate_iter = grid.par_iter();
-    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-    let candidate_iter = grid.iter();
-
-    candidate_iter
-        .filter_map(|&target_mz| {
-            let eic_row = eic_row_for_mass(scans, target_mz, opts.seed_eic_options);
-            if row_has_peak(&eic_row, time, intensity_threshold, &coarse_opts) {
-                Some(target_mz)
-            } else {
-                None
-            }
-        })
-        .collect()
+fn collect_candidates_cpu(scans: &[Scan], grid: &[f64], opts: &FindFeaturesOptions) -> Vec<f64> {
+    let threshold = seed_intensity_threshold(opts);
+    filter_by_max(scans, grid, threshold, opts.seed_eic_options)
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
@@ -436,7 +459,6 @@ fn collect_candidates_gpu(
     batch: &GpuBatchOptions,
     scans: &[Scan],
     grid: &[f64],
-    time: &[f64],
     opts: &FindFeaturesOptions,
 ) -> Vec<f64> {
     let flattened = FlattenedScans::from_windows(scans);
@@ -446,20 +468,14 @@ fn collect_candidates_gpu(
         Ok(masses) => masses,
         Err(error) => {
             eprintln!("[find_features] GPU failed: {error}, using CPU");
-            return collect_candidates_cpu(scans, grid, time, opts);
+            return collect_candidates_cpu(scans, grid, opts);
         }
     };
 
-    let coarse_opts = build_coarse_opts(opts);
-    let intensity_threshold = seed_intensity_threshold(opts);
-
-    survivors
-        .into_par_iter()
-        .filter(|&target_mz| {
-            let eic_row = eic_row_for_mass(scans, target_mz, opts.seed_eic_options);
-            row_has_peak(&eic_row, time, intensity_threshold, &coarse_opts)
-        })
-        .collect()
+    let threshold = seed_intensity_threshold(opts);
+    let mut survivors = survivors;
+    survivors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
+    filter_by_max(scans, &survivors, threshold, opts.seed_eic_options)
 }
 
 fn extract_features(
@@ -477,8 +493,7 @@ fn extract_features(
         .unwrap_or(opts.min_seed_width_points);
 
     let extract_one = |&target_mz: &f64| -> Vec<Feature> {
-        let center_mz = recenter_mass(scans, target_mz, opts.final_eic_options);
-        let eic = eic_row_for_mass(scans, center_mz, opts.final_eic_options);
+        let eic = eic_row_for_mass(scans, target_mz, opts.final_eic_options);
         let data = DataXY {
             x: time.to_vec(),
             y: eic,
@@ -488,15 +503,12 @@ fn extract_features(
             .filter(|peak| min_width == 0 || peak.n_points >= min_width)
             .map(|peak| {
                 let peak = with_eic_apex_intensity(&data.x, &data.y, peak);
-                let measured_mz = peak_apex_mz(
-                    scans,
-                    time,
-                    peak.from,
-                    peak.to,
-                    center_mz,
-                    opts.final_eic_options,
-                    kind,
-                );
+                let measured_mz = match apex_scan_index(&data.x, &data.y, peak.from, peak.to) {
+                    Some(index) => {
+                        peak_apex_mz(&scans[index], target_mz, opts.final_eic_options, kind)
+                    }
+                    None => target_mz,
+                };
                 Feature {
                     mz: measured_mz,
                     rt: peak.rt,
@@ -521,59 +533,26 @@ fn extract_features(
     }
 }
 
-fn recenter_mass(scans: &[Scan], target_mz: f64, options: EicOptions) -> f64 {
-    let tolerance = mz_tolerance_for(target_mz, options);
-    let low = target_mz - tolerance;
-    let high = target_mz + tolerance;
-
-    let mut weighted = 0.0f64;
-    let mut total = 0.0f64;
-    for scan in scans {
-        let start = lower_bound(&scan.mz, low);
-        let end = upper_bound(&scan.mz, high);
-        for k in start..end {
-            weighted += scan.mz[k] * scan.intensity[k];
-            total += scan.intensity[k];
-        }
-    }
-
-    if total > 0.0 {
-        weighted / total
-    } else {
-        target_mz
-    }
-}
-
-fn peak_apex_mz(
-    scans: &[Scan],
-    time: &[f64],
-    rt_from: f64,
-    rt_to: f64,
-    center_mz: f64,
-    options: EicOptions,
-    kind: SpectrumKind,
-) -> f64 {
-    let tolerance = mz_tolerance_for(center_mz, options);
-    let mz_lo = center_mz - tolerance;
-    let mz_hi = center_mz + tolerance;
-
-    let mut apex_scan: Option<&Scan> = None;
-    let mut best_intensity = 0.0;
-    for (scan, &rt) in scans.iter().zip(time.iter()) {
+fn apex_scan_index(time: &[f64], eic: &[f64], rt_from: f64, rt_to: f64) -> Option<usize> {
+    let mut apex = None;
+    let mut best = 0.0;
+    for (index, &rt) in time.iter().enumerate() {
         if rt < rt_from || rt > rt_to {
             continue;
         }
-        let top = summed_intensity_in_window(&scan.mz, &scan.intensity, mz_lo, mz_hi);
-        if top > best_intensity {
-            best_intensity = top;
-            apex_scan = Some(scan);
+        if eic[index] > best {
+            best = eic[index];
+            apex = Some(index);
         }
     }
+    apex
+}
 
-    let Some(scan) = apex_scan else {
-        return center_mz;
-    };
-    find_masses(&scan.mz, &scan.intensity, mz_lo, mz_hi, kind)
+fn peak_apex_mz(apex_scan: &Scan, center_mz: f64, options: EicOptions, kind: SpectrumKind) -> f64 {
+    let tolerance = mz_tolerance_for(center_mz, options);
+    let mz_lo = center_mz - tolerance;
+    let mz_hi = center_mz + tolerance;
+    find_masses(&apex_scan.mz, &apex_scan.intensity, mz_lo, mz_hi, kind)
         .into_iter()
         .min_by(|a, b| {
             (a.mz - center_mz)
@@ -583,17 +562,6 @@ fn peak_apex_mz(
         })
         .map(|mass| mass.mz)
         .unwrap_or(center_mz)
-}
-
-fn build_coarse_opts(config: &FindFeaturesOptions) -> FindPeaksOptions {
-    let mut coarse = config.peak_options.clone();
-    let mut filter = coarse.filter.unwrap_or_default();
-    filter.min_peak_width_points = Some(config.min_seed_width_points);
-    coarse.filter = Some(filter);
-    if let Some(artifact) = coarse.artifact_filter.as_mut() {
-        artifact.min_r2 = 0.0;
-    }
-    coarse
 }
 
 pub(crate) fn deduplicate_masses(mut masses: Vec<f64>, opts: EicOptions) -> Vec<f64> {
@@ -825,7 +793,7 @@ pub(crate) fn dedup_points(
         .collect()
 }
 
-pub(crate) fn build_mz_grid(start: f64, end: f64, step_da: f64) -> Vec<f64> {
+pub(crate) fn build_mz_grid(start: f64, end: f64, step_da: f64, step_ppm: f64) -> Vec<f64> {
     let (lo, hi) = if start <= end {
         (start, end)
     } else {
@@ -842,7 +810,8 @@ pub(crate) fn build_mz_grid(start: f64, end: f64, step_da: f64) -> Vec<f64> {
     let mut m = lo;
     while m <= hi {
         xs.push(m);
-        m += step_da;
+        let step = step_da.max(step_ppm * m * 1e-6);
+        m += step;
     }
     const EPS: f64 = 1e-9;
     if let Some(last) = xs.last_mut() {

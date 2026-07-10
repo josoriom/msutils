@@ -40,7 +40,7 @@ mod tests {
 
     #[test]
     fn test_build_mz_grid_normal() {
-        let grid = build_mz_grid(100.0, 102.0, 1.0);
+        let grid = build_mz_grid(100.0, 102.0, 1.0, 0.0);
         assert!(grid.len() >= 3);
         assert!(*grid.first().unwrap() >= 100.0);
         assert_eq!(*grid.last().unwrap(), 102.0);
@@ -48,36 +48,36 @@ mod tests {
 
     #[test]
     fn test_build_mz_grid_nan_returns_empty() {
-        assert!(build_mz_grid(f64::NAN, 100.0, 1.0).is_empty());
+        assert!(build_mz_grid(f64::NAN, 100.0, 1.0, 0.0).is_empty());
     }
 
     #[test]
     fn test_build_mz_grid_equal_bounds_returns_empty() {
-        assert!(build_mz_grid(100.0, 100.0, 1.0).is_empty());
+        assert!(build_mz_grid(100.0, 100.0, 1.0, 0.0).is_empty());
     }
 
     #[test]
     fn test_build_mz_grid_reversed_bounds_same_as_normal() {
-        let forward = build_mz_grid(100.0, 102.0, 1.0);
-        let reversed = build_mz_grid(102.0, 100.0, 1.0);
+        let forward = build_mz_grid(100.0, 102.0, 1.0, 0.0);
+        let reversed = build_mz_grid(102.0, 100.0, 1.0, 0.0);
         assert_eq!(forward, reversed);
     }
 
     #[test]
     fn test_build_mz_grid_infinite_step_returns_endpoints() {
-        let grid = build_mz_grid(100.0, 200.0, f64::INFINITY);
+        let grid = build_mz_grid(100.0, 200.0, f64::INFINITY, 0.0);
         assert_eq!(grid, vec![100.0, 200.0]);
     }
 
     #[test]
     fn test_build_mz_grid_last_point_is_exact_end() {
-        let grid = build_mz_grid(100.0, 101.0, 0.5);
+        let grid = build_mz_grid(100.0, 101.0, 0.5, 0.0);
         assert_eq!(*grid.last().unwrap(), 101.0);
     }
 
     #[test]
     fn test_build_mz_grid_step_larger_than_range_returns_endpoints() {
-        let grid = build_mz_grid(100.0, 101.0, 10.0);
+        let grid = build_mz_grid(100.0, 101.0, 10.0, 0.0);
         assert_eq!(*grid.first().unwrap(), 100.0);
         assert_eq!(*grid.last().unwrap(), 101.0);
     }

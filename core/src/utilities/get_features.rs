@@ -120,6 +120,7 @@ pub struct AlignmentOptions {
     pub mz_tolerance: MzTolerance,
     pub rt_tolerance: f64,
     pub min_samples: usize,
+    pub min_real_support: usize,
     pub eic_options: EicOptions,
     pub peak_options: Option<FindPeaksOptions>,
     pub mz_estimator: MzEstimatorKind,
@@ -135,6 +136,7 @@ impl Default for AlignmentOptions {
             },
             rt_tolerance: 0.05,
             min_samples: 1,
+            min_real_support: 1,
             eic_options: EicOptions {
                 ppm_tolerance: 20.0,
                 mz_tolerance: 0.005,
@@ -340,7 +342,12 @@ pub fn get_features(
 
     let tagged = collect_tagged(&mut datasets);
     let clusters = run_with_cores(cores, || clusterer.cluster(tagged));
-    let mut slots = prepare_slots(clusters, datasets.len(), alignment_config.rt_tolerance);
+    let mut slots = prepare_slots(
+        clusters,
+        datasets.len(),
+        alignment_config.rt_tolerance,
+        alignment_config.min_real_support,
+    );
 
     let estimator = make_estimator(&alignment_config.mz_estimator);
 
@@ -389,11 +396,20 @@ fn collect_tagged(datasets: &mut [SampleDataset]) -> Vec<TaggedFeature> {
         .collect()
 }
 
-fn prepare_slots(clusters: Vec<Cluster>, n_samples: usize, rt_tol: f64) -> Vec<ClusterSlot> {
+fn prepare_slots(
+    clusters: Vec<Cluster>,
+    n_samples: usize,
+    rt_tol: f64,
+    min_real_support: usize,
+) -> Vec<ClusterSlot> {
     clusters
         .into_iter()
         .filter_map(|cluster| {
             let features = assign_best_per_sample(cluster, n_samples);
+            let real_support = features.iter().filter(|feature| feature.is_some()).count();
+            if real_support < min_real_support {
+                return None;
+            }
             let bounds = compute_search_bounds(&features, rt_tol)?;
             Some(ClusterSlot {
                 apex_values: vec![None; features.len()],
