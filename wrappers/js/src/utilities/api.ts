@@ -48,20 +48,20 @@ export type {
 };
 
 const DEFAULTS = {
-  eic: { mzTolerance: 0.005, ppmTolerance: 20.0 },
+  eic: { mzTolerance: 0.005, ppmTolerance: 10.0 },
   grid: { start: 40, end: 1000, stepSize: 0.005 },
   grouping: {
-    ppmTolerance: 10.0,
+    ppmTolerance: 5.0,
     mzTolerance: 0.0025,
     rtTolerance: 0.05,
     frequency: 1,
   },
   findPeak: {
-    minIntensity: 150,
-    minPeakWidthPoints: 5,
+    minIntensity: 500,
+    minPeakWidthPoints: 3,
     autoNoise: true,
     autoBaseline: true,
-    minSnr: 1,
+    minSnr: 2,
   },
 } as const;
 
@@ -177,7 +177,7 @@ export function ionToMzml(file: SampleFile): string {
  * Encode a sample as compressed ion binary bytes.
  *
  * @param file - Loaded sample file.
- * @param options.level - Compression level, 0 (none) to 22 (max). Default 5.
+ * @param options.level - Compression level, 0 (none) to 22 (max). Default 12.
  * @param options.f32Compress - Compress intensity values to 32-bit float. Default false.
  * @returns Raw ion binary bytes.
  */
@@ -186,7 +186,7 @@ export function mzmlToIon(
   options: { level?: number; f32Compress?: boolean } = {},
 ): Uint8Array {
   assertFile(file, "mzmlToIon");
-  const { level = 5, f32Compress = false } = options;
+  const { level = 12, f32Compress = false } = options;
   if (
     typeof level !== "number" ||
     !Number.isFinite(level) ||
@@ -200,6 +200,10 @@ export function mzmlToIon(
     throw new TypeError("mzmlToIon: f32Compress must be a boolean");
   }
   return backend().fileToBin(file._handle!, level, f32Compress);
+}
+
+export function mzmlToIonFile(): never {
+  throw new Error("mzmlToIonFile is not implemented in the JS wrapper");
 }
 
 /**
@@ -294,6 +298,14 @@ export function getPeak(
   return backend().getPeak(x, y, rt, range, opts);
 }
 
+export function fitPeak(): never {
+  throw new Error("fitPeak is not implemented in the JS wrapper");
+}
+
+export function drawPeak(): never {
+  throw new Error("drawPeak is not implemented in the JS wrapper");
+}
+
 /**
  * Estimate the noise level of an intensity array.
  *
@@ -301,7 +313,8 @@ export function getPeak(
  * @returns Estimated noise level.
  */
 export function findNoiseLevel(y: Float64Array | Float32Array): number {
-  return backend().findNoiseLevel(y);
+  const y32 = y instanceof Float32Array ? y : new Float32Array(y);
+  return backend().findNoiseLevel(y32);
 }
 
 /**
@@ -521,6 +534,7 @@ export function getPeaksFromChrom(
 
 /**
  * Detect all chromatographic features across an m/z grid.
+ * Node.js only — not available in the WASM build.
  *
  * @param file - Loaded sample file.
  * @param fromTo - Retention time range `{ from, to }` in minutes.
@@ -532,6 +546,10 @@ export function findFeatures(
   fromTo: FromTo,
   options: FindFeaturesOptions = {},
 ): Feature[] {
+  const back = backend();
+  if (!back.findFeatures) {
+    throw new Error("findFeatures is not supported in the WASM build");
+  }
   assertFile(file, "findFeatures");
   const {
     eic = DEFAULTS.eic,
@@ -564,7 +582,7 @@ export function findFeatures(
     grid.stepSize > 0
       ? grid.stepSize
       : NaN;
-  return backend().findFeatures(
+  return back.findFeatures!(
     file._handle!,
     from,
     to,
@@ -632,7 +650,7 @@ export function findFeature(
     +scanMz,
     +eicPpm,
     +eicMz,
-    options.findPeak,
+    options.findPeak ?? DEFAULTS.findPeak,
   );
 }
 

@@ -195,18 +195,39 @@ def _bundled_lib_path() -> Optional[Path]:
     return None
 
 
-def _start_stderr_capture():
+_capture_started = False
+_saved_stderr_fd: Optional[int] = None
+
+
+def start_stderr_capture() -> None:
+    global _capture_started, _saved_stderr_fd
+    if _capture_started:
+        return
+    saved = os.dup(2)
     r_fd, w_fd = os.pipe()
     os.dup2(w_fd, 2)
     os.close(w_fd)
+    _saved_stderr_fd = saved
+    _capture_started = True
     def reader():
         with os.fdopen(r_fd, 'r', errors='replace') as f:
             for line in f:
                 print(line, end='', file=sys.stdout, flush=True)
     threading.Thread(target=reader, daemon=True).start()
 
+
+def stop_stderr_capture() -> None:
+    global _capture_started, _saved_stderr_fd
+    if not _capture_started or _saved_stderr_fd is None:
+        return
+    saved = _saved_stderr_fd
+    os.dup2(saved, 2)
+    os.close(saved)
+    _saved_stderr_fd = None
+    _capture_started = False
+
+
 def load_library(path: Optional[str] = None) -> tuple[ctypes.CDLL, _ABI]:
-    _start_stderr_capture()
     if path is None:
         path = os.environ.get("MSUTILS_LIB")
     if path is None:

@@ -95,14 +95,19 @@ get_peak <- function(
   if (!is.logical(auto_noise) || length(auto_noise) != 1 || is.na(auto_noise)) stop("auto_noise must be logical TRUE/FALSE")
   if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
   if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
-  opt <- list(
+  filter_supplied <- !(missing(min_integral) && missing(min_intensity) &&
+    missing(min_peak_width_points) && missing(noise) && missing(auto_noise) &&
+    missing(auto_baseline) && missing(lambda) && missing(max_iterations) &&
+    missing(allow_overlap) && missing(min_snr) && missing(min_r2) && missing(shape) &&
+    missing(kernel_size))
+  opt <- if (filter_supplied) list(
     min_integral=min_integral, min_intensity=min_intensity,
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
     allow_overlap=allow_overlap, min_snr=min_snr, min_r2=min_r2, shape=shape,
     kernel_size=kernel_size
-  )
+  ) else NULL
   out_json <- .Call("C_get_peak", as.numeric(x), as.numeric(y), as.numeric(rt), as.numeric(range), opt, PACKAGE="msutils")
   jsonlite::fromJSON(out_json, simplifyVector=TRUE)
 }
@@ -137,14 +142,19 @@ get_peaks_from_eic <- function(
   if (!is.logical(auto_noise) || length(auto_noise) != 1 || is.na(auto_noise)) stop("auto_noise must be logical TRUE/FALSE")
   if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
   if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
-  opt <- list(
+  filter_supplied <- !(missing(min_integral) && missing(min_intensity) &&
+    missing(min_peak_width_points) && missing(noise) && missing(auto_noise) &&
+    missing(auto_baseline) && missing(lambda) && missing(max_iterations) &&
+    missing(allow_overlap) && missing(min_snr) && missing(min_r2) && missing(shape) &&
+    missing(kernel_size))
+  opt <- if (filter_supplied) list(
     min_integral=min_integral, min_intensity=min_intensity,
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
     allow_overlap=allow_overlap, min_snr=min_snr, min_r2=min_r2, shape=shape,
     kernel_size=kernel_size
-  )
+  ) else NULL
   cores <- .validate_cores(cores)
   out_json <- .Call("C_get_peaks_from_eic",
     bin, as.numeric(rts), as.numeric(mzs), as.numeric(ranges), as.character(id),
@@ -184,13 +194,17 @@ get_peaks_from_chrom <- function(
   if (!is.logical(auto_noise) || length(auto_noise) != 1 || is.na(auto_noise)) stop("auto_noise must be logical TRUE/FALSE")
   if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
   if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
-  opt <- list(
+  filter_supplied <- !(missing(min_integral) && missing(min_intensity) &&
+    missing(min_peak_width_points) && missing(noise) && missing(auto_noise) &&
+    missing(auto_baseline) && missing(lambda) && missing(max_iterations) &&
+    missing(allow_overlap) && missing(min_snr) && missing(min_r2) && missing(shape))
+  opt <- if (filter_supplied) list(
     min_integral=min_integral, min_intensity=min_intensity,
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
     allow_overlap=allow_overlap, min_snr=min_snr, min_r2=min_r2, shape=shape
-  )
+  ) else NULL
   cores <- .validate_cores(cores)
   out_json <- .Call("C_get_peaks_from_chrom",
     bin, idxs, rts, wins, opt, as.integer(cores), PACKAGE="msutils"
@@ -237,14 +251,19 @@ find_peaks <- function(
   if (!is.logical(auto_noise) || length(auto_noise) != 1 || is.na(auto_noise)) stop("auto_noise must be logical TRUE/FALSE")
   if (!is.logical(allow_overlap) || length(allow_overlap) != 1 || is.na(allow_overlap)) stop("allow_overlap must be logical TRUE/FALSE")
   if (!is.logical(auto_baseline) || length(auto_baseline) != 1 || is.na(auto_baseline)) stop("auto_baseline must be logical TRUE/FALSE")
-  opt <- list(
+  filter_supplied <- !(missing(min_integral) && missing(min_intensity) &&
+    missing(min_peak_width_points) && missing(noise) && missing(auto_noise) &&
+    missing(auto_baseline) && missing(lambda) && missing(max_iterations) &&
+    missing(allow_overlap) && missing(min_snr) && missing(min_r2) && missing(shape) &&
+    missing(kernel_size))
+  opt <- if (filter_supplied) list(
     min_integral=min_integral, min_intensity=min_intensity,
     min_peak_width_points=min_peak_width_points, noise=noise,
     auto_noise=auto_noise, auto_baseline=auto_baseline,
     lambda=lambda, max_iterations=max_iterations,
     allow_overlap=allow_overlap, min_snr=min_snr, min_r2=min_r2, shape=shape,
     kernel_size=kernel_size
-  )
+  ) else NULL
   out_json <- .Call("C_find_peaks", as.numeric(x), as.numeric(y), opt, PACKAGE="msutils")
   jsonlite::fromJSON(out_json, simplifyVector=TRUE)
 }
@@ -257,6 +276,8 @@ calculate_baseline <- function(y, lambda=0L, max_iterations=0L) {
         as.integer(max_iterations),
         PACKAGE="msutils")
 }
+
+find_noise_level <- function(y) .Call("C_find_noise_level", as.numeric(y), PACKAGE="msutils")
 
 .shape_code <- function(shape) {
   s <- tolower(as.character(shape))
@@ -287,7 +308,7 @@ draw_peak <- function(x, params) {
 find_feature <- function(
   bin,
   rt, mz, window, id = NULL,
-  scan_ppm, scan_mz, eic_ppm, eic_mz,
+  scan_ppm = 10, scan_mz = 0.003, eic_ppm = 20, eic_mz = 0.005,
   cores                 = 1L,
   min_integral          = NaN,
   min_intensity         = .DEFAULTS$min_intensity,
@@ -408,7 +429,11 @@ find_features <- function(
 }
 
 parse_ion <- function(input, max_cache_size = 0) {
-  if (is.character(input)) return(parse_ion_path(input, max_cache_size))
+  if (is.character(input)) {
+    looks_like_url <- length(input) == 1 && !is.na(input) && grepl("^https?://", input)
+    if (looks_like_url) return(parse_ion_url(input, max_cache_size))
+    return(parse_ion_path(input, max_cache_size))
+  }
   if (!is.raw(input)) stop("`input` must be a file path or a raw vector of ion bytes")
   if (!is.numeric(max_cache_size) || length(max_cache_size) != 1 || is.na(max_cache_size) || max_cache_size < 0)
     stop("`max_cache_size` must be a single non-negative number")
@@ -586,3 +611,5 @@ ion_to_df <- function(bin) {
   root$run <- run
   root
 }
+
+get_ion_image <- function(...) stop("get_ion_image is not implemented in the R wrapper")

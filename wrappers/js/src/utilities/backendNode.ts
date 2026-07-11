@@ -212,8 +212,8 @@ export class NodeBackend implements Backend {
   }
 
   findNoiseLevel(y: Float64Array | Float32Array): number {
-    const y64 = y instanceof Float64Array ? y : new Float64Array(y);
-    return this.native.findNoiseLevel(y64) as number;
+    const y32 = y instanceof Float32Array ? y : new Float32Array(y);
+    return this.native.findNoiseLevel(y32) as number;
   }
 
   calculateBaseline(

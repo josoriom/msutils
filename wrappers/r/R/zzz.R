@@ -37,6 +37,8 @@
 }
 
 .onUnload <- function(libpath) {
+  gc()
+  try(.Call("C_unbind_rust", NULL, PACKAGE = "msutils"), silent = TRUE)
   p <- getOption("msutils.rust_dll_path", NULL)
   if (!is.null(p) && nzchar(p) && file.exists(p)) try(suppressWarnings(dyn.unload(p)), silent = TRUE)
   options(msutils.rust_dll_path = NULL)

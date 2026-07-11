@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from msutils._bridge import _ABI, load_library
+from msutils._bridge import _ABI, load_library, start_stderr_capture, stop_stderr_capture
 from msutils import api as _api
 from msutils.api import (
     parse_mzml,
@@ -24,6 +24,7 @@ from msutils.api import (
     find_features,
     find_feature,
     get_features,
+    get_ion_image,
 )
 from msutils.file import SampleFile
 from msutils._pack import pack_peak_options, encode_target_ids, unpack_targets
@@ -52,11 +53,14 @@ __all__ = [
     "find_features",
     "find_feature",
     "get_features",
+    "get_ion_image",
     "SampleFile",
     "pack_peak_options",
     "encode_target_ids",
     "unpack_targets",
     "to_cores",
+    "start_stderr_capture",
+    "stop_stderr_capture",
 ]
 
 
@@ -127,6 +131,9 @@ class MsUtils:
 
     def get_features(self, directory_path: str, from_rt: float, to_rt: float, *, eic=None, grid=None, grouping=None, options=None, cores: int = 1):
         return get_features(directory_path, from_rt, to_rt, eic=eic, grid=grid, grouping=grouping, options=options, cores=cores)
+
+    def get_ion_image(self, *args, **kwargs):
+        return get_ion_image(*args, **kwargs)
 
     def __repr__(self) -> str:
         return "<MsUtils ready>"

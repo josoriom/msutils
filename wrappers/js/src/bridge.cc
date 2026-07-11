@@ -50,7 +50,7 @@ typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *);
 typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *);
 typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_calculate_eic)(const MzML *, double, double, double, double, double, Buf *, Buf *);
-typedef double (*fn_find_noise_level)(const double *, size_t);
+typedef float (*fn_find_noise_level)(const float *, size_t);
 typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakOptions *, size_t, Buf *);
 typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakOptions *, size_t, Buf *);
 typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakOptions *, Buf *);
@@ -94,6 +94,7 @@ static msabi_t ABI{};
 static DLIB LIB_HANDLE = NULL;
 
 static std::atomic<size_t> OUTSTANDING_EXTERNAL{0};
+static std::atomic<size_t> OUTSTANDING_HANDLES{0};
 
 struct OwnedBuf
 {
@@ -162,6 +163,7 @@ static void FinalizeMzML(Napi::Env env, MzMLWrapper *wrapper)
     {
       ABI.free_mzml(wrapper->ptr);
       Napi::MemoryManagement::AdjustExternalMemory(env, -(int64_t)wrapper->estimated_size);
+      OUTSTANDING_HANDLES.fetch_sub(1, std::memory_order_relaxed);
     }
     delete wrapper;
   }
@@ -180,6 +182,7 @@ static Napi::Value DisposeMzML(const Napi::CallbackInfo &info)
       ABI.free_mzml(w->ptr);
     Napi::MemoryManagement::AdjustExternalMemory(env, -(int64_t)w->estimated_size);
     w->ptr = nullptr;
+    OUTSTANDING_HANDLES.fetch_sub(1, std::memory_order_relaxed);
   }
   return env.Undefined();
 }
@@ -265,8 +268,6 @@ static int abi_load(const char *path, const char **err)
     goto fail;
 
   ABI.calculate_baseline = (fn_calculate_baseline)DLSYM(LIB_HANDLE, "calculate_baseline");
-  if (!ABI.calculate_baseline)
-    ABI.calculate_baseline = (fn_calculate_baseline)DLSYM(LIB_HANDLE, "calculate_baseline_v2");
 
   if (resolve_required((void **)&ABI.find_features, "find_features"))
     goto fail;
@@ -318,6 +319,8 @@ static const char *CodeMessage(int32_t code)
     return "parse error";
   if (code == 5)
     return "encode error";
+  if (code == 6)
+    return "fast EIC path unavailable: this .ion file has no usable spectrum bounds (A3); re-encode it with the current Ionic to use the fast EIC path";
   return "unknown";
 }
 
@@ -343,8 +346,8 @@ static Napi::Value ThrowRc(Napi::Env env, const char *api, int32_t rc)
 static Napi::Buffer<uint8_t> TakeBuffer(Napi::Env env, Buf *buf)
 {
   ExternalBuf *ext = new ExternalBuf{buf->ptr, buf->len};
-  OUTSTANDING_EXTERNAL.fetch_add(1, std::memory_order_relaxed);
   Napi::Buffer<uint8_t> out = Napi::Buffer<uint8_t>::New(env, (uint8_t *)ext->ptr, ext->len, FinalizeExternalBuffer, ext);
+  OUTSTANDING_EXTERNAL.fetch_add(1, std::memory_order_relaxed);
   buf->ptr = nullptr;
   buf->len = 0;
   return out;
@@ -353,8 +356,8 @@ static Napi::Buffer<uint8_t> TakeBuffer(Napi::Env env, Buf *buf)
 static Napi::ArrayBuffer TakeArrayBuffer(Napi::Env env, Buf *buf)
 {
   ExternalBuf *ext = new ExternalBuf{buf->ptr, buf->len};
-  OUTSTANDING_EXTERNAL.fetch_add(1, std::memory_order_relaxed);
   Napi::ArrayBuffer ab = Napi::ArrayBuffer::New(env, (void *)ext->ptr, ext->len, FinalizeExternalArrayBuffer, ext);
+  OUTSTANDING_EXTERNAL.fetch_add(1, std::memory_order_relaxed);
   buf->ptr = nullptr;
   buf->len = 0;
   return ab;
@@ -440,6 +443,11 @@ static const double *Float64Ptr(const Napi::Float64Array &arr)
   return (const double *)((const uint8_t *)arr.ArrayBuffer().Data() + arr.ByteOffset());
 }
 
+static const float *Float32Ptr(const Napi::Float32Array &arr)
+{
+  return (const float *)((const uint8_t *)arr.ArrayBuffer().Data() + arr.ByteOffset());
+}
+
 static const uint32_t *Uint32Ptr(const Napi::Uint32Array &arr)
 {
   return (const uint32_t *)((const uint8_t *)arr.ArrayBuffer().Data() + arr.ByteOffset());
@@ -521,9 +529,9 @@ static Napi::Value Bind(const Napi::CallbackInfo &info)
     return env.Undefined();
   }
 
-  if (OUTSTANDING_EXTERNAL.load(std::memory_order_relaxed) != 0)
+  if (OUTSTANDING_EXTERNAL.load(std::memory_order_relaxed) != 0 || OUTSTANDING_HANDLES.load(std::memory_order_relaxed) != 0)
   {
-    Napi::Error::New(env, "cannot rebind native library while external buffers are still alive").ThrowAsJavaScriptException();
+    Napi::Error::New(env, "cannot rebind native library while external buffers or parsed file handles are still alive").ThrowAsJavaScriptException();
     return env.Undefined();
   }
 
@@ -557,7 +565,9 @@ static Napi::Value ParseMzML(const Napi::CallbackInfo &info)
 
   MzMLWrapper *w = new MzMLWrapper{handle, input_len};
   Napi::MemoryManagement::AdjustExternalMemory(env, (int64_t)input_len);
-  return Napi::External<MzMLWrapper>::New(env, w, FinalizeMzML);
+  Napi::External<MzMLWrapper> external = Napi::External<MzMLWrapper>::New(env, w, FinalizeMzML);
+  OUTSTANDING_HANDLES.fetch_add(1, std::memory_order_relaxed);
+  return external;
 }
 
 static Napi::Value BinToJson(const Napi::CallbackInfo &info)
@@ -687,13 +697,13 @@ static Napi::Value FindNoiseLevel(const Napi::CallbackInfo &info)
     return env.Undefined();
   if (info.Length() < 1 || !info[0].IsTypedArray())
   {
-    Napi::TypeError::New(env, "expected: (Float64Array y)").ThrowAsJavaScriptException();
+    Napi::TypeError::New(env, "expected: (Float32Array y)").ThrowAsJavaScriptException();
     return env.Undefined();
   }
 
-  Napi::Float64Array y_arr = info[0].As<Napi::Float64Array>();
-  const double *y_ptr = Float64Ptr(y_arr);
-  double value = ABI.find_noise_level(y_ptr, y_arr.ElementLength());
+  Napi::Float32Array y_arr = info[0].As<Napi::Float32Array>();
+  const float *y_ptr = Float32Ptr(y_arr);
+  float value = ABI.find_noise_level(y_ptr, y_arr.ElementLength());
   return Napi::Number::New(env, value);
 }
 
@@ -717,7 +727,11 @@ static Napi::Value GetPeaksFromEic(const Napi::CallbackInfo &info)
   Napi::Float64Array rng = info[3].As<Napi::Float64Array>();
   size_t count = rts.ElementLength();
   PackedIds packed;
-  BuildPackedIds(env, info[4], count, &packed);
+  if (!BuildPackedIds(env, info[4], count, &packed))
+  {
+    Napi::TypeError::New(env, "ids length must equal target count").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
   double f_l = info[5].As<Napi::Number>().DoubleValue();
   double t_r = info[6].As<Napi::Number>().DoubleValue();
   CPeakOptions opts;
@@ -893,7 +907,11 @@ static Napi::Value FindFeature(const Napi::CallbackInfo &info)
   Napi::Float64Array wins = info[3].As<Napi::Float64Array>();
   size_t count = rts.ElementLength();
   PackedIds packed;
-  BuildPackedIds(env, info[4], count, &packed);
+  if (!BuildPackedIds(env, info[4], count, &packed))
+  {
+    Napi::TypeError::New(env, "ids length must equal target count").ThrowAsJavaScriptException();
+    return env.Undefined();
+  }
   size_t cores = info[5].As<Napi::Number>().Uint32Value();
   double s_ppm = info[6].As<Napi::Number>().DoubleValue();
   double s_mz = info[7].As<Napi::Number>().DoubleValue();
@@ -946,7 +964,9 @@ static Napi::Value ParseBin(const Napi::CallbackInfo &info)
 
   MzMLWrapper *w = new MzMLWrapper{handle, input_len};
   Napi::MemoryManagement::AdjustExternalMemory(env, (int64_t)input_len);
-  return Napi::External<MzMLWrapper>::New(env, w, FinalizeMzML);
+  Napi::External<MzMLWrapper> external = Napi::External<MzMLWrapper>::New(env, w, FinalizeMzML);
+  OUTSTANDING_HANDLES.fetch_add(1, std::memory_order_relaxed);
+  return external;
 }
 
 static Napi::Value ParseIonPath(const Napi::CallbackInfo &info)
@@ -972,7 +992,9 @@ static Napi::Value ParseIonPath(const Napi::CallbackInfo &info)
     return ThrowRc(env, "parse_ion_path", code);
 
   MzMLWrapper *file_wrapper = new MzMLWrapper{file_handle, 0};
-  return Napi::External<MzMLWrapper>::New(env, file_wrapper, FinalizeMzML);
+  Napi::External<MzMLWrapper> external = Napi::External<MzMLWrapper>::New(env, file_wrapper, FinalizeMzML);
+  OUTSTANDING_HANDLES.fetch_add(1, std::memory_order_relaxed);
+  return external;
 }
 
 static Napi::Value ParseIonUrl(const Napi::CallbackInfo &info)
@@ -998,7 +1020,9 @@ static Napi::Value ParseIonUrl(const Napi::CallbackInfo &info)
     return ThrowRc(env, "parse_ion_url", code);
 
   MzMLWrapper *file_wrapper = new MzMLWrapper{file_handle, 0};
-  return Napi::External<MzMLWrapper>::New(env, file_wrapper, FinalizeMzML);
+  Napi::External<MzMLWrapper> external = Napi::External<MzMLWrapper>::New(env, file_wrapper, FinalizeMzML);
+  OUTSTANDING_HANDLES.fetch_add(1, std::memory_order_relaxed);
+  return external;
 }
 
 static Napi::Value GetFeatures(const Napi::CallbackInfo &info)

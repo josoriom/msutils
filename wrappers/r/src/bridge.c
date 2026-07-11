@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <string.h>
 #include <math.h>
+#include <limits.h>
 #include "include/msutils.h"
 
 #if defined(_WIN32)
@@ -45,6 +46,7 @@ typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_convert_mzml_file_to_ion_file)(const char *, const char *, uint8_t, uint8_t, uint8_t);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, size_t, MzML **);
 typedef int32_t (*fn_parse_ion_url)(const char *, size_t, MzML **);
+typedef int32_t (*fn_parse_ion_path)(const char *, size_t, MzML **);
 typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, Buf *);
 typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
@@ -73,6 +75,7 @@ typedef struct
   fn_convert_mzml_file_to_ion_file convert_mzml_file_to_ion_file;
   fn_parse_bin parse_bin;
   fn_parse_ion_url parse_ion_url;
+  fn_parse_ion_path parse_ion_path;
   fn_free_mzml free_mzml;
   fn_get_features get_features;
   fn_get_scans get_scans;
@@ -158,6 +161,8 @@ int abi_load(const char *path, const char **err)
     goto fail;
   if (resolve_required((void **)&ABI.parse_ion_url, "parse_ion_url"))
     goto fail;
+  if (resolve_required((void **)&ABI.parse_ion_path, "parse_ion_path"))
+    goto fail;
   if (resolve_required((void **)&ABI.free_mzml, "free_mzml"))
     goto fail;
   if (resolve_required((void **)&ABI.get_features, "get_features"))
@@ -208,9 +213,38 @@ static void die_code(const char *fname, int code)
   error("msutils/%s failed: %s (code=%d)", fname, msg, code);
 }
 
+struct mk_string_data
+{
+  const unsigned char *ptr;
+  size_t len;
+};
+
+static SEXP mk_string_build(void *data)
+{
+  struct mk_string_data *d = (struct mk_string_data *)data;
+  return Rf_ScalarString(Rf_mkCharLenCE((const char *)d->ptr, (int)d->len, CE_UTF8));
+}
+
+static void mk_string_free(void *data, Rboolean jump)
+{
+  (void)jump;
+  struct mk_string_data *d = (struct mk_string_data *)data;
+  if (d->ptr && ABI.free_)
+    ABI.free_((unsigned char *)d->ptr, d->len);
+  d->ptr = NULL;
+}
+
 static SEXP mk_string_len(const unsigned char *ptr, size_t len)
 {
-  SEXP s = PROTECT(Rf_ScalarString(Rf_mkCharLenCE((const char *)ptr, (int)len, CE_UTF8)));
+  if (len > (size_t)INT_MAX)
+  {
+    if (ABI.free_)
+      ABI.free_((unsigned char *)ptr, len);
+    error("msutils: result too large for an R string (%zu bytes)", len);
+  }
+  struct mk_string_data d = {ptr, len};
+  SEXP cont = PROTECT(R_MakeUnwindCont());
+  SEXP s = R_UnwindProtect(mk_string_build, &d, mk_string_free, &d, cont);
   UNPROTECT(1);
   return s;
 }
@@ -351,6 +385,12 @@ SEXP C_bind_rust(SEXP path_)
   return R_NilValue;
 }
 
+SEXP C_unbind_rust(SEXP unused)
+{
+  abi_unload();
+  return R_NilValue;
+}
+
 static void finalize_mzml(SEXP ptr)
 {
   if (R_ExternalPtrAddr(ptr))
@@ -393,7 +433,6 @@ SEXP C_ion_to_json(SEXP bin)
   int code = ABI.bin_to_json(handle, &out);
   die_code("bin_to_json", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -406,7 +445,6 @@ SEXP C_ion_to_mzml(SEXP bin)
   int code = ABI.bin_to_mzml(handle, &out);
   die_code("bin_to_mzml", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -479,7 +517,6 @@ SEXP C_get_peak(SEXP x, SEXP y, SEXP rt, SEXP range, SEXP options)
   int code = ABI.get_peak(REAL(x), REAL(y), (size_t)n, asReal(rt), asReal(range), opt_ptr, &out);
   die_code("get_peak", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -497,7 +534,6 @@ SEXP C_fit_peak(SEXP x, SEXP y, SEXP rt, SEXP intensity, SEXP shape)
                           asReal(rt), asReal(intensity), (int32_t)asInteger(shape), &out);
   die_code("fit_peak", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -569,6 +605,8 @@ SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, S
   }
 
   size_t ncores = (cores == R_NilValue) ? 1 : (size_t)asInteger(cores);
+  if (ncores < 1)
+    ncores = 1;
   CPeakOptions opts;
   const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
@@ -581,7 +619,6 @@ SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, S
 
   die_code("get_peaks_from_eic", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -638,7 +675,6 @@ SEXP C_get_peaks_from_chrom(SEXP bin, SEXP idxs, SEXP rts, SEXP ranges, SEXP opt
 
   die_code("get_peaks_from_chrom", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -690,7 +726,6 @@ SEXP C_find_peaks(SEXP x, SEXP y, SEXP options)
   int code = ABI.find_peaks(REAL(x), REAL(y), (size_t)n, opt_ptr, &out);
   die_code("find_peaks", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -712,6 +747,18 @@ SEXP C_calculate_baseline(SEXP y, SEXP lambda, SEXP max_iterations)
   ABI.free_(out.ptr, out.len);
   UNPROTECT(1);
   return Ry;
+}
+
+SEXP C_find_noise_level(SEXP y)
+{
+  REQUIRE_BOUND(ABI.find_noise_level, "find_noise_level");
+  R_xlen_t n = XLENGTH(y);
+  const double *yd = REAL(y);
+  float *yf = (float *)R_alloc((size_t)n, sizeof(float));
+  for (R_xlen_t i = 0; i < n; i++)
+    yf[i] = (float)yd[i];
+  float noise = ABI.find_noise_level(yf, (size_t)n);
+  return Rf_ScalarReal((double)noise);
 }
 
 SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol, SEXP grid_start, SEXP grid_end, SEXP grid_step_ppm, SEXP options, SEXP cores)
@@ -739,7 +786,6 @@ SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, 
 
   die_code("find_features", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -795,6 +841,8 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
   }
 
   size_t ncores = (cores == R_NilValue) ? 1 : (size_t)asInteger(cores);
+  if (ncores < 1)
+    ncores = 1;
   CPeakOptions opts;
   const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
@@ -809,7 +857,6 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
 
   die_code("find_feature", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -859,19 +906,14 @@ SEXP C_parse_ion_path(SEXP path, SEXP max_cache_size)
 {
   if (TYPEOF(path) != STRSXP || LENGTH(path) != 1)
     error("msutils: path must be a single string");
-  if (!abi_handle)
-    error("msutils: native library not loaded");
-
-  typedef int32_t (*fn_pip)(const char *, size_t, MzML **);
-  fn_pip parse_ion_path_fn = (fn_pip)DLSYM(abi_handle, "parse_ion_path");
-  if (!parse_ion_path_fn)
-    error("msutils: native symbol 'parse_ion_path' not found in loaded library");
 
   const char *value = CHAR(STRING_ELT(path, 0));
   size_t cache = (max_cache_size == R_NilValue) ? 0 : (size_t)asReal(max_cache_size);
 
+  REQUIRE_BOUND(ABI.parse_ion_path, "parse_ion_path");
+
   MzML *handle = NULL;
-  int code = parse_ion_path_fn(value, cache, &handle);
+  int code = ABI.parse_ion_path(value, cache, &handle);
   die_code("parse_ion_path", code);
 
   SEXP ptr = PROTECT(R_MakeExternalPtr(handle, R_NilValue, R_NilValue));
@@ -889,7 +931,6 @@ SEXP C_get_scans(SEXP bin, SEXP query_type, SEXP a, SEXP b, SEXP level)
   int code = ABI.get_scans(handle, (uint8_t)asInteger(query_type), asReal(a), asReal(b), (uint8_t)asInteger(level), &out);
   die_code("get_scans", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -927,6 +968,5 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
 
   die_code("get_features", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }

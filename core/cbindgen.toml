@@ -3,7 +3,7 @@ include_version = true
 pragma_once = true
 
 [export]
-item_types = ["constants", "enums", "structs", "unions", "typedefs", "opaque"]
+item_types = ["constants", "enums", "structs", "unions", "typedefs", "opaque", "functions"]
 include = [
   "CPeakOptions",
   "Buf",

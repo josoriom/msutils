@@ -3,6 +3,7 @@
 #include <R_ext/Rdynload.h>
 
 SEXP C_bind_rust(SEXP path);
+SEXP C_unbind_rust(SEXP unused);
 SEXP C_parse_mzml(SEXP data);
 SEXP C_ion_to_json(SEXP bin);
 SEXP C_ion_to_mzml(SEXP bin);
@@ -22,6 +23,7 @@ SEXP C_parse_ion(SEXP bin, SEXP max_cache_size);
 SEXP C_parse_ion_url(SEXP url, SEXP max_cache_size);
 SEXP C_parse_ion_path(SEXP path, SEXP max_cache_size);
 SEXP C_get_scans(SEXP bin, SEXP query_type, SEXP a, SEXP b, SEXP level);
+SEXP C_find_noise_level(SEXP y);
 SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol,
                     SEXP grid_start, SEXP grid_end, SEXP grid_step,
                     SEXP group_ppm_tol, SEXP group_mz_tol, SEXP group_rt_tol,
@@ -30,6 +32,7 @@ SEXP C_dispose_mzml(SEXP ptr);
 
 static const R_CallMethodDef CallEntries[] = {
     {"C_bind_rust", (DL_FUNC)&C_bind_rust, 1},
+    {"C_unbind_rust", (DL_FUNC)&C_unbind_rust, 1},
     {"C_parse_mzml", (DL_FUNC)&C_parse_mzml, 1},
     {"C_ion_to_json", (DL_FUNC)&C_ion_to_json, 1},
     {"C_ion_to_mzml", (DL_FUNC)&C_ion_to_mzml, 1},
@@ -49,6 +52,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"C_parse_ion_url", (DL_FUNC)&C_parse_ion_url, 2},
     {"C_parse_ion_path", (DL_FUNC)&C_parse_ion_path, 2},
     {"C_get_scans", (DL_FUNC)&C_get_scans, 5},
+    {"C_find_noise_level", (DL_FUNC)&C_find_noise_level, 1},
     {"C_get_features", (DL_FUNC)&C_get_features, 14},
     {"C_dispose_mzml", (DL_FUNC)&C_dispose_mzml, 1},
     {NULL, NULL, 0}};

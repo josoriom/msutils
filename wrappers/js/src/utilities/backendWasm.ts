@@ -574,6 +574,14 @@ class WasmApi {
     this.handleScratchSlot = this.heap.allocPermanent(4);
   }
 
+  private assertLocalHandle(handle: number, functionName: string): void {
+    if (this.source_id_by_handle.has(handle)) {
+      throw new Error(
+        `${functionName}: remote browser Ion handles need plan_peaks_from_eic; use Node, Python, R, or a local/in-memory file`,
+      );
+    }
+  }
+
   parseMzMLRaw(data: Uint8Array): number {
     const [ptr, len] = this.heap.allocAndWrite(data);
     try {
@@ -875,6 +883,7 @@ class WasmApi {
   }
 
   getScans(handle: number, queryType: number, a: number, b: number, level: number): any {
+    this.assertLocalHandle(handle, "getScans");
     const rc = this.fn.getScans(handle, queryType, a, b, level, this.jsonOutputSlot);
     if (rc !== 0) throw new Error("get_scans failed with code " + rc);
     return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
@@ -996,11 +1005,7 @@ class WasmApi {
     opts: PeakOptions | undefined,
     cores: number,
   ): any {
-    if (this.source_id_by_handle.has(handle)) {
-      throw new Error(
-        "getPeaksFromEic: remote browser Ion handles need plan_peaks_from_eic; use Node, Python, R, or a local/in-memory file",
-      );
-    }
+    this.assertLocalHandle(handle, "getPeaksFromEic");
     const emptyU32 = new Uint32Array(count);
     const emptyBytes = new Uint8Array(0);
     const [rtPtr, rtLen] = this.heap.allocAndWrite(toUint8View(rts));
@@ -1050,6 +1055,7 @@ class WasmApi {
     opts: PeakOptions | undefined,
     cores: number,
   ): any {
+    this.assertLocalHandle(handle, "getPeaksFromChrom");
     const [idxPtr, idxLen] = this.heap.allocAndWrite(toUint8View(indices));
     const [rtPtr, rtLen] = this.heap.allocAndWrite(toUint8View(rts));
     const [winPtr, winLen] = this.heap.allocAndWrite(toUint8View(windows));
@@ -1090,6 +1096,7 @@ class WasmApi {
     eicMz: number,
     opts: PeakOptions | undefined,
   ): any {
+    this.assertLocalHandle(handle, "findFeature");
     const emptyU32 = new Uint32Array(count);
     const emptyBytes = new Uint8Array(0);
     const [rtPtr, rtLen] = this.heap.allocAndWrite(toUint8View(rts));
@@ -1326,7 +1333,7 @@ export class WasmBackend implements Backend {
     return this.getApi().getPeak(x, y, rt, range, opts);
   }
 
-  findNoiseLevel(y: Float64Array | Float32Array): number {
+  findNoiseLevel(y: Float32Array): number {
     const y32 = y instanceof Float32Array ? y : new Float32Array(y);
     return this.getApi().findNoiseLevel(y32);
   }
@@ -1389,21 +1396,6 @@ export class WasmBackend implements Backend {
       opts,
       cores,
     );
-  }
-
-  findFeatures(
-    _handle: FileHandle,
-    _from: number,
-    _to: number,
-    _eicPpm: number,
-    _eicMz: number,
-    _gridStart: number,
-    _gridEnd: number,
-    _gridStep: number,
-    _opts: PeakOptions | undefined,
-    _cores: number,
-  ): any {
-    throw new Error("findFeatures is not supported in the WASM build");
   }
 
   findFeature(

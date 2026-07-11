@@ -266,10 +266,13 @@ pub extern "C" fn alloc(size: usize) -> *mut u8 {
     if size == 0 {
         return core::ptr::null_mut();
     }
-    let mut v = Vec::<u8>::with_capacity(size);
-    let p = v.as_mut_ptr();
-    core::mem::forget(v);
-    p
+    catch_unwind(AssertUnwindSafe(|| {
+        let mut v = Vec::<u8>::with_capacity(size);
+        let p = v.as_mut_ptr();
+        core::mem::forget(v);
+        p
+    }))
+    .unwrap_or(core::ptr::null_mut())
 }
 
 /// Free memory returned by `alloc`.
@@ -347,7 +350,9 @@ impl ScanSource for ParsedFile {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_mzml(handle: *mut ParsedFile) {
     if !handle.is_null() {
-        drop(unsafe { Box::from_raw(handle) });
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            drop(unsafe { Box::from_raw(handle) });
+        }));
     }
 }
 
@@ -1363,9 +1368,13 @@ pub unsafe extern "C" fn image_scan_count(
     if session.is_null() || out_count.is_null() {
         return ERR_INVALID_ARGS;
     }
-    let session = unsafe { &*session };
-    unsafe { *out_count = session.scan_count() };
-    OK
+    match catch_unwind(AssertUnwindSafe(|| {
+        let session = unsafe { &*session };
+        unsafe { *out_count = session.scan_count() };
+    })) {
+        Ok(()) => OK,
+        Err(_) => ERR_PANIC,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -1453,9 +1462,9 @@ pub unsafe extern "C" fn image_finish(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn image_free(session: *mut crate::utilities::ion_image::ImageSession) {
     if !session.is_null() {
-        unsafe {
-            drop(Box::from_raw(session));
-        }
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            drop(unsafe { Box::from_raw(session) });
+        }));
     }
 }
 

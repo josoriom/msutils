@@ -81,7 +81,7 @@ def _as_opts_ptr(peak_options: Optional[PeakOptions]):
     return ctypes.byref(peak_options)
 
 def _to_f64_array(sequence: Sequence) -> np.ndarray:
-    return np.asarray(sequence, dtype=np.float64)
+    return np.ascontiguousarray(sequence, dtype=np.float64)
 
 
 def _get_float(mapping: Optional[Dict], key: str, default: float) -> float:
@@ -517,7 +517,7 @@ def find_noise_level(y: Sequence) -> float:
         Estimated noise level as a float.
     """
     abi = _get_abi()
-    arr = np.asarray(y, dtype=np.float32)
+    arr = np.ascontiguousarray(y, dtype=np.float32)
     ptr = arr.ctypes.data_as(POINTER(c_float))
     return float(abi.find_noise_level(ptr, len(arr)))
 
@@ -952,3 +952,7 @@ def get_features(
         ctypes.byref(buf),
     ))
     return buf_to_json(abi, buf)
+
+
+def get_ion_image(*args, **kwargs):
+    raise NotImplementedError("get_ion_image is not implemented in the Python wrapper")

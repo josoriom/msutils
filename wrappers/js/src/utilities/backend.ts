@@ -74,7 +74,7 @@ export interface Backend {
     opts: PeakOptions | undefined,
   ): any;
 
-  findNoiseLevel(y: Float64Array | Float32Array): number;
+  findNoiseLevel(y: Float32Array): number;
 
   calculateBaseline(
     y: Float64Array,
@@ -108,7 +108,7 @@ export interface Backend {
     cores: number,
   ): any;
 
-  findFeatures(
+  findFeatures?(
     handle: FileHandle,
     from: number,
     to: number,
