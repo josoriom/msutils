@@ -119,8 +119,6 @@ export interface Backend {
     gridStep: number,
     opts: PeakOptions | undefined,
     cores: number,
-    useGpu: number,
-    batchSize: number,
   ): any;
 
   findFeature(
@@ -156,7 +154,5 @@ export interface Backend {
     prevalence: number,
     opts: PeakOptions | undefined,
     cores: number,
-    useGpu: number,
-    batchSize: number,
   ): any;
 }

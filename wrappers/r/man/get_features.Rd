@@ -20,8 +20,6 @@ get_features(
   group_rt_tol = 0.05,
   frequency = 1L,
   cores = 1L,
-  use_gpu = FALSE,
-  batch_size = 0L,
   min_integral = NaN,
   min_intensity = 1000,
   min_peak_width_points = 5L,
@@ -49,8 +47,6 @@ get_features(
   \item{group_rt_tol}{RT tolerance (minutes) used when grouping features. Default 0.05.}
   \item{frequency}{Minimum number of samples in which a feature must appear to be kept. Default 1.}
   \item{cores}{Number of CPU cores to use. Default 1.}
-  \item{use_gpu}{Use GPU acceleration if available. Default \code{FALSE}.}
-  \item{batch_size}{GPU batch size. \code{0} selects automatically.}
   \item{min_integral}{Minimum peak area. \code{NaN} disables.}
   \item{min_intensity}{Minimum apex intensity. Default 1000.}
   \item{min_peak_width_points}{Minimum peak width in points. Default 5.}

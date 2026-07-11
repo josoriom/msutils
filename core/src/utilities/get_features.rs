@@ -2,15 +2,11 @@ use std::{
     cmp::Ordering,
     fmt::{Display, Formatter},
     io::Error,
-    sync::Arc,
 };
 
 use serde::Serialize;
 
 use crate::utilities::structs::ser_finite_f64;
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::gpu::GpuContext;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::parallel::run_with_cores;
@@ -327,11 +323,6 @@ pub fn get_features(
     cores: usize,
 ) -> Result<Vec<ConsensusFeature>, AlignmentError> {
     let datasets = load_sample_files(directory_path)?;
-
-    let mut feature_config = feature_config;
-    if feature_config.use_gpu && feature_config.gpu_context.is_none() {
-        feature_config.gpu_context = GpuContext::try_init().map(Arc::new);
-    }
 
     let mut datasets = detect_features_per_sample(datasets, time_window, &feature_config, cores)?;
 

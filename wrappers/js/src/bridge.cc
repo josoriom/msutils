@@ -55,10 +55,10 @@ typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const dou
 typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakOptions *, size_t, Buf *);
 typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
+typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakOptions *, int32_t, Buf *);
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
-typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
+typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, Buf *);
 typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
 typedef int32_t (*fn_get_ion_image)(const MzML *, double, double, uint8_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
@@ -848,7 +848,7 @@ static Napi::Value CalculateBaseline(const Napi::CallbackInfo &info)
 static Napi::Value FindFeatures(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (info.Length() < 12)
+  if (info.Length() < 10)
     return env.Undefined();
 
   MzML *handle = GetHandle(info[0]);
@@ -865,10 +865,8 @@ static Napi::Value FindFeatures(const Napi::CallbackInfo &info)
   CPeakOptions opts;
   const CPeakOptions *p_opts = ReadPeakOptionsObject(info[8], &opts);
   int32_t cores = info[9].As<Napi::Number>().Int32Value();
-  int32_t use_gpu = info[10].As<Napi::Number>().Int32Value();
-  int32_t batch_size = info[11].As<Napi::Number>().Int32Value();
   OwnedBuf out;
-  int32_t rc = ABI.find_features(handle, from, to, ppm, mz, gs, ge, gst, p_opts, cores, use_gpu, batch_size, out.Out());
+  int32_t rc = ABI.find_features(handle, from, to, ppm, mz, gs, ge, gst, p_opts, cores, out.Out());
   if (rc != 0)
     return ThrowRc(env, "find_features", rc);
   return TakeUtf8String(env, out.Out());
@@ -1006,7 +1004,7 @@ static Napi::Value ParseIonUrl(const Napi::CallbackInfo &info)
 static Napi::Value GetFeatures(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
-  if (info.Length() < 16 || !info[0].IsString())
+  if (info.Length() < 14 || !info[0].IsString())
   {
     Napi::TypeError::New(env, "Invalid arguments for getFeatures").ThrowAsJavaScriptException();
     return env.Undefined();
@@ -1027,8 +1025,6 @@ static Napi::Value GetFeatures(const Napi::CallbackInfo &info)
   CPeakOptions opts;
   const CPeakOptions *p_opts = ReadPeakOptionsObject(info[12], &opts);
   int32_t cores = info[13].As<Napi::Number>().Int32Value();
-  int32_t use_gpu = info[14].As<Napi::Number>().Int32Value();
-  int32_t batch_size = info[15].As<Napi::Number>().Int32Value();
 
   OwnedBuf out;
   int32_t rc = ABI.get_features(
@@ -1037,7 +1033,6 @@ static Napi::Value GetFeatures(const Napi::CallbackInfo &info)
       g_start, g_end, g_step,
       group_ppm, group_da, group_rt,
       frequency, p_opts, cores,
-      use_gpu, batch_size,
       out.Out());
 
   if (rc != 0)

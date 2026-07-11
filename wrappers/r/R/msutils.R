@@ -365,8 +365,6 @@ find_features <- function(
   grid_end              = .DEFAULTS$grid_end,
   grid_step_ppm         = .DEFAULTS$grid_step,
   cores                 = 1L,
-  use_gpu               = FALSE,
-  batch_size            = 0L,
   min_integral          = NaN,
   min_intensity         = .DEFAULTS$min_intensity,
   min_peak_width_points = .DEFAULTS$min_peak_width_points,
@@ -381,7 +379,6 @@ find_features <- function(
   shape                 = .DEFAULTS$shape
 ) {
   stopifnot(typeof(data) == "externalptr")
-  if (!is.logical(use_gpu) || length(use_gpu) != 1 || is.na(use_gpu)) stop("use_gpu must be logical TRUE/FALSE")
   cores <- .validate_cores(cores)
 
   opt <- list(
@@ -397,7 +394,7 @@ find_features <- function(
     as.numeric(from), as.numeric(to),
     as.numeric(ppm_tolerance), as.numeric(mz_tolerance),
     as.numeric(grid_start), as.numeric(grid_end), as.numeric(grid_step_ppm),
-    opt, as.integer(cores), as.logical(use_gpu), as.integer(batch_size),
+    opt, as.integer(cores),
     PACKAGE = "msutils"
   )
 
@@ -498,8 +495,6 @@ get_features <- function(
   group_rt_tol          = .DEFAULTS$group_rt_tol,
   frequency             = .DEFAULTS$frequency,
   cores                 = 1L,
-  use_gpu               = FALSE,
-  batch_size            = 0L,
   min_integral          = NaN,
   min_intensity         = .DEFAULTS$min_intensity,
   min_peak_width_points = .DEFAULTS$min_peak_width_points,
@@ -514,7 +509,6 @@ get_features <- function(
   shape                 = .DEFAULTS$shape
 ) {
   if (!is.character(dir_path) || length(dir_path) != 1) stop("dir_path must be a single string")
-  if (!is.logical(use_gpu) || length(use_gpu) != 1 || is.na(use_gpu)) stop("use_gpu must be logical TRUE/FALSE")
   cores <- .validate_cores(cores)
 
   opt <- list(
@@ -532,7 +526,7 @@ get_features <- function(
     as.numeric(grid_start), as.numeric(grid_end), as.numeric(grid_step),
     as.numeric(group_ppm_tol), as.numeric(group_mz_tol), as.numeric(group_rt_tol),
     as.integer(frequency),
-    opt, as.integer(cores), as.logical(use_gpu), as.integer(batch_size),
+    opt, as.integer(cores),
     PACKAGE = "msutils"
   )
 

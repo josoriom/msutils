@@ -88,8 +88,6 @@ export type FindFeaturesOptions = {
   grid?: { start?: number; end?: number; stepSize?: number };
   findPeak?: PeakOptions;
   cores?: number;
-  useGpu?: boolean;
-  batchSize?: number;
 };
 
 export type ConsensusFeature = {

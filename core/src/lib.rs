@@ -1482,8 +1482,6 @@ pub unsafe extern "C" fn get_features(
     min_samples: c_int,
     peak_opts: *const CPeakOptions,
     cores: c_int,
-    use_gpu: c_int,
-    batch_size: c_int,
     out: *mut Buf,
 ) -> c_int {
     if dir.is_null() || out.is_null() {
@@ -1512,12 +1510,6 @@ pub unsafe extern "C" fn get_features(
         }
         let peak_options = build_peak_options(peak_opts);
         feature_opts.peak_options = peak_options.clone();
-        feature_opts.use_gpu = use_gpu != 0;
-        feature_opts.batch_size = if batch_size > 0 {
-            Some(batch_size as usize)
-        } else {
-            None
-        };
 
         let alignment_opts = AlignmentOptions {
             mz_tolerance: MzTolerance {
@@ -1589,8 +1581,6 @@ pub unsafe extern "C" fn find_features(
     grid_step: f64,
     peak_opts: *const CPeakOptions,
     cores: c_int,
-    use_gpu: c_int,
-    batch_size: c_int,
     out: *mut Buf,
 ) -> c_int {
     if h.is_null() || out.is_null() || !from.is_finite() || !to.is_finite() || to <= from {
@@ -1616,15 +1606,6 @@ pub unsafe extern "C" fn find_features(
             opts.mz_scan_grid.step = grid_step;
         }
         opts.peak_options = build_peak_options(peak_opts);
-        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-        {
-            opts.use_gpu = use_gpu != 0;
-            opts.batch_size = if batch_size > 0 {
-                Some(batch_size as usize)
-            } else {
-                None
-            };
-        }
 
         let mut reader = match file {
             ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),

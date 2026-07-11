@@ -50,5 +50,3 @@ pub use find_feature::find_feature;
 pub mod get_features;
 pub mod mz_estimator;
 pub mod tests;
-
-pub mod gpu;

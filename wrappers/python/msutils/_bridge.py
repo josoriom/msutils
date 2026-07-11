@@ -114,12 +114,12 @@ class _ABI:
         "find_features": ([c_void_p,
             c_double, c_double, c_double, c_double,
             c_double, c_double, c_double,
-            POINTER(PeakOptions), c_int32, c_int32, c_int32, POINTER(_Buf)], c_int32),
+            POINTER(PeakOptions), c_int32, POINTER(_Buf)], c_int32),
         "get_features": ([ctypes.c_char_p,
             c_double, c_double, c_double, c_double,
             c_double, c_double, c_double,
             c_double, c_double, c_double,
-            c_int32, POINTER(PeakOptions), c_int32, c_int32, c_int32, POINTER(_Buf)], c_int32),
+            c_int32, POINTER(PeakOptions), c_int32, POINTER(_Buf)], c_int32),
         "find_noise_level": ([POINTER(c_float), c_size_t], c_float),
     }
 

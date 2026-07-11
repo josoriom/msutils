@@ -538,8 +538,6 @@ export function findFeatures(
     grid = DEFAULTS.grid,
     findPeak = DEFAULTS.findPeak,
     cores = 1,
-    useGpu = false,
-    batchSize = 0,
   } = options;
   const { from, to } = fromTo;
   const eicPpm =
@@ -577,8 +575,6 @@ export function findFeatures(
     gridStep,
     findPeak,
     toCores(cores),
-    useGpu ? 1 : 0,
-    batchSize | 0,
   );
 }
 
@@ -667,8 +663,6 @@ export function getFeatures(
     grouping = DEFAULTS.grouping,
     findPeak = DEFAULTS.findPeak,
     cores = 1,
-    useGpu = false,
-    batchSize = 0,
   } = options;
   const { from, to } = fromTo;
   const eicPpm = Number.isFinite(eic.ppmTolerance)
@@ -701,7 +695,5 @@ export function getFeatures(
     +prevalence,
     findPeak,
     toCores(cores),
-    useGpu ? 1 : 0,
-    batchSize | 0,
   );
 }

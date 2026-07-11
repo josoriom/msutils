@@ -39,13 +39,13 @@ typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const dou
 typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakOptions *, size_t, Buf *);
 typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
+typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakOptions *, int32_t, Buf *);
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_convert_mzml_file_to_ion_file)(const char *, const char *, uint8_t, uint8_t, uint8_t);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, size_t, MzML **);
 typedef int32_t (*fn_parse_ion_url)(const char *, size_t, MzML **);
-typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
+typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, Buf *);
 typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 typedef void (*fn_free_mzml)(MzML *);
@@ -714,7 +714,7 @@ SEXP C_calculate_baseline(SEXP y, SEXP lambda, SEXP max_iterations)
   return Ry;
 }
 
-SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol, SEXP grid_start, SEXP grid_end, SEXP grid_step_ppm, SEXP options, SEXP cores, SEXP use_gpu, SEXP batch_size)
+SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol, SEXP grid_start, SEXP grid_end, SEXP grid_step_ppm, SEXP options, SEXP cores)
 {
   MzML *handle = GetHandle(data);
   REQUIRE_BOUND(ABI.find_features, "find_features");
@@ -723,9 +723,6 @@ SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, 
   int ncores = asInteger(cores);
   if (ncores < 1)
     ncores = 1;
-
-  int32_t gpu = (use_gpu == R_NilValue) ? 0 : (asLogical(use_gpu) == TRUE ? 1 : 0);
-  int32_t bsz = (batch_size == R_NilValue) ? 0 : asInteger(batch_size);
 
   CPeakOptions opts;
   const CPeakOptions *opt_ptr = NULL;
@@ -738,7 +735,7 @@ SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, 
       asReal(eic_ppm_tol), asReal(eic_mz_tol),
       asReal(grid_start), asReal(grid_end),
       asReal(grid_step_ppm),
-      opt_ptr, (int32_t)ncores, gpu, bsz, &out);
+      opt_ptr, (int32_t)ncores, &out);
 
   die_code("find_features", code);
   SEXP res = mk_string_len(out.ptr, out.len);
@@ -900,8 +897,7 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
                     SEXP eic_ppm_tol, SEXP eic_mz_tol,
                     SEXP grid_start, SEXP grid_end, SEXP grid_step,
                     SEXP group_ppm_tol, SEXP group_mz_tol, SEXP group_rt_tol,
-                    SEXP frequency, SEXP options, SEXP cores,
-                    SEXP use_gpu, SEXP batch_size)
+                    SEXP frequency, SEXP options, SEXP cores)
 {
   if (TYPEOF(dir_path) != STRSXP || LENGTH(dir_path) != 1)
     error("dir_path must be a length-1 character string");
@@ -913,9 +909,6 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
   int ncores = asInteger(cores);
   if (ncores < 1)
     ncores = 1;
-
-  int32_t gpu = (use_gpu == R_NilValue) ? 0 : (asLogical(use_gpu) == TRUE ? 1 : 0);
-  int32_t bsz = (batch_size == R_NilValue) ? 0 : asInteger(batch_size);
 
   CPeakOptions opts;
   const CPeakOptions *opt_ptr = NULL;
@@ -929,7 +922,7 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
       asReal(grid_start), asReal(grid_end), asReal(grid_step),
       asReal(group_ppm_tol), asReal(group_mz_tol), asReal(group_rt_tol),
       asInteger(frequency),
-      opt_ptr, (int32_t)ncores, gpu, bsz,
+      opt_ptr, (int32_t)ncores,
       &out);
 
   die_code("get_features", code);

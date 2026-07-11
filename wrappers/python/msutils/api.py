@@ -729,8 +729,6 @@ def find_features(
     grid: Optional[Dict[str, float]] = None,
     options: Optional[Dict[str, Any]] = None,
     cores: int = 1,
-    use_gpu: bool = False,
-    batch_size: int = 0,
 ) -> List[Dict]:
     """Find all features in one file.
 
@@ -748,8 +746,6 @@ def find_features(
             step_size (float, default 0.005).
         options: Optional dict of peak filter settings (same keys as find_peaks).
         cores: Number of CPU cores to use. Default 1.
-        use_gpu: Use GPU acceleration if available. Default False.
-        batch_size: GPU batch size. 0 selects automatically.
 
     Returns:
         List of dicts, one per detected feature. Each dict has keys: mz, rt,
@@ -785,7 +781,6 @@ def find_features(
         c_double(eic_ppm), c_double(eic_mz),
         c_double(g_start), c_double(g_end), c_double(g_step),
         _as_opts_ptr(peak_options), c_int32(to_cores(cores)),
-        c_int32(1 if use_gpu else 0), c_int32(int(batch_size)),
         ctypes.byref(buf),
     ))
     return buf_to_json(abi, buf)
@@ -880,8 +875,6 @@ def get_features(
     grouping: Optional[Dict[str, Any]]   = None,
     options: Optional[Dict[str, Any]]    = None,
     cores: int = 1,
-    use_gpu: bool = False,
-    batch_size: int = 0,
 ) -> List[Dict]:
     """Find and align features across many files.
 
@@ -902,8 +895,6 @@ def get_features(
             frequency (int, min samples a feature must appear in).
         options: Optional dict of peak filter settings (same keys as find_peaks).
         cores: Number of CPU cores to use. Default 1.
-        use_gpu: Use GPU acceleration if available. Default False.
-        batch_size: GPU batch size. 0 selects automatically.
 
     Returns:
         List of dicts, one per consensus feature. Each dict has the
@@ -958,7 +949,6 @@ def get_features(
         c_double(group_ppm), c_double(group_mz), c_double(group_rt),
         c_int32(prevalence),
         _as_opts_ptr(peak_options), c_int32(to_cores(cores)),
-        c_int32(1 if use_gpu else 0), c_int32(int(batch_size)),
         ctypes.byref(buf),
     ))
     return buf_to_json(abi, buf)

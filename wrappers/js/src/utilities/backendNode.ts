@@ -287,8 +287,6 @@ export class NodeBackend implements Backend {
     gridStep: number,
     opts: PeakOptions | undefined,
     cores: number,
-    useGpu: number,
-    batchSize: number,
   ): any {
     return parseAndCamelize(
       this.native.findFeatures(
@@ -302,8 +300,6 @@ export class NodeBackend implements Backend {
         gridStep,
         opts ?? null,
         cores,
-        useGpu,
-        batchSize,
       ) as string,
     );
   }
@@ -358,8 +354,6 @@ export class NodeBackend implements Backend {
     prevalence: number,
     opts: PeakOptions | undefined,
     cores: number,
-    useGpu: number,
-    batchSize: number,
   ): any {
     return parseAndCamelize(
       this.native.getFeatures(
@@ -377,8 +371,6 @@ export class NodeBackend implements Backend {
         prevalence,
         opts ?? null,
         cores,
-        useGpu,
-        batchSize,
       ) as string,
     );
   }

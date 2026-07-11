@@ -1,8 +1,6 @@
 use serde::Serialize;
 
 use crate::utilities::structs::ser_finite_f64;
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use std::sync::Arc;
 use std::{
     cmp::Ordering,
     collections::HashSet,
@@ -20,12 +18,6 @@ use crate::utilities::{
     find_peaks::{FindPeaksOptions, find_peaks},
     parallel::run_with_cores,
     structs::{DataXY, FromTo},
-};
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::gpu::{
-    GpuContext,
-    processor::{FlattenedScans, GpuBatchOptions, GpuGridProcessor},
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
@@ -148,12 +140,6 @@ pub struct FindFeaturesOptions {
     pub mz_scan_grid: MzScanGrid,
     pub min_seed_width_points: usize,
     pub memory_budget_bytes: usize,
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    pub gpu_context: Option<Arc<GpuContext>>,
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    pub use_gpu: bool,
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    pub batch_size: Option<usize>,
 }
 
 impl Default for FindFeaturesOptions {
@@ -173,12 +159,6 @@ impl Default for FindFeaturesOptions {
             mz_scan_grid: MzScanGrid::default(),
             min_seed_width_points: 5,
             memory_budget_bytes: 256 * 1024 * 1024,
-            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-            gpu_context: None,
-            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-            use_gpu: false,
-            #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-            batch_size: None,
         }
     }
 }
@@ -235,36 +215,10 @@ pub fn detect_features(
     opts: &FindFeaturesOptions,
     cores: usize,
 ) -> Result<Vec<Feature>, FeatureError> {
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    let gpu_context = if opts.use_gpu {
-        opts.gpu_context.clone().or_else(|| {
-            let context = GpuContext::try_init().map(Arc::new);
-            if context.is_none() {
-                eprintln!("[find_features] GPU requested but initialization failed, using CPU");
-            }
-            context
-        })
-    } else {
-        None
-    };
-
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    let gpu_batch = GpuBatchOptions {
-        batch_size: opts
-            .batch_size
-            .unwrap_or_else(|| GpuBatchOptions::default().batch_size),
-        vram_override: None,
-    };
-
     run_with_cores(cores, || {
-        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-        let gpu = gpu_context.as_deref().map(|context| (context, &gpu_batch));
-        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-        let gpu: GpuArgs = None;
-
         let candidates = match kind {
             SpectrumKind::Centroid => grid.to_vec(),
-            SpectrumKind::Profile => collect_candidates(scans, grid, opts, gpu),
+            SpectrumKind::Profile => collect_candidates(scans, grid, opts),
         };
         if candidates.is_empty() {
             return Err(FeatureError::NoCandidateMasses);
@@ -292,12 +246,6 @@ pub struct Scan {
 }
 
 type Scans = Vec<Scan>;
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-type GpuArgs<'a> = Option<(&'a GpuContext, &'a GpuBatchOptions)>;
-
-#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-type GpuArgs<'a> = Option<std::convert::Infallible>;
 
 fn grid_read_window(grid: &[f64], opts: &FindFeaturesOptions) -> (f64, f64) {
     let first_mz = grid[0];
@@ -521,51 +469,9 @@ fn filter_by_max(scans: &[Scan], masses: &[f64], threshold: f64, options: EicOpt
     }
 }
 
-fn collect_candidates(
-    scans: &[Scan],
-    grid: &[f64],
-    opts: &FindFeaturesOptions,
-    gpu: GpuArgs<'_>,
-) -> Vec<f64> {
-    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    if let Some((context, batch)) = gpu {
-        return collect_candidates_gpu(context, batch, scans, grid, opts);
-    }
-
-    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-    let _ = gpu;
-
-    collect_candidates_cpu(scans, grid, opts)
-}
-
-fn collect_candidates_cpu(scans: &[Scan], grid: &[f64], opts: &FindFeaturesOptions) -> Vec<f64> {
+fn collect_candidates(scans: &[Scan], grid: &[f64], opts: &FindFeaturesOptions) -> Vec<f64> {
     let threshold = seed_intensity_threshold(opts);
     filter_by_max(scans, grid, threshold, opts.seed_eic_options)
-}
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-fn collect_candidates_gpu(
-    context: &GpuContext,
-    batch: &GpuBatchOptions,
-    scans: &[Scan],
-    grid: &[f64],
-    opts: &FindFeaturesOptions,
-) -> Vec<f64> {
-    let flattened = FlattenedScans::from_windows(scans);
-    let mut processor = GpuGridProcessor::new(context, batch.clone());
-
-    let survivors = match processor.process(&flattened, grid, opts) {
-        Ok(masses) => masses,
-        Err(error) => {
-            eprintln!("[find_features] GPU failed: {error}, using CPU");
-            return collect_candidates_cpu(scans, grid, opts);
-        }
-    };
-
-    let threshold = seed_intensity_threshold(opts);
-    let mut survivors = survivors;
-    survivors.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
-    filter_by_max(scans, &survivors, threshold, opts.seed_eic_options)
 }
 
 fn extract_features(

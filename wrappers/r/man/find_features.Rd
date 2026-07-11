@@ -16,8 +16,6 @@ find_features(
   grid_end = 1000,
   grid_step_ppm = 0.005,
   cores = 1L,
-  use_gpu = FALSE,
-  batch_size = 0L,
   min_integral = NaN,
   min_intensity = 1000,
   min_peak_width_points = 5L,
@@ -41,8 +39,6 @@ find_features(
   \item{grid_end}{Upper m/z bound of the search grid (Da). Default 1000.}
   \item{grid_step_ppm}{Grid step size (ppm). Default 0.005.}
   \item{cores}{Number of CPU cores to use. Default 1.}
-  \item{use_gpu}{Use GPU acceleration if available. Default \code{FALSE}.}
-  \item{batch_size}{GPU batch size. \code{0} selects automatically.}
   \item{min_integral}{Minimum peak area. \code{NaN} disables.}
   \item{min_intensity}{Minimum apex intensity. Default 1000.}
   \item{min_peak_width_points}{Minimum peak width in points. Default 5.}
