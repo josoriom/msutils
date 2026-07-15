@@ -1,5 +1,7 @@
-use crate::utilities::find_peaks::{FindPeaksOptions, find_peaks};
-use crate::utilities::structs::{DataXY, Peak, Roi};
+use crate::utilities::{
+    find_peaks::{FindPeaksOptions, find_peaks},
+    structs::{DataXY, Peak, Roi},
+};
 
 const LOCAL_WINDOW_MINUTES: f64 = 2.0;
 const DEFAULT_MAX_DRIFT: f64 = 0.5;
@@ -78,10 +80,12 @@ fn crop_around(data: &DataXY, center: f64, half_width: f64) -> DataXY {
 
 #[cfg(test)]
 mod tests {
-    use crate::utilities::calculate_baseline::BaselineOptions;
-    use crate::utilities::find_peaks::{FindPeaksOptions, PeakFilter};
-    use crate::utilities::get_peak::get_peak;
-    use crate::utilities::structs::{DataXY, Roi};
+    use crate::utilities::{
+        calculate_baseline::BaselineOptions,
+        find_peaks::{FindPeaksOptions, PeakFilter},
+        get_peak::get_peak,
+        structs::{DataXY, Roi},
+    };
 
     fn bell(rt: f64, center: f64, width: f64, height: f64) -> f64 {
         height * (-0.5 * ((rt - center) / width).powi(2)).exp()
@@ -111,7 +115,12 @@ mod tests {
         }
     }
 
-    fn build_eic(from: f64, to: f64, points: usize, mut height_at: impl FnMut(f64) -> f64) -> DataXY {
+    fn build_eic(
+        from: f64,
+        to: f64,
+        points: usize,
+        mut height_at: impl FnMut(f64) -> f64,
+    ) -> DataXY {
         let mut x = Vec::with_capacity(points);
         let mut y = Vec::with_capacity(points);
         for index in 0..points {
@@ -137,7 +146,8 @@ mod tests {
             rt: center,
             half_width: 1.0,
         };
-        let peak = get_peak(&eic, &roi, Some(default_options())).expect("strong peak should be found");
+        let peak =
+            get_peak(&eic, &roi, Some(default_options())).expect("strong peak should be found");
         assert!((peak.rt - center).abs() < 0.05);
         assert!(peak.intensity > 100_000.0);
     }

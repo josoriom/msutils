@@ -1,15 +1,22 @@
 use std::sync::Arc;
 
-use ionic::encoder::encode;
-use ionic::ion::{IonReader, ReadOptions};
-use ionic::mzml::structs::{
-    BinaryDataArray, BinaryDataArrayList, CvParam, MzML, NumericArray, NumericType, Run, Scan,
-    ScanList, Spectrum, SpectrumList,
+use ionic::{
+    WriteOptions,
+    ion::{BytesSource, IonReader, ReadBytes, ReadOptions},
+    mzml::structs::{
+        BinaryDataArray, BinaryDataArrayList, CvParam, MzML, NumericArray, NumericType, Run, Scan,
+        ScanList, Spectrum, SpectrumList,
+    },
+    write_mzml_to_ion,
 };
 
-use crate::ParsedFile;
-use crate::utilities::calculate_eic::{ScanQuery, TimeUnit, get_scans};
-use crate::utilities::structs::FromTo;
+use crate::{
+    ParsedFile,
+    utilities::{
+        calculate_eic::{ScanQuery, TimeUnit, get_scans},
+        structs::FromTo,
+    },
+};
 
 const SCAN_MZ: [f64; 4] = [100.0, 499.999, 500.001, 900.0];
 const SCAN_INTENSITY: [f64; 4] = [10.0, 1000.0, 900.0, 20.0];
@@ -57,7 +64,11 @@ fn spectrum(index: usize, rt: f64) -> Spectrum {
         scan_list: Some(ScanList {
             count: Some(1),
             scans: vec![Scan {
-                cv_params: vec![cv_param_with_unit("MS:1000016", &rt.to_string(), "UO:0000031")],
+                cv_params: vec![cv_param_with_unit(
+                    "MS:1000016",
+                    &rt.to_string(),
+                    "UO:0000031",
+                )],
                 ..Default::default()
             }],
             ..Default::default()
@@ -88,9 +99,22 @@ fn open_split_ion() -> ParsedFile {
     };
 
     let mut bytes = Vec::new();
-    encode(&mzml, 0, false, &mut bytes).expect("ion encode failed");
+    write_mzml_to_ion(
+        &mzml,
+        WriteOptions {
+            compression_level: 0,
+            force_f32: false,
+            ..Default::default()
+        },
+        &mut bytes,
+    )
+    .expect("ion encode failed");
     let bytes = Arc::from(bytes.into_boxed_slice());
-    let ion = IonReader::open_bytes(bytes, ReadOptions::default()).expect("open ion failed");
+    let ion = IonReader::open_source(
+        Arc::new(BytesSource::new(bytes)) as Arc<dyn ReadBytes>,
+        ReadOptions::default(),
+    )
+    .expect("open ion failed");
     ParsedFile::Lazy(Box::new(ion))
 }
 
@@ -99,7 +123,10 @@ fn returns_every_segment_of_a_split_spectrum() {
     let mut file = open_split_ion();
     let (_, scans) = get_scans(
         &mut file,
-        ScanQuery::RtRange(FromTo { from: 0.0, to: 10.0 }),
+        ScanQuery::RtRange(FromTo {
+            from: 0.0,
+            to: 10.0,
+        }),
         TimeUnit::Minutes,
         1,
     );
@@ -141,7 +168,10 @@ fn ms_level_filter_excludes_other_levels() {
     let mut file = open_split_ion();
     let (_, scans) = get_scans(
         &mut file,
-        ScanQuery::RtRange(FromTo { from: 0.0, to: 10.0 }),
+        ScanQuery::RtRange(FromTo {
+            from: 0.0,
+            to: 10.0,
+        }),
         TimeUnit::Minutes,
         2,
     );

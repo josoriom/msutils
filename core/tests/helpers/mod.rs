@@ -5,10 +5,9 @@ use msutils::utilities::structs::{DataXY, Peak};
 pub fn dump_peaks(peaks: &[Peak]) {
     println!("peaks.len() = {}", peaks.len());
     for (i, p) in peaks.iter().enumerate() {
-        let r2 = p
-            .r2
-            .map(|v| format!("{:.3}", v))
-            .unwrap_or_else(|| "N/A".to_string());
+        let r2 =
+            p.r2.map(|v| format!("{:.3}", v))
+                .unwrap_or_else(|| "N/A".to_string());
         println!(
             "#{:03} from={:.6} to={:.6} rt={:.6} integral={:.3} intensity={:.3} r2={} n_points={} noise={:.3}",
             i, p.from, p.to, p.rt, p.integral, p.intensity, r2, p.n_points, p.noise
@@ -110,10 +109,12 @@ pub fn shuffle_with_seed<T>(xs: &mut [T], seed: u64) {
     }
 }
 
-use ionic::ion::{IonReader, ReadOptions};
-use ionic::mzml::structs::{Chromatogram, NumericArray};
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::{collections::BTreeMap, path::Path};
+
+use ionic::{
+    ion::{IonReader, ReadOptions},
+    mzml::structs::{Chromatogram, NumericArray},
+};
 
 #[allow(dead_code)]
 pub struct Eic {
@@ -147,7 +148,14 @@ pub fn load_chromatograms_from(path: &Path) -> BTreeMap<String, Eic> {
                 .into_iter()
                 .filter_map(|param| param.value.map(|value| (param.name, value)))
                 .collect();
-            out.insert(item.id, Eic { time, intensity, params });
+            out.insert(
+                item.id,
+                Eic {
+                    time,
+                    intensity,
+                    params,
+                },
+            );
         }
     }
     out
@@ -161,7 +169,11 @@ fn chromatogram_array(item: &Chromatogram, accession: &str) -> Vec<f64> {
         .expect("binary arrays")
         .binary_data_arrays;
     for array in arrays {
-        if array.cv_params.iter().any(|p| p.accession.as_deref() == Some(accession)) {
+        if array
+            .cv_params
+            .iter()
+            .any(|p| p.accession.as_deref() == Some(accession))
+        {
             return numeric_to_f64(array.binary.as_ref().expect("binary payload"));
         }
     }
@@ -182,7 +194,10 @@ fn numeric_to_f64(array: &NumericArray) -> Vec<f64> {
 
 #[allow(dead_code)]
 pub fn group_ids<'a>(chromatograms: &'a BTreeMap<String, Eic>, prefix: &str) -> Vec<&'a String> {
-    chromatograms.keys().filter(|id| id.starts_with(prefix)).collect()
+    chromatograms
+        .keys()
+        .filter(|id| id.starts_with(prefix))
+        .collect()
 }
 
 #[allow(dead_code)]
@@ -196,5 +211,8 @@ pub fn param_f64(eic: &Eic, key: &str) -> f64 {
 
 #[allow(dead_code)]
 pub fn param_bool(eic: &Eic, key: &str) -> bool {
-    eic.params.get(key).map(|value| value == "true").unwrap_or(false)
+    eic.params
+        .get(key)
+        .map(|value| value == "true")
+        .unwrap_or(false)
 }

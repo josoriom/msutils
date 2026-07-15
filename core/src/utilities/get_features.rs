@@ -4,19 +4,14 @@ use std::{
     io::Error,
 };
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use ionic::ion::{IonReader, ReadOptions};
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::prelude::*;
 use serde::Serialize;
-
-use crate::utilities::structs::ser_finite_f64;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::parallel::run_with_cores;
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use rayon::prelude::*;
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use ionic::ion::{IonReader, ReadOptions};
-
 use crate::utilities::{
     calculate_eic::{
         CentroidScan, EicOptions, EicReader, MS1_LEVEL, SpectrumKind, get_scan_times,
@@ -29,16 +24,12 @@ use crate::utilities::{
     get_peak::get_peak,
     math::median,
     mz_estimator::{MzEstimator, MzEstimatorKind, SampleMz, make_estimator, same_mass_gap},
-    structs::{DataXY, FromTo, Peak, Roi},
+    structs::{DataXY, FromTo, Peak, Roi, ser_finite_f64},
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 const ION_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use ionic::{mzml::structs::MzML, parse_mzml};
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use memmap2::Mmap;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use std::{
     fs,
@@ -46,6 +37,11 @@ use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use ionic::{mzml::structs::MzML, parse_mzml};
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use memmap2::Mmap;
 
 #[derive(Debug)]
 pub enum AlignmentError {
@@ -534,7 +530,8 @@ fn build_tiles(slots: &[ClusterSlot], eic_options: EicOptions) -> Vec<Vec<usize>
         let mut tile = vec![jobs[job_idx]];
         job_idx += 1;
         while job_idx < jobs.len()
-            && (slots[jobs[job_idx]].bounds.target_mz - tile_center_mz).abs() <= tile_tolerance * 2.0
+            && (slots[jobs[job_idx]].bounds.target_mz - tile_center_mz).abs()
+                <= tile_tolerance * 2.0
         {
             tile.push(jobs[job_idx]);
             job_idx += 1;
@@ -708,10 +705,11 @@ pub(crate) fn resolve_cluster(
 
     let window = crop_scans(tile_scans, from, to);
     let mass_points = find_apex_masses(window, mz_lo, mz_hi, kind);
-    let apex = mass_points
-        .iter()
-        .copied()
-        .max_by(|a, b| a.intensity.partial_cmp(&b.intensity).unwrap_or(Ordering::Equal));
+    let apex = mass_points.iter().copied().max_by(|a, b| {
+        a.intensity
+            .partial_cmp(&b.intensity)
+            .unwrap_or(Ordering::Equal)
+    });
     let peak_feature = existing.or(filled.as_ref());
 
     let masses: Vec<MassPeak> = if mass_points.len() <= 1 {
@@ -996,7 +994,10 @@ fn merge_lone_masses(
         return vec![groups.into_iter().flatten().collect()];
     }
     let mut kept_apart: Vec<Vec<(usize, MassPeak)>> = Vec::new();
-    for lone in groups.into_iter().filter(|group| distinct_samples(group) <= 1) {
+    for lone in groups
+        .into_iter()
+        .filter(|group| distinct_samples(group) <= 1)
+    {
         for item in lone {
             let detection = detection_mz.get(item.0).copied().flatten();
             match detection.and_then(|mz| nearest_group_within(&supported, mz, cutoff)) {
@@ -1118,8 +1119,9 @@ pub(crate) fn dedup(
     }
 
     let mut by_mz = results;
-    let by_mz_cmp =
-        |a: &ConsensusFeature, b: &ConsensusFeature| a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal);
+    let by_mz_cmp = |a: &ConsensusFeature, b: &ConsensusFeature| {
+        a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal)
+    };
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     by_mz.par_sort_unstable_by(by_mz_cmp);
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]

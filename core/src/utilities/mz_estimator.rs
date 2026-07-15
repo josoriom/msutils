@@ -1,7 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::utilities::find_features::MzTolerance;
-use crate::utilities::math::median;
+use crate::utilities::{find_features::MzTolerance, math::median};
 
 #[derive(Clone, Copy, Debug)]
 pub struct SampleMz {

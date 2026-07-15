@@ -2,34 +2,30 @@
 use core::ffi::c_int;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use core::ffi::{CStr, c_char, c_int};
-
-use serde::Serialize;
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     ptr, slice,
     sync::Arc,
 };
-use utilities::structs::ser_finite_f64;
-
-use ionic::{
-    ScanSource, ScanSummary, bin_to_mzml as bin_to_mzml_rs,
-    encoder::encode,
-    ion::{ByteRange, IonReader, ReadOptions, open_ranges},
-    mzml::structs::MzML,
-    parse_mzml as parse_mzml_rs,
-};
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use ionic::{
-    IonWriter,
-    ion::{WriteOptions, SectionStorage, FileWriter},
-    encoder::encode::DEFAULT_MZ_WINDOW,
+    DEFAULT_MZ_WINDOW, IonWriter,
+    ion::{FileWriter, SectionStorage},
     mzml::MzmlReader,
 };
+use ionic::{
+    ScanSource, ScanSummary, WriteOptions, bin_to_mzml as bin_to_mzml_rs,
+    ion::{ByteRange, BytesSource, CallbackSource, IonReader, ReadBytes, ReadOptions, open_ranges},
+    mzml::structs::MzML,
+    parse_mzml as parse_mzml_rs, write_mzml_to_ion,
+};
+use serde::Serialize;
+use utilities::structs::ser_finite_f64;
 
+pub mod prefetch;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub mod remote_reader;
-pub mod prefetch;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub mod url_source;
 pub mod utilities;
@@ -38,13 +34,16 @@ pub mod utilities;
 use prefetch::NoPrefetch;
 use prefetch::Prefetcher;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::prelude::*;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use remote_reader::RemoteReader;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use utilities::get_features::{AlignmentOptions, get_features as get_features_rs};
 use utilities::{
     calculate_baseline::{BaselineOptions, calculate_baseline as calculate_baseline_rs},
     calculate_eic::{
         EicOptions, EicReader, FastError, ScanQuery, TimeUnit,
-        calculate_eic as calculate_eic_dispatcher, get_scans as get_scans_rs,
-        plan_eic_ranges,
+        calculate_eic as calculate_eic_dispatcher, get_scans as get_scans_rs, plan_eic_ranges,
     },
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
     find_features::{FindFeaturesOptions, find_features as find_features_rs},
@@ -56,20 +55,14 @@ use utilities::{
     get_peak::get_peak as get_peak_rs,
     get_peaks_from_chrom::get_peaks_from_chrom as get_peaks_from_chrom_rs,
     get_peaks_from_eic::{get_peaks_from_eic as get_peaks_from_eic_rs, plan_peaks_ranges},
-    structs::{ChromRoi, EicRoi},
-    structs::{DataXY, FromTo, Roi},
+    mz_estimator::MzEstimatorKind,
+    structs::{ChromRoi, DataXY, EicRoi, FromTo, Roi},
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use utilities::get_features::{AlignmentOptions, get_features as get_features_rs};
+use crate::utilities::find_features::MzTolerance;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::parallel::run_with_cores;
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use rayon::prelude::*;
-use utilities::mz_estimator::MzEstimatorKind;
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::find_features::MzTolerance;
 
 #[derive(Serialize)]
 struct EicPeakOut<'a> {
@@ -424,8 +417,9 @@ pub unsafe extern "C" fn parse_ion_url(
     }
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let reader = WasmRangeReader { source_id };
-        let ion = IonReader::open_remote(
-            move |range| read_range(&reader, range),
+        let ion = IonReader::open_source(
+            Arc::new(CallbackSource::new(move |range| read_range(&reader, range)))
+                as Arc<dyn ReadBytes>,
             ReadOptions {
                 max_cached_bytes: cache_bytes,
                 ..Default::default()
@@ -464,8 +458,8 @@ pub unsafe extern "C" fn parse_bin(
     }
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let arc: Arc<[u8]> = Arc::from(unsafe { std::slice::from_raw_parts(data_ptr, data_len) });
-        let owned = IonReader::open_bytes(
-            arc,
+        let owned = IonReader::open_source(
+            Arc::new(BytesSource::new(arc)) as Arc<dyn ReadBytes>,
             ReadOptions {
                 max_cached_bytes: max_cache_size,
                 ..Default::default()
@@ -533,8 +527,9 @@ pub unsafe extern "C" fn parse_ion_url(
         reader.prefetch_open().map_err(|_| ERR_PARSE)?;
 
         let read_source = reader.clone();
-        let mut ion = IonReader::open_remote(
-            move |range| read_source.read(range),
+        let mut ion = IonReader::open_source(
+            Arc::new(CallbackSource::new(move |range| read_source.read(range)))
+                as Arc<dyn ReadBytes>,
             ReadOptions {
                 max_cached_bytes: cache_bytes,
                 ..Default::default()
@@ -658,8 +653,16 @@ pub unsafe extern "C" fn mzml_to_bin(
         let file = unsafe { &mut *h };
         file.with_mzml(|mzml| {
             let mut bytes = Vec::new();
-            encode(mzml, compression_level, f32_compress != 0, &mut bytes)
-                .map_err(|_| ERR_ENCODE)?;
+            write_mzml_to_ion(
+                mzml,
+                WriteOptions {
+                    compression_level,
+                    force_f32: f32_compress != 0,
+                    ..Default::default()
+                },
+                &mut bytes,
+            )
+            .map_err(|_| ERR_ENCODE)?;
             write_buf(out, bytes.into_boxed_slice());
             Ok(())
         })?;
@@ -696,8 +699,7 @@ pub unsafe extern "C" fn convert_mzml_file_to_ion_file(
 
         let mut reader =
             MzmlReader::open(std::path::Path::new(input_path)).map_err(|_| ERR_PARSE)?;
-        let mut output =
-            FileWriter::open(output_path).map_err(|_| ERR_ENCODE)?;
+        let mut output = FileWriter::open(output_path).map_err(|_| ERR_ENCODE)?;
 
         let config = WriteOptions {
             compression_level,
@@ -800,7 +802,11 @@ pub unsafe extern "C" fn fit_peak(
             x: unsafe { slice::from_raw_parts(x_ptr, len) }.to_vec(),
             y: unsafe { slice::from_raw_parts(y_ptr, len) }.to_vec(),
         };
-        let params = fit_peak_rs(&data, &PeakSeed { rt, intensity }, peak_shape_from_code(shape));
+        let params = fit_peak_rs(
+            &data,
+            &PeakSeed { rt, intensity },
+            peak_shape_from_code(shape),
+        );
         let json = serde_json::to_string(&params).map_err(|_| ERR_ENCODE)?;
         write_buf(out, json.into_bytes().into_boxed_slice());
         Ok(())
@@ -1191,7 +1197,9 @@ pub unsafe extern "C" fn plan_eic(
 
         let ranges = match file {
             ParsedFile::Lazy(ion) => plan_eic_ranges(ion.as_mut(), target, from, to, ppm, mz_tol),
-            ParsedFile::Remote(remote) => plan_eic_ranges(remote.ion_mut(), target, from, to, ppm, mz_tol),
+            ParsedFile::Remote(remote) => {
+                plan_eic_ranges(remote.ion_mut(), target, from, to, ppm, mz_tol)
+            }
             ParsedFile::Full(_) => Err(FastError::UnsupportedBackend),
         }
         .map_err(fast_error_to_code)?;
@@ -1310,12 +1318,8 @@ pub unsafe extern "C" fn get_ion_image(
             }
         };
 
-        let image = crate::utilities::ion_image::compute_ion_image(
-            &mut reader,
-            target,
-            tolerance,
-            level,
-        );
+        let image =
+            crate::utilities::ion_image::compute_ion_image(&mut reader, target, tolerance, level);
         let json = serde_json::to_string(&image).map_err(|_| ERR_ENCODE)?;
         write_buf(out, json.into_bytes().into_boxed_slice());
         Ok(())
@@ -1977,12 +1981,15 @@ fn build_peak_options(opts: *const CPeakOptions) -> FindPeaksOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use ionic::encoder::write_mzml_to_ion;
-    use ionic::mzml::structs::{
-        BinaryDataArray, BinaryDataArrayList, CvParam, NumericArray, NumericType, Run, Scan,
-        ScanList, Spectrum, SpectrumList,
+    use ionic::{
+        mzml::structs::{
+            BinaryDataArray, BinaryDataArrayList, CvParam, NumericArray, NumericType, Run, Scan,
+            ScanList, Spectrum, SpectrumList,
+        },
+        write_mzml_to_ion,
     };
+
+    use super::*;
 
     struct FakeReader {
         data: Vec<u8>,
@@ -2013,7 +2020,10 @@ mod tests {
             return_code: 0,
         };
 
-        let range = ByteRange { offset: 100, length: 0 };
+        let range = ByteRange {
+            offset: 100,
+            length: 0,
+        };
         let value = read_range(&fake, range).unwrap();
 
         assert_eq!(value.len(), 0);
@@ -2030,7 +2040,10 @@ mod tests {
             return_code: 0,
         };
 
-        let range = ByteRange { offset: 0, length: 3 };
+        let range = ByteRange {
+            offset: 0,
+            length: 3,
+        };
         let _result = read_range(&fake, range).unwrap();
 
         assert_eq!(fake.call_count.load(std::sync::atomic::Ordering::SeqCst), 1);
@@ -2046,7 +2059,10 @@ mod tests {
             return_code: -1,
         };
 
-        let range = ByteRange { offset: 0, length: 2 };
+        let range = ByteRange {
+            offset: 0,
+            length: 2,
+        };
         let result = read_range(&fake, range);
 
         assert!(result.is_err());
@@ -2062,7 +2078,10 @@ mod tests {
             return_code: 0,
         };
 
-        let range = ByteRange { offset: 0, length: u64::from(u32::MAX) + 1 };
+        let range = ByteRange {
+            offset: 0,
+            length: u64::from(u32::MAX) + 1,
+        };
         let result = read_range(&fake, range);
 
         assert!(result.is_err());
@@ -2190,8 +2209,11 @@ mod tests {
 
     fn open_ion(bytes: Vec<u8>) -> *mut ParsedFile {
         let bytes_arc = Arc::from(bytes.into_boxed_slice());
-        let ion = IonReader::open_bytes(bytes_arc, ReadOptions::default())
-            .expect("IonReader::open_bytes failed");
+        let ion = IonReader::open_source(
+            Arc::new(ionic::ion::BytesSource::new(bytes_arc)) as Arc<dyn ionic::ion::ReadBytes>,
+            ReadOptions::default(),
+        )
+        .expect("IonReader::open_bytes failed");
         Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
     }
 
@@ -2414,7 +2436,11 @@ mod tests {
 
     fn open_local_windowed_handle(bytes: &[u8]) -> *mut ParsedFile {
         let arc: Arc<[u8]> = Arc::from(bytes.to_vec().into_boxed_slice());
-        let ion = IonReader::open_bytes(arc, ReadOptions::default()).expect("open bytes failed");
+        let ion = IonReader::open_source(
+            Arc::new(ionic::ion::BytesSource::new(arc)) as Arc<dyn ionic::ion::ReadBytes>,
+            ReadOptions::default(),
+        )
+        .expect("open bytes failed");
         Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
     }
 
@@ -2554,8 +2580,10 @@ mod tests {
         let file_len = bytes.len() as u64;
         let reader = std::sync::Arc::new(RecordingReader::new(bytes));
         let read_source = reader.clone();
-        let mut ion = ionic::ion::IonReader::open_remote(
-            move |range| read_range(&*read_source, range),
+        let mut ion = ionic::ion::IonReader::open_source(
+            Arc::new(ionic::ion::CallbackSource::new(move |range| {
+                read_range(&*read_source, range)
+            })) as Arc<dyn ionic::ion::ReadBytes>,
             ReadOptions::default(),
         )
         .expect("open_remote failed");
@@ -2572,8 +2600,15 @@ mod tests {
         let eic = calculate_eic_dispatcher(
             &mut EicReader::Ion(&mut ion),
             500.0,
-            FromTo { from: 0.0, to: 10.0 },
-            EicOptions { ppm_tolerance: 20.0, mz_tolerance: 0.005, ..Default::default() },
+            FromTo {
+                from: 0.0,
+                to: 10.0,
+            },
+            EicOptions {
+                ppm_tolerance: 20.0,
+                mz_tolerance: 0.005,
+                ..Default::default()
+            },
         )
         .expect("calculate_eic failed");
         assert!(!eic.y.is_empty());
@@ -2585,9 +2620,9 @@ mod tests {
         );
 
         for (offset, len) in &compute_reads {
-            let contained = plan.iter().any(|r| {
-                r.offset <= *offset && offset.saturating_add(*len) <= r.offset + r.length
-            });
+            let contained = plan
+                .iter()
+                .any(|r| r.offset <= *offset && offset.saturating_add(*len) <= r.offset + r.length);
             assert!(
                 contained,
                 "compute read (offset={offset}, len={len}) is not contained in any planned range"
@@ -2600,8 +2635,10 @@ mod tests {
         let reader = std::sync::Arc::new(RecordingReader::new(windowed_ion_bytes()));
         reader.set_fail(true);
         let read_source = reader.clone();
-        let result = ionic::ion::IonReader::open_remote(
-            move |range| read_range(&*read_source, range),
+        let result = ionic::ion::IonReader::open_source(
+            Arc::new(ionic::ion::CallbackSource::new(move |range| {
+                read_range(&*read_source, range)
+            })) as Arc<dyn ionic::ion::ReadBytes>,
             ReadOptions::default(),
         );
         assert!(result.is_err());
@@ -2611,8 +2648,10 @@ mod tests {
     fn eic_compute_errors_cleanly_when_data_read_fails() {
         let reader = std::sync::Arc::new(RecordingReader::new(windowed_ion_bytes()));
         let read_source = reader.clone();
-        let mut ion = ionic::ion::IonReader::open_remote(
-            move |range| read_range(&*read_source, range),
+        let mut ion = ionic::ion::IonReader::open_source(
+            Arc::new(ionic::ion::CallbackSource::new(move |range| {
+                read_range(&*read_source, range)
+            })) as Arc<dyn ionic::ion::ReadBytes>,
             ReadOptions::default(),
         )
         .expect("open_remote failed");
@@ -2624,8 +2663,15 @@ mod tests {
         let result = calculate_eic_dispatcher(
             &mut EicReader::Ion(&mut ion),
             500.0,
-            FromTo { from: 0.0, to: 10.0 },
-            EicOptions { ppm_tolerance: 20.0, mz_tolerance: 0.005, ..Default::default() },
+            FromTo {
+                from: 0.0,
+                to: 10.0,
+            },
+            EicOptions {
+                ppm_tolerance: 20.0,
+                mz_tolerance: 0.005,
+                ..Default::default()
+            },
         );
         assert!(result.is_err());
     }

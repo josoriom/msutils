@@ -1,8 +1,13 @@
-use msutils::utilities::find_peaks::{FindPeaksOptions, PeakFilter, find_peaks};
-use msutils::utilities::get_boundaries::{BoundariesOptions, get_boundaries};
-use msutils::utilities::structs::DataXY;
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+
+use msutils::utilities::{
+    find_peaks::{FindPeaksOptions, PeakFilter, find_peaks},
+    get_boundaries::{BoundariesOptions, get_boundaries},
+    structs::DataXY,
+};
 
 mod helpers;
 use helpers::load_chromatograms_from;

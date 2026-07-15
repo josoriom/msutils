@@ -1,5 +1,6 @@
-use msutils::utilities::cheminfo::sgg::{SggOptions, sgg};
 use std::f64::consts::PI;
+
+use msutils::utilities::cheminfo::sgg::{SggOptions, sgg};
 
 fn assert_close(actual: f64, expected: f64, decimals: i32) {
     let tol = 10f64.powi(-decimals.max(0));

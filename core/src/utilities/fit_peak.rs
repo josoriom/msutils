@@ -1,8 +1,10 @@
 use serde::Serialize;
 
-use crate::utilities::cheminfo::lm::{Data2D, LevenbergMarquardtOptions, lm};
-use crate::utilities::functions::{emg_fn, gaussian_fn, sigma_from_fwhm};
-use crate::utilities::structs::{DataXY, Peak};
+use crate::utilities::{
+    cheminfo::lm::{Data2D, LevenbergMarquardtOptions, lm},
+    functions::{emg_fn, gaussian_fn, sigma_from_fwhm},
+    structs::{DataXY, Peak},
+};
 
 const FIT_ITERATIONS: usize = 40;
 const FIT_TIMEOUT_SECONDS: f64 = 1.0;
@@ -48,7 +50,11 @@ pub fn fit_peak(data: &DataXY, seed: &PeakSeed, shape: PeakShape) -> Option<Peak
     if !width.is_finite() || width <= 0.0 {
         return None;
     }
-    let scaled_x: Vec<f64> = data.x.iter().map(|value| (value - seed.rt) / width).collect();
+    let scaled_x: Vec<f64> = data
+        .x
+        .iter()
+        .map(|value| (value - seed.rt) / width)
+        .collect();
     let scaled_y: Vec<f64> = data.y.iter().map(|value| value / seed.intensity).collect();
 
     let mut params = match shape {
@@ -137,7 +143,9 @@ fn fit_emg(x: &[f64], y: &[f64]) -> Option<Vec<f64>> {
         x: x.to_vec(),
         y: y.to_vec(),
     };
-    lm(&data, &emg_unit, &options).ok().map(|fit| fit.parameter_values)
+    lm(&data, &emg_unit, &options)
+        .ok()
+        .map(|fit| fit.parameter_values)
 }
 
 fn gaussian_unit(params: &[f64]) -> Box<dyn Fn(f64) -> f64> {
@@ -180,7 +188,13 @@ fn cross_before(x: &[f64], y: &[f64], apex: usize, half: f64) -> Option<f64> {
     let mut index = apex;
     while index > 0 {
         if y[index] >= half && y[index - 1] < half {
-            return Some(crossing(x[index - 1], y[index - 1], x[index], y[index], half));
+            return Some(crossing(
+                x[index - 1],
+                y[index - 1],
+                x[index],
+                y[index],
+                half,
+            ));
         }
         index -= 1;
     }
@@ -191,7 +205,13 @@ fn cross_after(x: &[f64], y: &[f64], apex: usize, half: f64) -> Option<f64> {
     let mut index = apex;
     while index + 1 < y.len() {
         if y[index] >= half && y[index + 1] < half {
-            return Some(crossing(x[index], y[index], x[index + 1], y[index + 1], half));
+            return Some(crossing(
+                x[index],
+                y[index],
+                x[index + 1],
+                y[index + 1],
+                half,
+            ));
         }
         index += 1;
     }

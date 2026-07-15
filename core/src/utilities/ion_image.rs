@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
-use ionic::ion::{ByteRange, IonReader, Range};
-use ionic::{ScanSource, ScanSummary};
+use ionic::{
+    ScanSource, ScanSummary,
+    ion::{ByteRange, IonReader, Range},
+};
 use serde::Serialize;
 
 use super::calculate_eic::{
@@ -117,7 +119,13 @@ fn ranges_for_candidates(
     let mut ranges = Vec::new();
     for candidate in candidates {
         let scan_ranges = ion
-            .byte_ranges(candidate.0, Range { from: lower, to: upper })
+            .byte_ranges(
+                candidate.0,
+                Range {
+                    from: lower,
+                    to: upper,
+                },
+            )
             .map_err(FastError::from)?;
         ranges.extend(scan_ranges);
     }
@@ -136,8 +144,15 @@ fn fold_candidates(
     let mut mz_buffer = Vec::new();
     let mut intensity_buffer = Vec::new();
     for (index, x, y, z) in candidates {
-        if read_mz_window(reader, *index, lower, upper, &mut mz_buffer, &mut intensity_buffer)
-            .is_err()
+        if read_mz_window(
+            reader,
+            *index,
+            lower,
+            upper,
+            &mut mz_buffer,
+            &mut intensity_buffer,
+        )
+        .is_err()
         {
             continue;
         }
@@ -272,7 +287,14 @@ impl ImageSession {
         let start = from.min(self.candidates.len());
         let end = (from + count).min(self.candidates.len());
         let batch = &self.candidates[start..end];
-        fold_candidates(reader, batch, lower, upper, &mut self.sums, &mut self.bounds);
+        fold_candidates(
+            reader,
+            batch,
+            lower,
+            upper,
+            &mut self.sums,
+            &mut self.bounds,
+        );
     }
 
     pub fn finish(&self) -> IonImage {

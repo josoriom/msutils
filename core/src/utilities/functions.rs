@@ -1,6 +1,6 @@
-use crate::utilities::{cheminfo::lm::ParameterizedFunction, math::erfc_approx};
-
 use std::f64::consts::{LN_2, PI, SQRT_2};
+
+use crate::utilities::{cheminfo::lm::ParameterizedFunction, math::erfc_approx};
 
 /// ## Gaussian
 /// Wikipedia https://en.wikipedia.org/wiki/Gaussian_function

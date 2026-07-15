@@ -1,6 +1,8 @@
-use msutils::utilities::fit_peak::{PeakSeed, PeakShape, draw_peak, fit_peak};
-use msutils::utilities::functions::{emg_fn, gaussian_fn, sigma_from_fwhm};
-use msutils::utilities::structs::DataXY;
+use msutils::utilities::{
+    fit_peak::{PeakSeed, PeakShape, draw_peak, fit_peak},
+    functions::{emg_fn, gaussian_fn, sigma_from_fwhm},
+    structs::DataXY,
+};
 
 mod helpers;
 use helpers::load_chromatograms;
@@ -30,18 +32,29 @@ fn gaussian_round_trip() {
     let fwhm = 0.2;
     let sigma = sigma_from_fwhm(fwhm);
     let x = linspace(4.0, 6.0, 200);
-    let y = x.iter().map(|&v| gaussian_fn(v, intensity, rt, sigma)).collect();
+    let y = x
+        .iter()
+        .map(|&v| gaussian_fn(v, intensity, rt, sigma))
+        .collect();
     let data = DataXY { x, y };
 
     let params = fit_peak(&data, &PeakSeed { rt, intensity }, PeakShape::Gaussian).expect("fit");
     assert_eq!(params.shape, PeakShape::Gaussian);
     assert!(params.r2 > 0.99, "r2 = {:.4}", params.r2);
-    assert!((params.fwhm - fwhm).abs() < 0.02, "fwhm = {:.4}", params.fwhm);
+    assert!(
+        (params.fwhm - fwhm).abs() < 0.02,
+        "fwhm = {:.4}",
+        params.fwhm
+    );
 
     let drawn = draw_peak(&data, &params);
     assert_eq!(drawn.x, data.x);
     let peak = drawn.y.iter().cloned().fold(f64::MIN, f64::max);
-    assert!((peak - intensity).abs() < intensity * 0.02, "peak = {:.1}", peak);
+    assert!(
+        (peak - intensity).abs() < intensity * 0.02,
+        "peak = {:.1}",
+        peak
+    );
 }
 
 #[test]

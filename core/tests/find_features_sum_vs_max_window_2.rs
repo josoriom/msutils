@@ -1,9 +1,9 @@
-use msutils::utilities::calculate_eic::{EicOptions, SpectrumKind};
-use msutils::utilities::find_features::{
-    Feature, FeatureError, FindFeaturesOptions, Scan, detect_features,
+use msutils::utilities::{
+    calculate_eic::{EicOptions, SpectrumKind},
+    find_features::{Feature, FeatureError, FindFeaturesOptions, Scan, detect_features},
+    find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter},
+    shape_filter::PeakShape,
 };
-use msutils::utilities::find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter};
-use msutils::utilities::shape_filter::PeakShape;
 
 const TARGET_MZ: f64 = 500.0;
 const APEX_RT: f64 = 1.0;
@@ -118,7 +118,14 @@ fn detection_keeps_centroid_peak() {
     );
 }
 
-fn add_bell(center: f64, apex: f64, points: usize, spacing: f64, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) {
+fn add_bell(
+    center: f64,
+    apex: f64,
+    points: usize,
+    spacing: f64,
+    mz: &mut Vec<f64>,
+    intensity: &mut Vec<f64>,
+) {
     let half = (points as f64 - 1.0) / 2.0;
     for step in 0..points {
         let offset = step as f64 - half;
@@ -138,7 +145,14 @@ fn multi_ion_run(ions: &[(f64, f64)], profile_points: usize) -> (Vec<f64>, Vec<S
         let mut mz = Vec::new();
         let mut intensity = Vec::new();
         for &(center, apex) in ions {
-            add_bell(center, apex * factor, profile_points, 0.001, &mut mz, &mut intensity);
+            add_bell(
+                center,
+                apex * factor,
+                profile_points,
+                0.001,
+                &mut mz,
+                &mut intensity,
+            );
         }
         time.push(rt);
         scans.push(Scan { mz, intensity });
@@ -158,17 +172,33 @@ fn grid_over(low: f64, high: f64, step: f64) -> Vec<f64> {
 
 fn detect_over_grid(ions: &[(f64, f64)], profile_points: usize, grid: &[f64]) -> Vec<Feature> {
     let (time, scans) = multi_ion_run(ions, profile_points);
-    detect_features(&scans, grid, &time, SpectrumKind::Profile, &detection_options(), 1)
-        .expect("detection should run")
+    detect_features(
+        &scans,
+        grid,
+        &time,
+        SpectrumKind::Profile,
+        &detection_options(),
+        1,
+    )
+    .expect("detection should run")
 }
 
 #[test]
 fn detection_keeps_one_profile_bell_as_one_mass() {
     let grid = grid_over(499.99, 500.01, 0.005);
     let features = detect_over_grid(&[(TARGET_MZ, 3000.0)], 13, &grid);
-    assert!(feature_at_apex(&features).is_some(), "the single profile bell is detected");
-    let widest = features.iter().map(|feature| feature.mz).fold(f64::MIN, f64::max);
-    let narrowest = features.iter().map(|feature| feature.mz).fold(f64::MAX, f64::min);
+    assert!(
+        feature_at_apex(&features).is_some(),
+        "the single profile bell is detected"
+    );
+    let widest = features
+        .iter()
+        .map(|feature| feature.mz)
+        .fold(f64::MIN, f64::max);
+    let narrowest = features
+        .iter()
+        .map(|feature| feature.mz)
+        .fold(f64::MAX, f64::min);
     assert!(
         widest - narrowest < 0.03,
         "one ion must stay one mass; scanning it across {} grid points spread the reported m/z by {}",
@@ -205,7 +235,14 @@ fn detection_on_empty_scans_reports_no_candidates() {
         })
         .collect();
     let grid = vec![TARGET_MZ];
-    let result = detect_features(&scans, &grid, &time, SpectrumKind::Profile, &detection_options(), 1);
+    let result = detect_features(
+        &scans,
+        &grid,
+        &time,
+        SpectrumKind::Profile,
+        &detection_options(),
+        1,
+    );
     assert!(
         matches!(result, Err(FeatureError::NoCandidateMasses)),
         "empty scans must report no candidates, not panic"

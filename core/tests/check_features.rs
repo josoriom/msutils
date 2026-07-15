@@ -1,12 +1,17 @@
 mod helpers;
 
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+
 use helpers::{Eic, load_chromatograms_from, param_f64};
-use msutils::utilities::find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter};
-use msutils::utilities::get_peak::get_peak;
-use msutils::utilities::shape_filter::PeakShape;
-use msutils::utilities::structs::{DataXY, Roi};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use msutils::utilities::{
+    find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter},
+    get_peak::get_peak,
+    shape_filter::PeakShape,
+    structs::{DataXY, Roi},
+};
 
 const RT_WINDOW: f64 = 0.3;
 const EXPECTED_FEATURES: usize = 80;

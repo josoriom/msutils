@@ -2,11 +2,13 @@
 // find_noise_level returned the peak's own apex as the noise floor, so get_peak rejected it.
 // Fully synthetic (no fixture) so it runs identically here and in msutils/core/tests/.
 
-use msutils::utilities::find_noise_level::find_noise_level;
-use msutils::utilities::find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter};
-use msutils::utilities::get_peak::get_peak;
-use msutils::utilities::shape_filter::PeakShape;
-use msutils::utilities::structs::{DataXY, Roi};
+use msutils::utilities::{
+    find_noise_level::find_noise_level,
+    find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter},
+    get_peak::get_peak,
+    shape_filter::PeakShape,
+    structs::{DataXY, Roi},
+};
 
 fn options() -> FindPeaksOptions {
     FindPeaksOptions {
@@ -18,7 +20,10 @@ fn options() -> FindPeaksOptions {
             min_snr: Some(2.0),
             ..Default::default()
         }),
-        artifact_filter: Some(ArtifactFilter { min_r2: 0.0, shape: PeakShape::EMG }),
+        artifact_filter: Some(ArtifactFilter {
+            min_r2: 0.0,
+            shape: PeakShape::EMG,
+        }),
         ..Default::default()
     }
 }
@@ -42,8 +47,16 @@ fn finds_isolated_lone_peak_1() {
     let center = eic.x[100];
     let peak = get_peak(&eic, &Roi::new(center, 1.0), Some(options()))
         .expect("get_peak must find a lone 350k peak on a flat baseline");
-    assert!((peak.rt - center).abs() < 0.1, "found rt {} far from {center}", peak.rt);
-    assert!(peak.intensity > 100_000.0, "intensity {} too low", peak.intensity);
+    assert!(
+        (peak.rt - center).abs() < 0.1,
+        "found rt {} far from {center}",
+        peak.rt
+    );
+    assert!(
+        peak.intensity > 100_000.0,
+        "intensity {} too low",
+        peak.intensity
+    );
 }
 
 #[test]

@@ -1,15 +1,17 @@
 use std::cmp::Ordering;
 
-use crate::utilities::calculate_baseline::{BaselineOptions, calculate_baseline};
-use crate::utilities::cheminfo::sgg::{SggOptions, sgg};
-use crate::utilities::closest_index;
-use crate::utilities::find_noise_level::{find_noise_level, find_noise_level_san_plot};
-use crate::utilities::fit_peak::PeakShape;
-use crate::utilities::get_boundaries::{Boundaries, BoundariesOptions, get_boundaries};
-use crate::utilities::math::xy_integration;
-use crate::utilities::scan_for_peaks::scan_for_peaks;
-use crate::utilities::shape_filter::{Candidate, ShapeFilter};
-use crate::utilities::structs::{DataXY, Peak};
+use crate::utilities::{
+    calculate_baseline::{BaselineOptions, calculate_baseline},
+    cheminfo::sgg::{SggOptions, sgg},
+    closest_index,
+    find_noise_level::{find_noise_level, find_noise_level_san_plot},
+    fit_peak::PeakShape,
+    get_boundaries::{Boundaries, BoundariesOptions, get_boundaries},
+    math::xy_integration,
+    scan_for_peaks::scan_for_peaks,
+    shape_filter::{Candidate, ShapeFilter},
+    structs::{DataXY, Peak},
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ArtifactFilter {
@@ -555,7 +557,12 @@ fn height_at(values: &[f64], index: usize) -> f64 {
     values.get(index).copied().unwrap_or(0.0)
 }
 
-fn peaks_are_separate(prominence: f64, smaller_height: f64, taller_height: f64, noise: f64) -> bool {
+fn peaks_are_separate(
+    prominence: f64,
+    smaller_height: f64,
+    taller_height: f64,
+    noise: f64,
+) -> bool {
     if smaller_height <= 0.0 {
         return false;
     }
@@ -576,7 +583,11 @@ fn merge_peaks(data: &DataXY, keeper: Peak, other: Peak) -> Peak {
     let to = keeper.to.max(other.to);
     let left = closest_index(&data.x, from);
     let right = closest_index(&data.x, to);
-    let (lo, hi) = if left <= right { (left, right) } else { (right, left) };
+    let (lo, hi) = if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    };
     let (integral, _) = xy_integration(&data.x[lo..=hi], &data.y[lo..=hi]);
     Peak {
         from,
@@ -620,7 +631,11 @@ fn valley_index(values: &[f64], first: usize, second: usize) -> usize {
 fn reframe(data: &DataXY, peak: Peak, from: f64, to: f64) -> Peak {
     let left = closest_index(&data.x, from);
     let right = closest_index(&data.x, to);
-    let (lo, hi) = if left <= right { (left, right) } else { (right, left) };
+    let (lo, hi) = if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    };
     let (integral, _) = xy_integration(&data.x[lo..=hi], &data.y[lo..=hi]);
     Peak {
         from,

@@ -1,7 +1,10 @@
 use std::cmp::Ordering;
 
-use crate::utilities::cheminfo::sgg::{SggOptions, sgg};
-use crate::utilities::{closest_index, structs::DataXY};
+use crate::utilities::{
+    cheminfo::sgg::{SggOptions, sgg},
+    closest_index,
+    structs::DataXY,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Boundary {
@@ -54,7 +57,11 @@ const RECENTER_WINDOW: usize = 4;
 const CONFIRM_STEPS: usize = 5;
 const BASELINE_PERCENTILE: f64 = 0.10;
 
-pub fn get_boundaries(data: &DataXY, peak_x: f64, options: Option<BoundariesOptions>) -> Boundaries {
+pub fn get_boundaries(
+    data: &DataXY,
+    peak_x: f64,
+    options: Option<BoundariesOptions>,
+) -> Boundaries {
     let n = data.x.len();
     if n < 2 || n != data.y.len() {
         return Boundaries {
@@ -258,7 +265,11 @@ fn find_edge(
         current = next;
     }
 
-    let edge = if direction > 0 { (length - 1) as usize } else { 0 };
+    let edge = if direction > 0 {
+        (length - 1) as usize
+    } else {
+        0
+    };
     boundary_at(x, edge)
 }
 
@@ -306,8 +317,14 @@ mod tests {
         let from = edges.from.value.unwrap();
         let to = edges.to.value.unwrap();
 
-        assert!(from < 5.0 && to > 5.0, "bracket [{from}, {to}] must contain the apex");
-        assert!(from < 4.9 && to > 5.1, "bracket [{from}, {to}] must reach past the flanks");
+        assert!(
+            from < 5.0 && to > 5.0,
+            "bracket [{from}, {to}] must contain the apex"
+        );
+        assert!(
+            from < 4.9 && to > 5.1,
+            "bracket [{from}, {to}] must reach past the flanks"
+        );
     }
 
     #[test]
@@ -324,7 +341,10 @@ mod tests {
             .value
             .unwrap();
 
-        assert!(to > 5.0 && to < 5.35, "right edge {to} must land in the valley, not the next peak");
+        assert!(
+            to > 5.0 && to < 5.35,
+            "right edge {to} must land in the valley, not the next peak"
+        );
     }
 
     #[test]
@@ -340,36 +360,66 @@ mod tests {
             .map(|(index, &value)| value + 0.02 * wobble(index))
             .collect();
 
-        let clean_to = get_boundaries(&DataXY { x: x.clone(), y: clean }, 5.0, Some(derivative_options()))
-            .to
-            .value
-            .unwrap();
+        let clean_to = get_boundaries(
+            &DataXY {
+                x: x.clone(),
+                y: clean,
+            },
+            5.0,
+            Some(derivative_options()),
+        )
+        .to
+        .value
+        .unwrap();
         let noisy_to = get_boundaries(&DataXY { x, y: noisy }, 5.0, Some(derivative_options()))
             .to
             .value
             .unwrap();
 
-        assert!((clean_to - noisy_to).abs() <= 0.05, "right edge moved {clean_to} -> {noisy_to} under noise");
+        assert!(
+            (clean_to - noisy_to).abs() <= 0.05,
+            "right edge moved {clean_to} -> {noisy_to} under noise"
+        );
     }
 
     #[test]
     fn derivative_keeps_left_edge_when_right_side_is_truncated() {
         let full_x = grid(4.0, 6.0, 400);
-        let full_y: Vec<f64> = full_x.iter().map(|&v| 0.05 + bell(v, 5.0, 1.0, 0.2)).collect();
-        let full_from = get_boundaries(&DataXY { x: full_x.clone(), y: full_y.clone() }, 5.0, Some(derivative_options()))
-            .from
-            .value
-            .unwrap();
+        let full_y: Vec<f64> = full_x
+            .iter()
+            .map(|&v| 0.05 + bell(v, 5.0, 1.0, 0.2))
+            .collect();
+        let full_from = get_boundaries(
+            &DataXY {
+                x: full_x.clone(),
+                y: full_y.clone(),
+            },
+            5.0,
+            Some(derivative_options()),
+        )
+        .from
+        .value
+        .unwrap();
 
         let cut = full_x.partition_point(|&v| v <= 5.25);
         let cut_x = full_x[..cut].to_vec();
         let cut_y = full_y[..cut].to_vec();
-        let cut_edges = get_boundaries(&DataXY { x: cut_x, y: cut_y }, 5.0, Some(derivative_options()));
+        let cut_edges = get_boundaries(
+            &DataXY { x: cut_x, y: cut_y },
+            5.0,
+            Some(derivative_options()),
+        );
         let cut_from = cut_edges.from.value.unwrap();
         let cut_to = cut_edges.to.value.unwrap();
 
-        assert!((full_from - cut_from).abs() <= 0.02, "left edge moved {full_from} -> {cut_from} after truncation");
-        assert!(cut_to >= 5.2, "right edge {cut_to} should follow the data to its truncated end");
+        assert!(
+            (full_from - cut_from).abs() <= 0.02,
+            "left edge moved {full_from} -> {cut_from} after truncation"
+        );
+        assert!(
+            cut_to >= 5.2,
+            "right edge {cut_to} should follow the data to its truncated end"
+        );
     }
 
     #[test]

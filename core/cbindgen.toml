@@ -10,5 +10,9 @@ include = [
   "MSUTILS_ABI_VERSION",
 ]
 
+[defines]
+"target_arch = wasm32" = "MSUTILS_TARGET_WASM32"
+"target_os = wasi" = "MSUTILS_TARGET_WASI"
+
 [parse]
 parse_deps = false

@@ -1,11 +1,15 @@
-use msutils::utilities::calculate_baseline::BaselineOptions;
-use msutils::utilities::find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter, find_peaks};
-use msutils::utilities::fit_peak::PeakShape;
-use msutils::utilities::structs::DataXY;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
 
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use msutils::utilities::{
+    calculate_baseline::BaselineOptions,
+    find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter, find_peaks},
+    fit_peak::PeakShape,
+    structs::DataXY,
+};
 
 mod helpers;
 use helpers::{Eic, approx_eq, dump_peaks, load_chromatograms_from};

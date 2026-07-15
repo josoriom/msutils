@@ -1,3 +1,7 @@
+use ionic::ScanSource;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::{ThreadPoolBuilder, prelude::*};
+
 use crate::utilities::{
     calculate_eic::{EicOptions, ScanQuery, get_eic_for_mz, get_scans, lower_bound, upper_bound},
     find_features::max_intensity_centroid,
@@ -5,10 +9,6 @@ use crate::utilities::{
     get_peak::get_peak,
     structs::{DataXY, EicRoi, FromTo, Peak, Roi},
 };
-
-use ionic::ScanSource;
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use rayon::{ThreadPoolBuilder, prelude::*};
 
 #[derive(Clone, Debug, Default)]
 pub struct TargetedFeature {

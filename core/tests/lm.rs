@@ -1,7 +1,8 @@
+use std::f64::consts::PI;
+
 use msutils::utilities::cheminfo::lm::{
     Data2D, GradientDifference, LevenbergMarquardtOptions, Weights, error_calculation, lm,
 };
-use std::f64::consts::PI;
 
 fn assert_close_decimals(a: f64, b: f64, decimals: usize) {
     let tol = 10f64.powi(-(decimals as i32));

@@ -33,10 +33,10 @@ pub fn plan_peaks_ranges(
 }
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::parallel::run_with_cores;
+use rayon::prelude::*;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use rayon::prelude::*;
+use crate::utilities::parallel::run_with_cores;
 
 struct PeakJob {
     roi_idx: usize,

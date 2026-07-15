@@ -1,12 +1,13 @@
-use serde::Serialize;
-
-use crate::utilities::structs::ser_finite_f64;
 use std::{
     cmp::Ordering,
     collections::HashSet,
     error::Error,
     fmt::{Display, Formatter},
 };
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::prelude::*;
+use serde::Serialize;
 
 use crate::utilities::{
     calculate_eic::{
@@ -17,11 +18,8 @@ use crate::utilities::{
     find_masses::find_masses,
     find_peaks::{FindPeaksOptions, find_peaks},
     parallel::run_with_cores,
-    structs::{DataXY, FromTo},
+    structs::{DataXY, FromTo, ser_finite_f64},
 };
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use rayon::prelude::*;
 
 #[derive(Clone, Debug)]
 pub struct MzTolerance {
@@ -305,7 +303,8 @@ pub(crate) fn keep_masses_with_signal(
         .map(|&mass| mass + mz_tolerance_for(mass, eic_options))
         .collect();
 
-    let has_signal = find_masses_with_signal(&low_bounds, &high_bounds, scans, min_intensity, cores);
+    let has_signal =
+        find_masses_with_signal(&low_bounds, &high_bounds, scans, min_intensity, cores);
 
     grid.iter()
         .copied()

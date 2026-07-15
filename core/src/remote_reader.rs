@@ -3,9 +3,11 @@ use std::sync::Mutex;
 use ionic::ion::{ByteRange, IonResult, open_ranges};
 use rayon::prelude::*;
 
-use crate::prefetch::{Prefetcher, RangePlan};
-use crate::url_source::UrlSource;
-use crate::utilities::calculate_eic::{FastError, sort_and_dedup_ranges};
+use crate::{
+    prefetch::{Prefetcher, RangePlan},
+    url_source::UrlSource,
+    utilities::calculate_eic::{FastError, sort_and_dedup_ranges},
+};
 
 const HEADER_LENGTH: u64 = 1024;
 const MERGE_GAP: u64 = 65536;
@@ -122,7 +124,10 @@ impl RemoteReader {
     }
 
     pub fn prefetch_open(&self) -> IonResult<()> {
-        let header = self.source.read(ByteRange { offset: 0, length: HEADER_LENGTH })?;
+        let header = self.source.read(ByteRange {
+            offset: 0,
+            length: HEADER_LENGTH,
+        })?;
         let ranges = open_ranges(&header)?;
         self.cache.add(0, header);
         self.fetch_into_cache(&ranges)
@@ -137,7 +142,10 @@ impl RemoteReader {
         let fetched: IonResult<Vec<(u64, Vec<u8>)>> = merged
             .par_iter()
             .map(|range| {
-                let bytes = self.source.read(ByteRange { offset: range.offset, length: range.length })?;
+                let bytes = self.source.read(ByteRange {
+                    offset: range.offset,
+                    length: range.length,
+                })?;
                 Ok((range.offset, bytes))
             })
             .collect();

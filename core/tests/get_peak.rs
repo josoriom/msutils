@@ -1,7 +1,9 @@
-use msutils::utilities::find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter};
-use msutils::utilities::get_peak::get_peak;
-use msutils::utilities::shape_filter::PeakShape;
-use msutils::utilities::structs::{DataXY, Roi};
+use msutils::utilities::{
+    find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter},
+    get_peak::get_peak,
+    shape_filter::PeakShape,
+    structs::{DataXY, Roi},
+};
 
 const STEP_MINUTES: f64 = 0.006;
 

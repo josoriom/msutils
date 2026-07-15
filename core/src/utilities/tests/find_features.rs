@@ -423,7 +423,9 @@ mod tests {
     }
 
     fn random_sorted(state: &mut u64, count: usize, low: f64, span: f64) -> Vec<f64> {
-        let mut values: Vec<f64> = (0..count).map(|_| low + span * next_random(state)).collect();
+        let mut values: Vec<f64> = (0..count)
+            .map(|_| low + span * next_random(state))
+            .collect();
         values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         values
     }
@@ -435,8 +437,14 @@ mod tests {
     }
 
     fn reference_max_eic(scans: &[Scan], masses: &[f64], options: EicOptions) -> Vec<f64> {
-        let lo: Vec<f64> = masses.iter().map(|&m| m - mz_tolerance_for(m, options)).collect();
-        let hi: Vec<f64> = masses.iter().map(|&m| m + mz_tolerance_for(m, options)).collect();
+        let lo: Vec<f64> = masses
+            .iter()
+            .map(|&m| m - mz_tolerance_for(m, options))
+            .collect();
+        let hi: Vec<f64> = masses
+            .iter()
+            .map(|&m| m + mz_tolerance_for(m, options))
+            .collect();
         let mut max_value = vec![0.0f64; masses.len()];
         for scan in scans {
             let mz = &scan.mz;

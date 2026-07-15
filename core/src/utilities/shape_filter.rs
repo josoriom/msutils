@@ -1,7 +1,8 @@
-use crate::utilities::fit_peak::{PeakSeed, fit_peak};
-use crate::utilities::structs::DataXY;
-
 pub use crate::utilities::fit_peak::PeakShape;
+use crate::utilities::{
+    fit_peak::{PeakSeed, fit_peak},
+    structs::DataXY,
+};
 
 const MIN_FIT_POINTS: usize = 5;
 const FIT_HALF_WIDTH_FWHM: f64 = 1.15;

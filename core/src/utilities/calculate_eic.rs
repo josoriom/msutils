@@ -1,8 +1,10 @@
 use std::{cmp::Ordering, sync::Arc};
 
-use ionic::ion::{ByteRange, IonError, IonReader, Range};
-use ionic::mzml::structs::{CvParam, MzML};
-use ionic::{ScanSource, ScanSummary};
+use ionic::{
+    ScanSource, ScanSummary,
+    ion::{ByteRange, IonError, IonReader, Range},
+    mzml::structs::{CvParam, MzML},
+};
 use serde::Serialize;
 
 use crate::utilities::structs::{FromTo, Peak, ser_finite_f64};
@@ -111,7 +113,9 @@ fn kind_from_params(params: &[CvParam]) -> SpectrumKind {
 
 fn first_spectrum_params(mzml: &MzML) -> Option<&[CvParam]> {
     let list = mzml.run.spectrum_list.as_ref()?;
-    list.spectra.first().map(|spectrum| spectrum.cv_params.as_slice())
+    list.spectra
+        .first()
+        .map(|spectrum| spectrum.cv_params.as_slice())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -274,7 +278,13 @@ pub fn read_mz_window(
     match reader {
         EicReader::Ion(ion) => {
             let window = ion
-                .read_window(scan_index, Range { from: mz_from, to: mz_to })
+                .read_window(
+                    scan_index,
+                    Range {
+                        from: mz_from,
+                        to: mz_to,
+                    },
+                )
                 .map_err(FastError::from)?;
             *mz_out = window.x.to_f64();
             *intensity_out = window.y.to_f64();
@@ -326,7 +336,13 @@ pub fn plan_window_ranges(
     let mut ranges = Vec::new();
     for scan_index in scan_indices {
         let scan_ranges = ion
-            .byte_ranges(scan_index, Range { from: mz_from, to: mz_to })
+            .byte_ranges(
+                scan_index,
+                Range {
+                    from: mz_from,
+                    to: mz_to,
+                },
+            )
             .map_err(FastError::from)?;
         ranges.extend(scan_ranges);
     }
@@ -682,8 +698,9 @@ fn max_in_range(retention_times: &[f64], intensities: &[f64], from_rt: f64, to_r
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ionic::ScanSummary;
+
+    use super::*;
 
     struct MockSource {
         scans: Vec<(ScanSummary, Vec<f64>, Vec<f64>)>,
