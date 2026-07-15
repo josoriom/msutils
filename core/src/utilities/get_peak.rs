@@ -6,7 +6,7 @@ use crate::utilities::{
 const LOCAL_WINDOW_MINUTES: f64 = 2.0;
 const DEFAULT_MAX_DRIFT: f64 = 0.5;
 
-pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> Option<Peak> {
+pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> Peak {
     let target = roi.rt;
 
     let local;
@@ -18,7 +18,7 @@ pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> 
     };
 
     if section.x.is_empty() {
-        return None;
+        return Peak::default();
     }
 
     let peaks = find_peaks(section, options);
@@ -28,7 +28,7 @@ pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> 
         DEFAULT_MAX_DRIFT
     };
 
-    pick_peak(&peaks, target, max_drift).copied()
+    pick_peak(&peaks, target, max_drift)
 }
 
 fn position_weight(peak_rt: f64, target: f64, max_drift: f64) -> f64 {
@@ -36,8 +36,9 @@ fn position_weight(peak_rt: f64, target: f64, max_drift: f64) -> f64 {
     1.0 - drift * drift
 }
 
-fn pick_peak(peaks: &[Peak], target: f64, max_drift: f64) -> Option<&Peak> {
-    let mut best_peak: Option<&Peak> = None;
+fn pick_peak(peaks: &[Peak], target: f64, max_drift: f64) -> Peak {
+    let mut best_peak = Peak::default();
+    let mut found = false;
     let mut best_score = 0.0;
     for peak in peaks {
         if !peak.rt.is_finite() {
@@ -48,9 +49,10 @@ fn pick_peak(peaks: &[Peak], target: f64, max_drift: f64) -> Option<&Peak> {
             continue;
         }
         let score = peak.intensity * weight;
-        if best_peak.is_none() || score > best_score {
-            best_peak = Some(peak);
+        if !found || score > best_score {
+            best_peak = *peak;
             best_score = score;
+            found = true;
         }
     }
     best_peak
@@ -146,8 +148,8 @@ mod tests {
             rt: center,
             range: 1.0,
         };
-        let peak =
-            get_peak(&eic, &roi, Some(default_options())).expect("strong peak should be found");
+        let peak = get_peak(&eic, &roi, Some(default_options()));
+        assert!(peak.intensity > 0.0, "strong peak should be found");
         assert!((peak.rt - center).abs() < 0.05);
         assert!(peak.intensity > 100_000.0);
     }
@@ -160,8 +162,11 @@ mod tests {
             rt: center,
             range: 1.0,
         };
-        let peak = get_peak(&eic, &roi, Some(default_options()))
-            .expect("isolated peak on a flat baseline should be found");
+        let peak = get_peak(&eic, &roi, Some(default_options()));
+        assert!(
+            peak.intensity > 0.0,
+            "isolated peak on a flat baseline should be found"
+        );
         assert!((peak.rt - center).abs() < 0.05);
         assert!(peak.intensity > 100_000.0);
     }

@@ -752,7 +752,7 @@ pub unsafe extern "C" fn get_peak(
             y: unsafe { slice::from_raw_parts(y_ptr, len) }.to_vec(),
         };
         let peak = get_peak_rs(&data, &Roi { rt, range }, Some(build_peak_options(options)));
-        let s = serde_json::to_string(&peak.unwrap_or_default()).map_err(|_| ERR_ENCODE)?;
+        let s = serde_json::to_string(&peak).map_err(|_| ERR_ENCODE)?;
         write_buf(out, s.into_bytes().into_boxed_slice());
         Ok(())
     })) {

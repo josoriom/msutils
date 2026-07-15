@@ -45,8 +45,11 @@ fn lone_peak_eic(points: usize, center_index: usize, apex: f64, width_points: f6
 fn finds_isolated_lone_peak_1() {
     let eic = lone_peak_eic(200, 100, 350_000.0, 4.0);
     let center = eic.x[100];
-    let peak = get_peak(&eic, &Roi::new(center, 1.0), Some(options()))
-        .expect("get_peak must find a lone 350k peak on a flat baseline");
+    let peak = get_peak(&eic, &Roi::new(center, 1.0), Some(options()));
+    assert!(
+        peak.intensity > 0.0,
+        "get_peak must find a lone 350k peak on a flat baseline"
+    );
     assert!(
         (peak.rt - center).abs() < 0.1,
         "found rt {} far from {center}",

@@ -769,7 +769,7 @@ fn measure_mass(
         intensities.push(summed_intensity_in_window(mz, intensity, mz_lo, mz_hi));
     }
     anchor_edges(&mut intensities);
-    get_peak(
+    let peak = get_peak(
         &DataXY {
             x: times,
             y: intensities,
@@ -779,8 +779,8 @@ fn measure_mass(
             range: bounds.rt_to - bounds.rt_from,
         },
         peak_options,
-    )
-    .filter(|p| p.intensity > 0.0)
+    );
+    (peak.intensity > 0.0).then_some(peak)
 }
 
 fn find_apex_masses(
@@ -817,7 +817,7 @@ fn detect_peak(
 
     anchor_edges(&mut intensities);
 
-    get_peak(
+    let p = get_peak(
         &DataXY {
             x: times,
             y: intensities,
@@ -827,9 +827,8 @@ fn detect_peak(
             range: bounds.rt_to - bounds.rt_from,
         },
         peak_options,
-    )
-    .filter(|p| p.intensity > 0.0)
-    .map(|p| Feature {
+    );
+    (p.intensity > 0.0).then_some(Feature {
         mz: bounds.target_mz,
         rt: p.rt,
         intensity: p.intensity,

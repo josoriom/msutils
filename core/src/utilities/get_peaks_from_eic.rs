@@ -144,7 +144,6 @@ fn compute_peak_for_job(
         &roi_hint,
         options.clone(),
     )
-    .unwrap_or_default()
 }
 
 fn read_eics_one_pass(

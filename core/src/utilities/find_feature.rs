@@ -123,7 +123,10 @@ pub fn find_feature(
                 range: roi.range,
             },
             Some(fp_opts.clone()),
-        )?;
+        );
+        if picked.intensity <= 0.0 {
+            return None;
+        }
 
         Some(TargetedFeature {
             id: roi.id.clone(),

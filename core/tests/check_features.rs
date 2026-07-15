@@ -54,10 +54,8 @@ fn detects_peak(eic: &Eic) -> bool {
     };
     let rt = param_f64(eic, "rt");
     let span = eic.time[eic.time.len() - 1] - eic.time[0];
-    match get_peak(&data, &Roi::new(rt, span), Some(peak_options())) {
-        Some(peak) => (peak.rt - rt).abs() <= RT_WINDOW,
-        None => false,
-    }
+    let peak = get_peak(&data, &Roi::new(rt, span), Some(peak_options()));
+    peak.intensity > 0.0 && (peak.rt - rt).abs() <= RT_WINDOW
 }
 
 struct Recovery {

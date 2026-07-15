@@ -54,11 +54,11 @@ fn assert_get_peak(id: &str, eic: &Eic) {
     };
     let target = param_f64(eic, "opt.target");
     let roi = Roi::new(target, param_f64(eic, "opt.roi_half_width"));
-    let found = get_peak(&data, &roi, Some(options_from(eic)));
+    let peak = get_peak(&data, &roi, Some(options_from(eic)));
+    let found = peak.intensity > 0.0;
 
     if param_bool(eic, "exp.must_find") {
-        let peak =
-            found.unwrap_or_else(|| panic!("[{id}] expected a peak but got None. {description}"));
+        assert!(found, "[{id}] expected a peak but got none. {description}");
         let rt_within = param_f64(eic, "exp.rt_within");
         assert!(
             (peak.rt - target).abs() <= rt_within,
@@ -75,7 +75,7 @@ fn assert_get_peak(id: &str, eic: &Eic) {
             min_intensity
         );
     } else {
-        assert!(found.is_none(), "[{id}] expected no peak but one was found");
+        assert!(!found, "[{id}] expected no peak but one was found");
     }
 
     if let Some(fraction) = eic.params.get("exp.noise_below_apex_fraction") {

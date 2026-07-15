@@ -199,19 +199,20 @@ fn compute_one(
             y: signal_values,
         };
 
-        if let Some(p) = get_peak(
+        let picked = get_peak(
             &data,
             &Roi {
                 rt: roi.rt,
                 range: roi.range,
             },
             options.clone(),
-        ) {
-            peak_rt = p.rt;
-            from_rt = p.from;
-            to_rt = p.to;
-            intensity = p.intensity;
-            area = p.integral;
+        );
+        if picked.intensity > 0.0 {
+            peak_rt = picked.rt;
+            from_rt = picked.from;
+            to_rt = picked.to;
+            intensity = picked.intensity;
+            area = picked.integral;
         }
 
         let peaks = find_peaks(&data, options.clone());
