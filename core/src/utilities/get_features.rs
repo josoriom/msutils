@@ -776,7 +776,7 @@ fn measure_mass(
         },
         &Roi {
             rt: bounds.center_rt,
-            half_width: bounds.rt_to - bounds.rt_from,
+            range: bounds.rt_to - bounds.rt_from,
         },
         peak_options,
     )
@@ -824,7 +824,7 @@ fn detect_peak(
         },
         &Roi {
             rt: bounds.center_rt,
-            half_width: bounds.rt_to - bounds.rt_from,
+            range: bounds.rt_to - bounds.rt_from,
         },
         peak_options,
     )

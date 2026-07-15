@@ -53,12 +53,12 @@ impl Default for Peak {
 #[derive(Clone, Debug)]
 pub struct Roi {
     pub rt: f64,
-    pub half_width: f64,
+    pub range: f64,
 }
 
 impl Roi {
-    pub fn new(rt: f64, half_width: f64) -> Self {
-        Self { rt, half_width }
+    pub fn new(rt: f64, range: f64) -> Self {
+        Self { rt, range }
     }
 }
 
@@ -67,16 +67,16 @@ pub struct ChromRoi {
     pub id: String,
     pub sample_index: usize,
     pub rt: f64,
-    pub half_width: f64,
+    pub range: f64,
 }
 
 impl ChromRoi {
-    pub fn new(id: impl Into<String>, sample_index: usize, rt: f64, half_width: f64) -> Self {
+    pub fn new(id: impl Into<String>, sample_index: usize, rt: f64, range: f64) -> Self {
         Self {
             id: id.into(),
             sample_index,
             rt,
-            half_width,
+            range,
         }
     }
 }
@@ -86,16 +86,16 @@ pub struct EicRoi {
     pub id: String,
     pub rt: f64,
     pub mz: f64,
-    pub half_width: f64,
+    pub range: f64,
 }
 
 impl EicRoi {
-    pub fn new(id: impl Into<String>, rt: f64, mz: f64, half_width: f64) -> Self {
+    pub fn new(id: impl Into<String>, rt: f64, mz: f64, range: f64) -> Self {
         Self {
             id: id.into(),
             rt,
             mz,
-            half_width,
+            range,
         }
     }
 }

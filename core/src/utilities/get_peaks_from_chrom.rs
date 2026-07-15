@@ -65,7 +65,7 @@ pub fn get_peaks_from_chrom(
     let make_row = |roi: &ChromRoi| {
         let timestamp = timestamp.clone();
 
-        if roi.half_width <= 0.0 || !roi.rt.is_finite() {
+        if roi.range <= 0.0 || !roi.rt.is_finite() {
             return ChromPeakRow::empty(roi.sample_index, roi.id.clone(), roi.rt, timestamp);
         }
 
@@ -203,7 +203,7 @@ fn compute_one(
             &data,
             &Roi {
                 rt: roi.rt,
-                half_width: roi.half_width,
+                range: roi.range,
             },
             options.clone(),
         ) {

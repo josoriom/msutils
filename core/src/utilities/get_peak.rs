@@ -22,8 +22,8 @@ pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> 
     }
 
     let peaks = find_peaks(section, options);
-    let max_drift = if roi.half_width.is_finite() && roi.half_width > 0.0 {
-        roi.half_width
+    let max_drift = if roi.range.is_finite() && roi.range > 0.0 {
+        roi.range
     } else {
         DEFAULT_MAX_DRIFT
     };
@@ -56,7 +56,7 @@ fn pick_peak(peaks: &[Peak], target: f64, max_drift: f64) -> Option<&Peak> {
     best_peak
 }
 
-fn crop_around(data: &DataXY, center: f64, half_width: f64) -> DataXY {
+fn crop_around(data: &DataXY, center: f64, range: f64) -> DataXY {
     if data.x.is_empty() {
         return DataXY {
             x: Vec::new(),
@@ -65,8 +65,8 @@ fn crop_around(data: &DataXY, center: f64, half_width: f64) -> DataXY {
     }
     let eic_min = data.x.iter().copied().fold(f64::INFINITY, f64::min);
     let eic_max = data.x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let from = (center - half_width).max(eic_min);
-    let to = (center + half_width).min(eic_max);
+    let from = (center - range).max(eic_min);
+    let to = (center + range).min(eic_max);
     let mut x = Vec::new();
     let mut y = Vec::new();
     for (rt, value) in data.x.iter().zip(data.y.iter()) {
@@ -144,7 +144,7 @@ mod tests {
         });
         let roi = Roi {
             rt: center,
-            half_width: 1.0,
+            range: 1.0,
         };
         let peak =
             get_peak(&eic, &roi, Some(default_options())).expect("strong peak should be found");
@@ -158,7 +158,7 @@ mod tests {
         let eic = build_eic(28.1, 29.1, 120, |rt| bell(rt, center, 0.05, 350_000.0));
         let roi = Roi {
             rt: center,
-            half_width: 1.0,
+            range: 1.0,
         };
         let peak = get_peak(&eic, &roi, Some(default_options()))
             .expect("isolated peak on a flat baseline should be found");

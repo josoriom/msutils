@@ -751,14 +751,7 @@ pub unsafe extern "C" fn get_peak(
             x: unsafe { slice::from_raw_parts(x_ptr, len) }.to_vec(),
             y: unsafe { slice::from_raw_parts(y_ptr, len) }.to_vec(),
         };
-        let peak = get_peak_rs(
-            &data,
-            &Roi {
-                rt,
-                half_width: range,
-            },
-            Some(build_peak_options(options)),
-        );
+        let peak = get_peak_rs(&data, &Roi { rt, range }, Some(build_peak_options(options)));
         let s = serde_json::to_string(&peak.unwrap_or_default()).map_err(|_| ERR_ENCODE)?;
         write_buf(out, s.into_bytes().into_boxed_slice());
         Ok(())
@@ -971,7 +964,7 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
     h: *mut ParsedFile,
     sample_indices: *const u32,
     target_rts: *const f64,
-    half_widths: *const f64,
+    ranges: *const f64,
     n: usize,
     opts: *const CPeakOptions,
     cores: usize,
@@ -980,7 +973,7 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
     if h.is_null()
         || sample_indices.is_null()
         || target_rts.is_null()
-        || half_widths.is_null()
+        || ranges.is_null()
         || out.is_null()
         || n == 0
     {
@@ -991,7 +984,7 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
         file.with_mzml(|mzml| {
             let sample_indices = unsafe { slice::from_raw_parts(sample_indices, n) };
             let target_rts = unsafe { slice::from_raw_parts(target_rts, n) };
-            let half_widths = unsafe { slice::from_raw_parts(half_widths, n) };
+            let ranges = unsafe { slice::from_raw_parts(ranges, n) };
             let chroms = &mzml
                 .run
                 .chromatogram_list
@@ -1006,7 +999,7 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
                             id: String::new(),
                             sample_index: usize::MAX,
                             rt: 0.0,
-                            half_width: 0.0,
+                            range: 0.0,
                         };
                     }
                     let sample_index = raw_index as usize;
@@ -1015,14 +1008,14 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
                             id: String::new(),
                             sample_index,
                             rt: 0.0,
-                            half_width: 0.0,
+                            range: 0.0,
                         };
                     }
                     ChromRoi {
                         id: chroms[sample_index].id.clone(),
                         sample_index,
                         rt: target_rts[i],
-                        half_width: half_widths[i],
+                        range: ranges[i],
                     }
                 })
                 .collect();
@@ -1860,7 +1853,7 @@ fn build_eic_rois(
         .map(|i| {
             let (rt, mz, window) = (rts[i], mzs[i], wins[i]);
             let has_target = rt.is_finite() && mz.is_finite();
-            let half_width = if window.is_finite() && window > 0.0 {
+            let range = if window.is_finite() && window > 0.0 {
                 window
             } else {
                 DEFAULT_EIC_HALF_WIDTH
@@ -1877,18 +1870,13 @@ fn build_eic_rois(
                 .unwrap_or_default();
 
             if has_target {
-                EicRoi {
-                    id,
-                    rt,
-                    mz,
-                    half_width,
-                }
+                EicRoi { id, rt, mz, range }
             } else {
                 EicRoi {
                     id,
                     rt: 0.0,
                     mz: 0.0,
-                    half_width: 0.0,
+                    range: 0.0,
                 }
             }
         })

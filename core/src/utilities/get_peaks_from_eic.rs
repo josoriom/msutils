@@ -41,7 +41,7 @@ use crate::utilities::parallel::run_with_cores;
 struct PeakJob {
     roi_idx: usize,
     rt: f64,
-    half_width: f64,
+    range: f64,
     mz_from: f64,
     mz_to: f64,
 }
@@ -103,7 +103,7 @@ fn build_peak_jobs(rois: &[EicRoi]) -> Vec<PeakJob> {
             PeakJob {
                 roi_idx: idx,
                 rt: roi.rt,
-                half_width: roi.half_width,
+                range: roi.range,
                 mz_from: roi.mz - tolerance,
                 mz_to: roi.mz + tolerance,
             }
@@ -133,7 +133,7 @@ fn compute_peak_for_job(
 
     let roi_hint = Roi {
         rt: job.rt,
-        half_width: job.half_width,
+        range: job.range,
     };
 
     get_peak(

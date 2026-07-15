@@ -69,9 +69,9 @@ pub fn find_feature(
     let mut rt_min = f64::MAX;
     let mut rt_max = f64::MIN;
     for roi in rois {
-        if roi.rt.is_finite() && roi.half_width.is_finite() && roi.half_width > 0.0 {
-            rt_min = rt_min.min(roi.rt - roi.half_width);
-            rt_max = rt_max.max(roi.rt + roi.half_width);
+        if roi.rt.is_finite() && roi.range.is_finite() && roi.range > 0.0 {
+            rt_min = rt_min.min(roi.rt - roi.range);
+            rt_max = rt_max.max(roi.rt + roi.range);
         }
     }
 
@@ -94,12 +94,12 @@ pub fn find_feature(
     }
 
     let process = |roi: &&EicRoi| -> Option<TargetedFeature> {
-        if !roi.rt.is_finite() || !roi.mz.is_finite() || roi.half_width <= 0.0 {
+        if !roi.rt.is_finite() || !roi.mz.is_finite() || roi.range <= 0.0 {
             return None;
         }
 
-        let local_from = roi.rt - roi.half_width;
-        let local_to = roi.rt + roi.half_width;
+        let local_from = roi.rt - roi.range;
+        let local_to = roi.rt + roi.range;
         let start = lower_bound(&rts, local_from);
         let end = upper_bound(&rts, local_to).min(rts.len());
         if end <= start {
@@ -120,7 +120,7 @@ pub fn find_feature(
             &data,
             &Roi {
                 rt: roi.rt,
-                half_width: roi.half_width,
+                range: roi.range,
             },
             Some(fp_opts.clone()),
         )?;

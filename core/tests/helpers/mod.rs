@@ -135,7 +135,14 @@ pub fn load_chromatograms(file_name: &str) -> BTreeMap<String, Eic> {
 #[allow(dead_code)]
 pub fn load_chromatograms_from(path: &Path) -> BTreeMap<String, Eic> {
     let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("cannot read {:?}: {}", path, e));
-    let mut reader = IonReader::open(&bytes, ReadOptions::default()).expect("open ion fixture");
+    let mut reader = IonReader::open(
+        &bytes,
+        ReadOptions {
+            verify_checksums: false, // TODO: update the fixtures to the lastest version of Ionic
+            ..Default::default()
+        },
+    )
+    .expect("open ion fixture");
     let mzml = reader.to_mzml().expect("decode ion fixture");
 
     let mut out = BTreeMap::new();
