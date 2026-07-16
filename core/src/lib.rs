@@ -56,7 +56,7 @@ use utilities::{
     get_peaks_from_chrom::get_peaks_from_chrom as get_peaks_from_chrom_rs,
     get_peaks_from_eic::{get_peaks_from_eic as get_peaks_from_eic_rs, plan_peaks_ranges},
     mz_estimator::MzEstimatorKind,
-    structs::{ChromRoi, DataXY, EicRoi, FromTo, Roi},
+    structs::{DataXY, FromTo, Roi},
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
@@ -751,7 +751,11 @@ pub unsafe extern "C" fn get_peak(
             x: unsafe { slice::from_raw_parts(x_ptr, len) }.to_vec(),
             y: unsafe { slice::from_raw_parts(y_ptr, len) }.to_vec(),
         };
-        let peak = get_peak_rs(&data, &Roi { rt, range }, Some(build_peak_options(options)));
+        let peak = get_peak_rs(
+            &data,
+            &Roi::peak(rt, range),
+            Some(build_peak_options(options)),
+        );
         let s = serde_json::to_string(&peak).map_err(|_| ERR_ENCODE)?;
         write_buf(out, s.into_bytes().into_boxed_slice());
         Ok(())
@@ -995,28 +999,18 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
                 .map(|i| {
                     let raw_index = sample_indices[i];
                     if raw_index == u32::MAX {
-                        return ChromRoi {
-                            id: String::new(),
-                            sample_index: usize::MAX,
-                            rt: 0.0,
-                            range: 0.0,
-                        };
+                        return Roi::chrom("", usize::MAX, 0.0, 0.0);
                     }
                     let sample_index = raw_index as usize;
                     if sample_index >= chroms.len() {
-                        return ChromRoi {
-                            id: String::new(),
-                            sample_index,
-                            rt: 0.0,
-                            range: 0.0,
-                        };
+                        return Roi::chrom("", sample_index, 0.0, 0.0);
                     }
-                    ChromRoi {
-                        id: chroms[sample_index].id.clone(),
+                    Roi::chrom(
+                        chroms[sample_index].id.clone(),
                         sample_index,
-                        rt: target_rts[i],
-                        range: ranges[i],
-                    }
+                        target_rts[i],
+                        ranges[i],
+                    )
                 })
                 .collect();
             let list = get_peaks_from_chrom_rs(mzml, &items, Some(build_peak_options(opts)), cores)
@@ -1758,7 +1752,7 @@ pub unsafe extern "C" fn find_feature(
             ids_buf,
             ids_buf_len,
         );
-        let refs: Vec<&EicRoi> = rois.iter().collect();
+        let refs: Vec<&Roi> = rois.iter().collect();
         let results = find_feature_rs(
             file,
             &refs,
@@ -1785,7 +1779,7 @@ pub unsafe extern "C" fn find_feature(
                     noise: f.peak.noise,
                 },
                 None => FoundFeatureOut {
-                    id: &rois[i].id,
+                    id: rois[i].id(),
                     mz: 0.0,
                     rt: 0.0,
                     from: 0.0,
@@ -1835,7 +1829,7 @@ fn build_eic_rois(
     ids_len: *const u32,
     ids_buf: *const u8,
     ids_buf_len: usize,
-) -> Vec<EicRoi> {
+) -> Vec<Roi> {
     let n = rts.len();
 
     let has = !(ids_off.is_null() || ids_len.is_null() || ids_buf.is_null() || ids_buf_len == 0);
@@ -1870,14 +1864,9 @@ fn build_eic_rois(
                 .unwrap_or_default();
 
             if has_target {
-                EicRoi { id, rt, mz, range }
+                Roi::eic(id, rt, mz, range)
             } else {
-                EicRoi {
-                    id,
-                    rt: 0.0,
-                    mz: 0.0,
-                    range: 0.0,
-                }
+                Roi::eic(id, 0.0, 0.0, 0.0)
             }
         })
         .collect()

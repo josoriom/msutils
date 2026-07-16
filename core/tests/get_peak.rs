@@ -50,7 +50,7 @@ fn build_eic(from: f64, to: f64, signal: impl Fn(usize, f64) -> f64) -> DataXY {
 }
 
 fn find_at(eic: &DataXY, target: f64) -> f64 {
-    let peak = get_peak(eic, &Roi::new(target, 0.5), Some(options()));
+    let peak = get_peak(eic, &Roi::peak(target, 0.5), Some(options()));
     assert!(peak.intensity > 0.0, "expected a peak near rt {target}");
     assert!(
         (peak.rt - target).abs() < 0.1,
@@ -107,7 +107,7 @@ fn picks_peak_closest_to_target_over_taller_neighbor() {
         let target = gaussian(time, 28.63, 300_000.0, 0.03);
         taller_neighbor + target + ripple(index, 20_000.0)
     });
-    let peak = get_peak(&eic, &Roi::new(28.63, 0.2), Some(options()));
+    let peak = get_peak(&eic, &Roi::peak(28.63, 0.2), Some(options()));
     assert!(peak.intensity > 0.0, "expected a peak near rt 28.63");
     assert!(
         (peak.rt - 28.4).abs() > 0.1,

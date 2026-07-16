@@ -8,7 +8,7 @@ use crate::utilities::{
     calculate_baseline::BaselineOptions,
     find_peaks::{FindPeaksOptions, find_peaks},
     get_peak::get_peak,
-    structs::{ChromRoi, DataXY, Roi},
+    structs::{DataXY, Roi},
 };
 
 const ACC_TIME_ARRAY: &str = "MS:1000595";
@@ -47,7 +47,7 @@ impl ChromPeakRow {
 
 pub fn get_peaks_from_chrom(
     mzml: &MzML,
-    items: &[ChromRoi],
+    items: &[Roi],
     options: Option<FindPeaksOptions>,
     cores: usize,
 ) -> Option<Vec<ChromPeakRow>> {
@@ -62,24 +62,32 @@ pub fn get_peaks_from_chrom(
     });
     let opts = Some(opts);
 
-    let make_row = |roi: &ChromRoi| {
+    let make_row = |roi: &Roi| {
         let timestamp = timestamp.clone();
+        let Roi::Chrom {
+            id,
+            sample_index,
+            rt,
+            range,
+        } = roi
+        else {
+            return ChromPeakRow::empty(0, "invalid".to_string(), 0.0, timestamp);
+        };
+        let (item_index, rt, range) = (*sample_index, *rt, *range);
 
-        if roi.range <= 0.0 || !roi.rt.is_finite() {
-            return ChromPeakRow::empty(roi.sample_index, roi.id.clone(), roi.rt, timestamp);
+        if range <= 0.0 || !rt.is_finite() {
+            return ChromPeakRow::empty(item_index, id.clone(), rt, timestamp);
         }
 
-        let item_index = roi.sample_index;
-
         if item_index >= chroms.len() {
-            return ChromPeakRow::empty(item_index, roi.id.clone(), roi.rt, timestamp);
+            return ChromPeakRow::empty(item_index, id.clone(), rt, timestamp);
         }
 
         let chrom = &chroms[item_index];
 
         let Some((time_values, intensity_values)) = chromatogram_xy(chrom) else {
             let chrom_index = chrom.index.unwrap_or(item_index as u32) as usize;
-            return ChromPeakRow::empty(chrom_index, chrom.id.clone(), roi.rt, timestamp);
+            return ChromPeakRow::empty(chrom_index, chrom.id.clone(), rt, timestamp);
         };
 
         let chrom_index = chrom.index.unwrap_or(item_index as u32) as usize;
@@ -177,7 +185,7 @@ fn compute_one(
     chrom_id: &str,
     time_values: Vec<f64>,
     intensity_values: Vec<f32>,
-    roi: &ChromRoi,
+    roi: &Roi,
     timestamp: String,
     options: &Option<FindPeaksOptions>,
 ) -> ChromPeakRow {
@@ -187,6 +195,9 @@ fn compute_one(
     let mut intensity = 0.0_f64;
     let mut area = 0.0_f64;
     let mut total_area = 0.0_f64;
+    let Roi::Chrom { rt, range, .. } = roi else {
+        return ChromPeakRow::empty(0, "invalid".to_string(), 0.0, timestamp);
+    };
 
     if time_values.len() >= 3 && time_values.len() == intensity_values.len() {
         let mut signal_values: Vec<f64> = Vec::with_capacity(intensity_values.len());
@@ -199,14 +210,7 @@ fn compute_one(
             y: signal_values,
         };
 
-        let picked = get_peak(
-            &data,
-            &Roi {
-                rt: roi.rt,
-                range: roi.range,
-            },
-            options.clone(),
-        );
+        let picked = get_peak(&data, &Roi::peak(*rt, *range), options.clone());
         if picked.intensity > 0.0 {
             peak_rt = picked.rt;
             from_rt = picked.from;
@@ -224,7 +228,7 @@ fn compute_one(
     ChromPeakRow {
         index: chrom_index,
         id: chrom_id.trim_end().to_string(),
-        target_rt: roi.rt,
+        target_rt: *rt,
         peak_rt,
         from_rt,
         to_rt,

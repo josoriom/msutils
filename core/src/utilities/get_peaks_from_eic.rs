@@ -7,12 +7,12 @@ use crate::utilities::{
     },
     find_peaks::FindPeaksOptions,
     get_peak::get_peak,
-    structs::{DataXY, EicRoi, FromTo, Peak, Roi},
+    structs::{DataXY, FromTo, Peak, Roi},
 };
 
 pub fn plan_peaks_ranges(
     ion: &mut IonReader,
-    rois: &[EicRoi],
+    rois: &[Roi],
     from: f64,
     to: f64,
 ) -> Result<Vec<ByteRange>, FastError> {
@@ -24,9 +24,12 @@ pub fn plan_peaks_ranges(
     let mut mz_from = f64::INFINITY;
     let mut mz_to = f64::NEG_INFINITY;
     for roi in rois {
-        let tolerance = mz_tolerance_for(roi.mz, options);
-        mz_from = mz_from.min(roi.mz - tolerance);
-        mz_to = mz_to.max(roi.mz + tolerance);
+        let Roi::Eic { mz, .. } = roi else {
+            continue;
+        };
+        let tolerance = mz_tolerance_for(*mz, options);
+        mz_from = mz_from.min(mz - tolerance);
+        mz_to = mz_to.max(mz + tolerance);
     }
 
     plan_window_ranges(ion, from, to, mz_from, mz_to)
@@ -49,7 +52,7 @@ struct PeakJob {
 pub fn get_peaks_from_eic<'a>(
     reader: &mut EicReader,
     from_to: FromTo,
-    rois: &'a [EicRoi],
+    rois: &'a [Roi],
     options: Option<FindPeaksOptions>,
     cores: usize,
 ) -> Result<Vec<(&'a str, f64, f64, Peak)>, FastError> {
@@ -62,7 +65,7 @@ pub fn get_peaks_from_eic<'a>(
     if scan_times.len() < 3 {
         return Ok(rois
             .iter()
-            .map(|r| (r.id.as_str(), r.rt, r.mz, Peak::default()))
+            .map(|roi| make_row(roi, Peak::default()))
             .collect());
     }
 
@@ -70,6 +73,13 @@ pub fn get_peaks_from_eic<'a>(
     let scan_count = scan_times.len();
 
     let jobs = build_peak_jobs(rois);
+    if jobs.is_empty() {
+        return Ok(rois
+            .iter()
+            .map(|roi| make_row(roi, Peak::default()))
+            .collect());
+    }
+
     let eic_values = read_eics_one_pass(reader, &scan_times, &jobs)?;
 
     let peaks = compute_peaks_for_jobs(
@@ -90,23 +100,33 @@ pub fn get_peaks_from_eic<'a>(
     Ok(rois
         .iter()
         .enumerate()
-        .map(|(idx, r)| (r.id.as_str(), r.rt, r.mz, results[idx]))
+        .map(|(idx, roi)| make_row(roi, results[idx]))
         .collect())
 }
 
-fn build_peak_jobs(rois: &[EicRoi]) -> Vec<PeakJob> {
+fn make_row(roi: &Roi, peak: Peak) -> (&str, f64, f64, Peak) {
+    match roi {
+        Roi::Eic { id, rt, mz, .. } => (id.as_str(), *rt, *mz, peak),
+        _ => ("", 0.0, 0.0, Peak::default()),
+    }
+}
+
+fn build_peak_jobs(rois: &[Roi]) -> Vec<PeakJob> {
     let eic_opts = EicOptions::default();
     rois.iter()
         .enumerate()
-        .map(|(idx, roi)| {
-            let tolerance = mz_tolerance_for(roi.mz, eic_opts);
-            PeakJob {
+        .filter_map(|(idx, roi)| {
+            let Roi::Eic { rt, mz, range, .. } = roi else {
+                return None;
+            };
+            let tolerance = mz_tolerance_for(*mz, eic_opts);
+            Some(PeakJob {
                 roi_idx: idx,
-                rt: roi.rt,
-                range: roi.range,
-                mz_from: roi.mz - tolerance,
-                mz_to: roi.mz + tolerance,
-            }
+                rt: *rt,
+                range: *range,
+                mz_from: mz - tolerance,
+                mz_to: mz + tolerance,
+            })
         })
         .collect()
 }
@@ -131,17 +151,12 @@ fn compute_peak_for_job(
         return Peak::default();
     }
 
-    let roi_hint = Roi {
-        rt: job.rt,
-        range: job.range,
-    };
-
     get_peak(
         &DataXY {
             x: rts_full.to_vec(),
             y: y_full.to_vec(),
         },
-        &roi_hint,
+        &Roi::peak(job.rt, job.range),
         options.clone(),
     )
 }

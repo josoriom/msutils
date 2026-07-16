@@ -54,7 +54,7 @@ fn detects_peak(eic: &Eic) -> bool {
     };
     let rt = param_f64(eic, "rt");
     let span = eic.time[eic.time.len() - 1] - eic.time[0];
-    let peak = get_peak(&data, &Roi::new(rt, span), Some(peak_options()));
+    let peak = get_peak(&data, &Roi::peak(rt, span), Some(peak_options()));
     peak.intensity > 0.0 && (peak.rt - rt).abs() <= RT_WINDOW
 }
 

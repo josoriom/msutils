@@ -774,10 +774,7 @@ fn measure_mass(
             x: times,
             y: intensities,
         },
-        &Roi {
-            rt: bounds.center_rt,
-            range: bounds.rt_to - bounds.rt_from,
-        },
+        &Roi::peak(bounds.center_rt, bounds.rt_to - bounds.rt_from),
         peak_options,
     );
     (peak.intensity > 0.0).then_some(peak)
@@ -822,10 +819,7 @@ fn detect_peak(
             x: times,
             y: intensities,
         },
-        &Roi {
-            rt: bounds.center_rt,
-            range: bounds.rt_to - bounds.rt_from,
-        },
+        &Roi::peak(bounds.center_rt, bounds.rt_to - bounds.rt_from),
         peak_options,
     );
     (p.intensity > 0.0).then_some(Feature {

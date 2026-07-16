@@ -7,11 +7,14 @@ const LOCAL_WINDOW_MINUTES: f64 = 2.0;
 const DEFAULT_MAX_DRIFT: f64 = 0.5;
 
 pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> Peak {
-    let target = roi.rt;
+    let Roi::Peak { rt, range } = roi else {
+        return Peak::default();
+    };
+    let (rt, range) = (*rt, *range);
 
     let local;
-    let section: &DataXY = if target.is_finite() {
-        local = crop_around(data, target, LOCAL_WINDOW_MINUTES);
+    let section: &DataXY = if rt.is_finite() {
+        local = crop_around(data, rt, LOCAL_WINDOW_MINUTES);
         &local
     } else {
         data
@@ -22,13 +25,13 @@ pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> 
     }
 
     let peaks = find_peaks(section, options);
-    let max_drift = if roi.range.is_finite() && roi.range > 0.0 {
-        roi.range
+    let max_drift = if range.is_finite() && range > 0.0 {
+        range
     } else {
         DEFAULT_MAX_DRIFT
     };
 
-    pick_peak(&peaks, target, max_drift)
+    pick_peak(&peaks, rt, max_drift)
 }
 
 fn position_weight(peak_rt: f64, target: f64, max_drift: f64) -> f64 {
@@ -60,10 +63,7 @@ fn pick_peak(peaks: &[Peak], target: f64, max_drift: f64) -> Peak {
 
 fn crop_around(data: &DataXY, center: f64, range: f64) -> DataXY {
     if data.x.is_empty() {
-        return DataXY {
-            x: Vec::new(),
-            y: Vec::new(),
-        };
+        return DataXY::empty();
     }
     let eic_min = data.x.iter().copied().fold(f64::INFINITY, f64::min);
     let eic_max = data.x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
@@ -144,10 +144,7 @@ mod tests {
             }
             height
         });
-        let roi = Roi {
-            rt: center,
-            range: 1.0,
-        };
+        let roi = Roi::peak(center, 1.0);
         let peak = get_peak(&eic, &roi, Some(default_options()));
         assert!(peak.intensity > 0.0, "strong peak should be found");
         assert!((peak.rt - center).abs() < 0.05);
@@ -158,10 +155,7 @@ mod tests {
     fn finds_isolated_peak_without_local_baseline_1() {
         let center = 28.6;
         let eic = build_eic(28.1, 29.1, 120, |rt| bell(rt, center, 0.05, 350_000.0));
-        let roi = Roi {
-            rt: center,
-            range: 1.0,
-        };
+        let roi = Roi::peak(center, 1.0);
         let peak = get_peak(&eic, &roi, Some(default_options()));
         assert!(
             peak.intensity > 0.0,

@@ -7,7 +7,7 @@ use ionic::{
 };
 use serde::Serialize;
 
-use crate::utilities::structs::{FromTo, Peak, ser_finite_f64};
+use crate::utilities::structs::{DataXY, FromTo, Peak, ser_finite_f64};
 
 pub(crate) const MS1_LEVEL: u8 = 1;
 
@@ -55,20 +55,6 @@ impl TimeUnit {
         match self {
             TimeUnit::Seconds => value / 60.0,
             TimeUnit::Minutes => value,
-        }
-    }
-}
-
-pub struct Eic {
-    pub x: Vec<f64>,
-    pub y: Vec<f64>,
-}
-
-impl Eic {
-    fn empty() -> Self {
-        Self {
-            x: Vec::new(),
-            y: Vec::new(),
         }
     }
 }
@@ -387,7 +373,7 @@ pub fn calculate_eic(
     target_mz: f64,
     time_range: FromTo,
     options: EicOptions,
-) -> Result<Eic, FastError> {
+) -> Result<DataXY, FastError> {
     if !target_mz.is_finite() || target_mz <= 0.0 {
         return Err(FastError::InvalidRequest);
     }
@@ -410,7 +396,7 @@ pub fn calculate_eic(
     let scan_times = get_scan_times(reader, rt_min, rt_max, MS1_LEVEL);
 
     if scan_times.is_empty() {
-        return Ok(Eic::empty());
+        return Ok(DataXY::empty());
     }
 
     let mut x = Vec::new();
@@ -433,7 +419,7 @@ pub fn calculate_eic(
         y.push(intensity_sum);
     }
 
-    Ok(Eic { x, y })
+    Ok(DataXY { x, y })
 }
 
 pub fn get_eic_for_mz(
