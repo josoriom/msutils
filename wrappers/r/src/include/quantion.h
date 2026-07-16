@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define MSUTILS_ABI_VERSION 1
+#define QUANTION_ABI_VERSION 1
 
 typedef struct ImageSession ImageSession;
 
@@ -34,15 +34,15 @@ typedef struct CPeakOptions {
   int kernel_size;
 } CPeakOptions;
 
-uint32_t msutils_abi_version(void);
+uint32_t quantion_abi_version(void);
 
-uintptr_t msutils_sizeof_peak_options(void);
+uintptr_t quantion_sizeof_peak_options(void);
 
-#if (defined(MSUTILS_TARGET_WASM32) && !defined(MSUTILS_TARGET_WASI))
+#if (defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
 extern void js_log(const uint8_t *ptr, uintptr_t len);
 #endif
 
-#if (defined(MSUTILS_TARGET_WASM32) && !defined(MSUTILS_TARGET_WASI))
+#if (defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
 extern int32_t range_read(uint32_t source_id,
                           uint32_t offset_lo,
                           uint32_t offset_hi,
@@ -72,7 +72,7 @@ void free_(uint8_t *ptr_raw, uintptr_t size);
  */
 void free_mzml(struct ParsedFile *handle);
 
-#if !(defined(MSUTILS_TARGET_WASM32) && !defined(MSUTILS_TARGET_WASI))
+#if !(defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
 /**
  * Parse mzML bytes and store the result in `dest`.
  *
@@ -84,7 +84,7 @@ void free_mzml(struct ParsedFile *handle);
 int parse_mzml(const uint8_t *data_ptr, uintptr_t data_len, struct ParsedFile **dest);
 #endif
 
-#if (defined(MSUTILS_TARGET_WASM32) && !defined(MSUTILS_TARGET_WASI))
+#if (defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
 /**
  * Parse mzML bytes and store the result in `dest` (wasm variant).
  *
@@ -96,7 +96,7 @@ int parse_mzml(const uint8_t *data_ptr, uintptr_t data_len, struct ParsedFile **
 int parse_mzml(const uint8_t *data_ptr, uintptr_t data_len, struct ParsedFile **dest);
 #endif
 
-#if (defined(MSUTILS_TARGET_WASM32) && !defined(MSUTILS_TARGET_WASI))
+#if (defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
 int parse_ion_url(uint32_t source_id, uintptr_t cache_bytes, struct ParsedFile **dest);
 #endif
 
@@ -113,11 +113,11 @@ int parse_bin(const uint8_t *data_ptr,
               uintptr_t max_cache_size,
               struct ParsedFile **dest);
 
-#if !(defined(MSUTILS_TARGET_WASM32) && !defined(MSUTILS_TARGET_WASI))
+#if !(defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
 int parse_ion_path(const char *path_ptr, uintptr_t max_cache_size, struct ParsedFile **dest);
 #endif
 
-#if !(defined(MSUTILS_TARGET_WASM32) && !defined(MSUTILS_TARGET_WASI))
+#if !(defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
 int parse_ion_url(const char *url_ptr, uintptr_t cache_bytes, struct ParsedFile **out);
 #endif
 
@@ -153,7 +153,7 @@ int mzml_to_bin(struct ParsedFile *h,
                 uint8_t compression_level,
                 uint8_t f32_compress);
 
-#if !(defined(MSUTILS_TARGET_WASM32) && !defined(MSUTILS_TARGET_WASI))
+#if !(defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
 int convert_mzml_file_to_ion_file(const char *input_path,
                                   const char *output_path,
                                   uint8_t compression_level,
@@ -355,7 +355,7 @@ int image_finish(struct ImageSession *session, struct Buf *out);
 
 void image_free(struct ImageSession *session);
 
-#if !(defined(MSUTILS_TARGET_WASM32) && !defined(MSUTILS_TARGET_WASI))
+#if !(defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
 /**
  * Find features across all samples in `dir` and write the result to `out`.
  *

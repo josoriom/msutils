@@ -1,4 +1,4 @@
-use msutils::utilities::{
+use quantion::utilities::{
     find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter},
     get_peak::get_peak,
     shape_filter::PeakShape,

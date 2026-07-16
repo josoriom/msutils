@@ -2,7 +2,7 @@
 // find_noise_level returned the peak's own apex as the noise floor, so get_peak rejected it.
 // Fully synthetic (no fixture) so it runs identically here and in msutils/core/tests/.
 
-use msutils::utilities::{
+use quantion::utilities::{
     find_noise_level::find_noise_level,
     find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter},
     get_peak::get_peak,

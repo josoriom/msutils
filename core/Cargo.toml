@@ -1,10 +1,10 @@
 [package]
-name = "msutils"
+name = "quantion"
 version = "0.1.0"
 edition = "2024"
 
 [lib]
-name = "msutils"
+name = "quantion"
 crate-type = ["cdylib", "rlib"]
 
 [profile.release]

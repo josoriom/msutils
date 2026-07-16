@@ -4,7 +4,7 @@ use std::{
     sync::OnceLock,
 };
 
-use msutils::utilities::{find_noise_level::find_noise_level, structs::DataXY};
+use quantion::utilities::{find_noise_level::find_noise_level, structs::DataXY};
 
 mod helpers;
 use helpers::{Eic, approx_eq, load_chromatograms_from};

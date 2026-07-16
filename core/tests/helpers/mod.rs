@@ -1,5 +1,4 @@
-// tests/helpers.rs
-use msutils::utilities::structs::{DataXY, Peak};
+use quantion::utilities::structs::{DataXY, Peak};
 
 #[allow(dead_code)]
 pub fn dump_peaks(peaks: &[Peak]) {

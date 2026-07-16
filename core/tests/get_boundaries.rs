@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use msutils::utilities::{
+use quantion::utilities::{
     find_peaks::{FindPeaksOptions, PeakFilter, find_peaks},
     get_boundaries::{BoundariesOptions, get_boundaries},
     structs::DataXY,

@@ -1,4 +1,4 @@
-CRATE          := msutils
+CRATE          := quantion
 CRATE_MANIFEST := core/Cargo.toml
 ARTIFACTS      := artifacts
 DOCKER_BULLSEYE_IMAGE := rust:1-bullseye

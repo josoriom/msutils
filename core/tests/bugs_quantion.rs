@@ -3,7 +3,7 @@ mod helpers;
 use std::path::{Path, PathBuf};
 
 use helpers::{Eic, load_chromatograms_from, param_bool, param_f64};
-use msutils::utilities::{
+use quantion::utilities::{
     find_noise_level::find_noise_level,
     find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter},
     get_peak::get_peak,

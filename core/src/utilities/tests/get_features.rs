@@ -914,7 +914,7 @@ mod tests {
     }
 
     fn write_ion_dir(tag: &str, samples: &[Vec<u8>]) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("msutils_test_{tag}"));
+        let dir = std::env::temp_dir().join(format!("quantion_test_{tag}"));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
         for (i, bytes) in samples.iter().enumerate() {

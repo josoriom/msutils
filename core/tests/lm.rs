@@ -1,6 +1,6 @@
 use std::f64::consts::PI;
 
-use msutils::utilities::cheminfo::lm::{
+use quantion::utilities::cheminfo::lm::{
     Data2D, GradientDifference, LevenbergMarquardtOptions, Weights, error_calculation, lm,
 };
 

@@ -6,7 +6,7 @@ use std::{
 };
 
 use helpers::{Eic, load_chromatograms_from, param_f64};
-use msutils::utilities::{
+use quantion::utilities::{
     find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter},
     get_peak::get_peak,
     shape_filter::PeakShape,

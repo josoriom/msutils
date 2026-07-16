@@ -47,4 +47,4 @@ jobs:
         run: cargo build
 
       - name: Check generated header matches committed header
-        run: git diff --exit-code -- artifacts/include/msutils.h wrappers/js/src/include/msutils.h wrappers/js/native/include/msutils.h wrappers/r/src/include/msutils.h
+        run: git diff --exit-code -- artifacts/include/quantion.h wrappers/js/src/include/quantion.h wrappers/js/native/include/quantion.h wrappers/r/src/include/quantion.h

@@ -1,4 +1,4 @@
-use msutils::utilities::{
+use quantion::utilities::{
     calculate_eic::{EicOptions, SpectrumKind},
     find_features::{Feature, FeatureError, FindFeaturesOptions, Scan, detect_features},
     find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter},

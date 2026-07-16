@@ -22,7 +22,7 @@ fn get_pool(cores: usize) -> Arc<ThreadPool> {
             Arc::new(
                 ThreadPoolBuilder::new()
                     .num_threads(core_count)
-                    .thread_name(|index| format!("msutils-{}", index))
+                    .thread_name(|index| format!("quantion-{}", index))
                     .build()
                     .expect("failed to build rayon pool"),
             )

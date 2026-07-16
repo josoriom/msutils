@@ -7,12 +7,12 @@ item_types = ["constants", "enums", "structs", "unions", "typedefs", "opaque", "
 include = [
   "CPeakOptions",
   "Buf",
-  "MSUTILS_ABI_VERSION",
+  "QUANTION_ABI_VERSION",
 ]
 
 [defines]
-"target_arch = wasm32" = "MSUTILS_TARGET_WASM32"
-"target_os = wasi" = "MSUTILS_TARGET_WASI"
+"target_arch = wasm32" = "QUANTION_TARGET_WASM32"
+"target_os = wasi" = "QUANTION_TARGET_WASI"
 
 [parse]
 parse_deps = false

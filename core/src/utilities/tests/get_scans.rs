@@ -11,7 +11,7 @@ use ionic::{
 };
 
 use crate::{
-    ParsedFile,
+    ffi::ParsedFile,
     utilities::{
         calculate_eic::{ScanQuery, TimeUnit, get_scans},
         structs::FromTo,

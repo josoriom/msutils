@@ -1,4 +1,4 @@
-use msutils::utilities::{
+use quantion::utilities::{
     fit_peak::{PeakSeed, PeakShape, draw_peak, fit_peak},
     functions::{emg_fn, gaussian_fn, sigma_from_fwhm},
     structs::DataXY,

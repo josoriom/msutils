@@ -4,7 +4,7 @@ use std::{
     sync::OnceLock,
 };
 
-use msutils::utilities::{
+use quantion::utilities::{
     calculate_baseline::BaselineOptions,
     find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter, find_peaks},
     fit_peak::PeakShape,

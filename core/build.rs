@@ -12,7 +12,7 @@ fn main() {
         cbindgen::Config::from_file(std::path::PathBuf::from(&crate_dir).join("cbindgen.toml"))
             .unwrap();
 
-    let header_path = artifacts_dir.join("msutils.h");
+    let header_path = artifacts_dir.join("quantion.h");
 
     cbindgen::Builder::new()
         .with_crate(&crate_dir)
@@ -22,9 +22,9 @@ fn main() {
         .write_to_file(&header_path);
 
     let header_copy_paths = [
-        root.join("wrappers/js/src/include/msutils.h"),
-        root.join("wrappers/js/native/include/msutils.h"),
-        root.join("wrappers/r/src/include/msutils.h"),
+        root.join("wrappers/js/src/include/quantion.h"),
+        root.join("wrappers/js/native/include/quantion.h"),
+        root.join("wrappers/r/src/include/quantion.h"),
     ];
 
     for header_copy_path in &header_copy_paths {

@@ -1,4 +1,4 @@
-use msutils::utilities::{
+use quantion::utilities::{
     calculate_baseline::BaselineOptions,
     find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter, find_peaks},
     functions::{emg_fn, gaussian_fn, sigma_from_fwhm},
