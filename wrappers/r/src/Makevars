@@ -1,2 +1,2 @@
-PKG_CFLAGS = -std=gnu2x -I$(srcdir)
-PKG_LIBS   =
+PKG_CFLAGS = -std=gnu11
+PKG_LIBS = $(shell test "$$(uname -s)" = Linux && echo -ldl)

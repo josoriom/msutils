@@ -1,11 +1,11 @@
-# msutils
+# quantion
 
-R wrappers for the msutils library for LC-MS data processing.
+R wrappers for the quantion library for LC-MS data processing.
 
 ## Install
 
 ```r
-remotes::install_github("josoriom/msutils", subdir = "wrappers/r")
+remotes::install_github("josoriom/quantion", subdir = "wrappers/r")
 ```
 
 ## Concepts
@@ -23,7 +23,7 @@ Load an mzML file into a sample.
 ```r
 mzml_path <- "/path/to/file.mzML"
 buf <- readBin(mzml_path, "raw", file.info(mzml_path)$size)
-sample <- msutils::parse_mzml(buf)
+sample <- quantion::parse_mzml(buf)
 ```
 
 ### ion
@@ -33,7 +33,7 @@ Load an ion binary file into a sample.
 ```r
 ion_path <- "/path/to/file.ion"
 buf <- readBin(ion_path, "raw", file.info(ion_path)$size)
-sample <- msutils::parse_ion(buf)
+sample <- quantion::parse_ion(buf)
 ```
 
 ## Convert
@@ -43,7 +43,7 @@ sample <- msutils::parse_ion(buf)
 Convert a sample to compressed ion bytes.
 
 ```r
-out <- msutils::mzml_to_ion(sample, level = 12L, f32_compress = FALSE)
+out <- quantion::mzml_to_ion(sample, level = 12L, f32_compress = FALSE)
 writeBin(out, "/path/to/file.ion")
 ```
 
@@ -53,13 +53,13 @@ Get JSON, mzML, or R data frames from a sample.
 
 ```r
 # Convert to JSON
-json <- msutils::ion_to_json(sample)
+json <- quantion::ion_to_json(sample)
 
 # Convert to mzML
-mzml <- msutils::ion_to_mzml(sample)
+mzml <- quantion::ion_to_mzml(sample)
 
 # Convert to R data frames
-df <- msutils::ion_to_df(sample)
+df <- quantion::ion_to_df(sample)
 ```
 
 ## Extract from samples
@@ -69,7 +69,7 @@ df <- msutils::ion_to_df(sample)
 Get an extracted ion chromatogram for one m/z from a sample.
 
 ```r
-eic <- msutils::calculate_eic(sample, targets = 288.1326, from = 2.5, to = 4.0, ppm_tolerance = 10, mz_tolerance = 0.005)
+eic <- quantion::calculate_eic(sample, targets = 288.1326, from = 2.5, to = 4.0, ppm_tolerance = 10, mz_tolerance = 0.005)
 eic_df <- data.frame(x = eic$x, y = eic$y)
 ```
 
@@ -78,7 +78,7 @@ eic_df <- data.frame(x = eic$x, y = eic$y)
 Get scans from a sample by retention time or m/z query.
 
 ```r
-scans <- msutils::get_scans(sample, rt_from = 2.5, rt_to = 4.0, level = 1L)
+scans <- quantion::get_scans(sample, rt_from = 2.5, rt_to = 4.0, level = 1L)
 ```
 
 ## Process XY data
@@ -90,7 +90,7 @@ Estimate a baseline for XY data.
 ```r
 xs <- seq(0, 10, length.out = 1000)
 ys <- sin(xs) + 0.1 * xs + 2
-baseline <- msutils::calculate_baseline(ys, lambda = 0L, max_iterations = 0L)
+baseline <- quantion::calculate_baseline(ys, lambda = 0L, max_iterations = 0L)
 ```
 
 ### Find peaks
@@ -98,7 +98,7 @@ baseline <- msutils::calculate_baseline(ys, lambda = 0L, max_iterations = 0L)
 Find all peaks in XY data.
 
 ```r
-peaks <- msutils::find_peaks(eic_df$x, eic_df$y, min_intensity = 1000, min_peak_width_points = 10L, auto_noise = TRUE, auto_baseline = TRUE)
+peaks <- quantion::find_peaks(eic_df$x, eic_df$y, min_intensity = 1000, min_peak_width_points = 10L, auto_noise = TRUE, auto_baseline = TRUE)
 ```
 
 ### Get single peak
@@ -106,7 +106,7 @@ peaks <- msutils::find_peaks(eic_df$x, eic_df$y, min_intensity = 1000, min_peak_
 Find one peak near a target retention time in XY data.
 
 ```r
-peak <- msutils::get_peak(eic_df$x, eic_df$y, rt = 3.4, range = 0.6, min_intensity = 1000, min_peak_width_points = 10L, auto_noise = TRUE, auto_baseline = TRUE)
+peak <- quantion::get_peak(eic_df$x, eic_df$y, rt = 3.4, range = 0.6, min_intensity = 1000, min_peak_width_points = 10L, auto_noise = TRUE, auto_baseline = TRUE)
 ```
 
 ## Find peaks from samples
@@ -121,7 +121,7 @@ transitions <- data.frame(
   rt     = c(1.20, 2.85, 3.50),
   window = c(0.40, 0.50, 0.60)
 )
-peaks <- msutils::get_peaks_from_chrom(sample, transitions, cores = 2L)
+peaks <- quantion::get_peaks_from_chrom(sample, transitions, cores = 2L)
 ```
 
 ### From EICs
@@ -135,7 +135,7 @@ targets <- data.frame(
   mz     = c(340.1404, 302.1499, 317.1244, 260.1030, 345.1670, 303.1088),
   ranges = c(0.2, 0.2, 0.2, 0.2, 0.2, 0.2)
 )
-peaks <- msutils::get_peaks_from_eic(sample, targets, auto_noise = TRUE, auto_baseline = TRUE, cores = 2L)
+peaks <- quantion::get_peaks_from_eic(sample, targets, auto_noise = TRUE, auto_baseline = TRUE, cores = 2L)
 ```
 
 ## Untargeted
@@ -151,7 +151,7 @@ targets <- data.frame(
   mz     = c(340.1404, 302.1499),
   ranges = c(0.2, 0.2)
 )
-features <- msutils::find_feature(sample, targets, auto_noise = TRUE, auto_baseline = TRUE)
+features <- quantion::find_feature(sample, targets, auto_noise = TRUE, auto_baseline = TRUE)
 ```
 
 ### From single sample
@@ -159,7 +159,7 @@ features <- msutils::find_feature(sample, targets, auto_noise = TRUE, auto_basel
 Find all features in a sample.
 
 ```r
-features <- msutils::find_features(
+features <- quantion::find_features(
   sample,
   from = 0, to = 10,
   cores = 5L,
@@ -175,7 +175,7 @@ features <- msutils::find_features(
 Find and align features across many samples.
 
 ```r
-features <- msutils::get_features(
+features <- quantion::get_features(
   "/path/to/sample/directory",
   from = 0,
   to = 10,

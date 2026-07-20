@@ -30,6 +30,15 @@ def copy_native_binary(platform_dir: str, dst_root: Path) -> None:
     artifacts_root = (here / ".." / ".." / "artifacts").resolve()
     src = artifacts_root / platform_dir
 
+    if not src.is_dir() and artifacts_root.is_dir():
+        versions = sorted(
+            (p for p in artifacts_root.iterdir() if (p / platform_dir).is_dir()),
+            key=lambda p: tuple(int(part) if part.isdigit() else 0 for part in p.name.split(".")),
+            reverse=True,
+        )
+        if versions:
+            src = versions[0] / platform_dir
+
     if not src.is_dir():
         raise FileNotFoundError(
             f"\n"
@@ -40,10 +49,10 @@ def copy_native_binary(platform_dir: str, dst_root: Path) -> None:
             f"    pip install --force-reinstall .\n"
             f"  or\n"
             f"    pip install --force-reinstall "
-            f"git+https://github.com/josoriom/msutils#subdirectory=wrappers/python\n"
+            f"git+https://github.com/josoriom/quantion#subdirectory=wrappers/python\n"
         )
 
-    dst = dst_root / "msutils" / "native" / platform_dir
+    dst = dst_root / "quantion" / "native" / platform_dir
     dst.mkdir(parents=True, exist_ok=True)
 
     copied = []
@@ -55,7 +64,7 @@ def copy_native_binary(platform_dir: str, dst_root: Path) -> None:
     if not copied:
         raise FileNotFoundError(f"No files found in {src} — did `make` finish?")
 
-    print(f"[msutils] copied {platform_dir}: {', '.join(copied)}")
+    print(f"[quantion] copied {platform_dir}: {', '.join(copied)}")
 
 
 class BuildWithNative(build_py):

@@ -1,4 +1,4 @@
-Cargo.lock
+/wrappers/**/Cargo.lock
 **/node_modules
 **/__pycache__
 **/.DS_Store

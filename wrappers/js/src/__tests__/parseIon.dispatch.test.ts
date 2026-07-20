@@ -7,7 +7,7 @@ describe("parseIon dispatch to backend primitives", () => {
 
   beforeEach(() => {
     const parseIonPathMock = jest.fn(() => 42 as FileHandle);
-    const parseIonUrlMock = jest.fn(() => 43 as FileHandle);
+    const parseIonRemoteMock = jest.fn(() => 43 as FileHandle);
     const parseIonBufferMock = jest.fn(() => 44 as FileHandle);
 
     mockBackend = {
@@ -17,7 +17,7 @@ describe("parseIon dispatch to backend primitives", () => {
       parseMzML: jest.fn(),
       parseBin: jest.fn(),
       parseIonPath: parseIonPathMock,
-      parseIonUrl: parseIonUrlMock,
+      parseIonRemote: parseIonRemoteMock,
       parseIonBuffer: parseIonBufferMock,
       freeFile: jest.fn(),
       fileToJson: jest.fn(),
@@ -44,7 +44,7 @@ describe("parseIon dispatch to backend primitives", () => {
       await parseIon(path);
 
       expect(mockBackend.parseIonPath).toHaveBeenCalledWith(path, 0);
-      expect(mockBackend.parseIonUrl).not.toHaveBeenCalled();
+      expect(mockBackend.parseIonRemote).not.toHaveBeenCalled();
       expect(mockBackend.parseIonBuffer).not.toHaveBeenCalled();
     });
 
@@ -54,45 +54,65 @@ describe("parseIon dispatch to backend primitives", () => {
       await parseIon(path, { maxCacheSize: cacheSize });
 
       expect(mockBackend.parseIonPath).toHaveBeenCalledWith(path, cacheSize);
-      expect(mockBackend.parseIonUrl).not.toHaveBeenCalled();
+      expect(mockBackend.parseIonRemote).not.toHaveBeenCalled();
       expect(mockBackend.parseIonBuffer).not.toHaveBeenCalled();
     });
   });
 
   describe("URL dispatch", () => {
-    test("parseIon with https URL calls parseIonUrl only", async () => {
+    test("parseIon with https URL calls parseIonRemote only", async () => {
       const url = new URL("https://example.com/file.ion");
       await parseIon(url);
 
-      expect(mockBackend.parseIonUrl).toHaveBeenCalledWith(url, 0);
+      expect(mockBackend.parseIonRemote).toHaveBeenCalledWith(url, 0);
       expect(mockBackend.parseIonPath).not.toHaveBeenCalled();
       expect(mockBackend.parseIonBuffer).not.toHaveBeenCalled();
     });
 
-    test("parseIon with http URL calls parseIonUrl only", async () => {
+    test("parseIon with http URL calls parseIonRemote only", async () => {
       const url = new URL("http://example.com/file.ion");
       await parseIon(url);
 
-      expect(mockBackend.parseIonUrl).toHaveBeenCalledWith(url, 0);
+      expect(mockBackend.parseIonRemote).toHaveBeenCalledWith(url, 0);
       expect(mockBackend.parseIonPath).not.toHaveBeenCalled();
       expect(mockBackend.parseIonBuffer).not.toHaveBeenCalled();
     });
 
-    test("parseIon with file: URL calls parseIonUrl (not parseIonPath)", async () => {
-      const url = new URL("file:///data/file.ion");
-      await parseIon(url);
-
-      expect(mockBackend.parseIonUrl).toHaveBeenCalledWith(url, 0);
+    test("parseIon rejects a file: URL", async () => {
+      await expect(parseIon(new URL("file:///data/file.ion"))).rejects.toThrow(
+        /only http and https/,
+      );
+      expect(mockBackend.parseIonRemote).not.toHaveBeenCalled();
       expect(mockBackend.parseIonPath).not.toHaveBeenCalled();
       expect(mockBackend.parseIonBuffer).not.toHaveBeenCalled();
     });
 
-    test("parseIon with URL and cache size calls parseIonUrl with cache size", async () => {
+    test("parseIon accepts an https URL string and routes it to parseIonRemote", async () => {
+      await parseIon("https://example.com/file.ion");
+
+      const calls = (mockBackend.parseIonRemote as jest.Mock).mock.calls;
+      expect(calls.length).toBe(1);
+      expect(calls[0][0].href).toBe("https://example.com/file.ion");
+      expect(calls[0][1]).toBe(0);
+      expect(mockBackend.parseIonPath).not.toHaveBeenCalled();
+      expect(mockBackend.parseIonBuffer).not.toHaveBeenCalled();
+    });
+
+    test("parseIon accepts an http URL string and routes it to parseIonRemote", async () => {
+      await parseIon("http://example.com/file.ion");
+
+      const calls = (mockBackend.parseIonRemote as jest.Mock).mock.calls;
+      expect(calls.length).toBe(1);
+      expect(calls[0][0].href).toBe("http://example.com/file.ion");
+      expect(mockBackend.parseIonPath).not.toHaveBeenCalled();
+    });
+
+    test("parseIon with URL and cache size calls parseIonRemote with cache size", async () => {
       const url = new URL("https://example.com/file.ion");
       const cacheSize = 2000;
       await parseIon(url, { maxCacheSize: cacheSize });
 
-      expect(mockBackend.parseIonUrl).toHaveBeenCalledWith(url, cacheSize);
+      expect(mockBackend.parseIonRemote).toHaveBeenCalledWith(url, cacheSize);
       expect(mockBackend.parseIonPath).not.toHaveBeenCalled();
       expect(mockBackend.parseIonBuffer).not.toHaveBeenCalled();
     });
@@ -107,7 +127,7 @@ describe("parseIon dispatch to backend primitives", () => {
       expect(callArg[0]).toEqual(bytes);
       expect(callArg[1]).toBe(0);
       expect(mockBackend.parseIonPath).not.toHaveBeenCalled();
-      expect(mockBackend.parseIonUrl).not.toHaveBeenCalled();
+      expect(mockBackend.parseIonRemote).not.toHaveBeenCalled();
     });
 
     test("parseIon with ArrayBuffer calls parseIonBuffer (normalized to Uint8Array)", async () => {
@@ -119,7 +139,7 @@ describe("parseIon dispatch to backend primitives", () => {
       expect(callArg[0].byteLength).toBe(4);
       expect(callArg[1]).toBe(0);
       expect(mockBackend.parseIonPath).not.toHaveBeenCalled();
-      expect(mockBackend.parseIonUrl).not.toHaveBeenCalled();
+      expect(mockBackend.parseIonRemote).not.toHaveBeenCalled();
     });
 
     test("parseIon with buffer and cache size calls parseIonBuffer with cache size", async () => {
@@ -131,7 +151,7 @@ describe("parseIon dispatch to backend primitives", () => {
       expect(callArg[0]).toEqual(bytes);
       expect(callArg[1]).toBe(cacheSize);
       expect(mockBackend.parseIonPath).not.toHaveBeenCalled();
-      expect(mockBackend.parseIonUrl).not.toHaveBeenCalled();
+      expect(mockBackend.parseIonRemote).not.toHaveBeenCalled();
     });
 
     test("parseIon with ArrayBuffer and cache size normalizes and passes cache size", async () => {
@@ -144,7 +164,7 @@ describe("parseIon dispatch to backend primitives", () => {
       expect(callArg[0].byteLength).toBe(8);
       expect(callArg[1]).toBe(cacheSize);
       expect(mockBackend.parseIonPath).not.toHaveBeenCalled();
-      expect(mockBackend.parseIonUrl).not.toHaveBeenCalled();
+      expect(mockBackend.parseIonRemote).not.toHaveBeenCalled();
     });
   });
 
@@ -159,27 +179,27 @@ describe("parseIon dispatch to backend primitives", () => {
         (mockBackend.parseIonPath as jest.Mock).mock.calls.length,
       ).toBe(1);
       expect(
-        (mockBackend.parseIonUrl as jest.Mock).mock.calls.length,
+        (mockBackend.parseIonRemote as jest.Mock).mock.calls.length,
       ).toBe(0);
       expect(
         (mockBackend.parseIonBuffer as jest.Mock).mock.calls.length,
       ).toBe(0);
 
       (mockBackend.parseIonPath as jest.Mock).mockClear();
-      (mockBackend.parseIonUrl as jest.Mock).mockClear();
+      (mockBackend.parseIonRemote as jest.Mock).mockClear();
       (mockBackend.parseIonBuffer as jest.Mock).mockClear();
 
       await parseIon(url);
       expect(
         (mockBackend.parseIonPath as jest.Mock).mock.calls.length,
       ).toBe(0);
-      expect((mockBackend.parseIonUrl as jest.Mock).mock.calls.length).toBe(1);
+      expect((mockBackend.parseIonRemote as jest.Mock).mock.calls.length).toBe(1);
       expect(
         (mockBackend.parseIonBuffer as jest.Mock).mock.calls.length,
       ).toBe(0);
 
       (mockBackend.parseIonPath as jest.Mock).mockClear();
-      (mockBackend.parseIonUrl as jest.Mock).mockClear();
+      (mockBackend.parseIonRemote as jest.Mock).mockClear();
       (mockBackend.parseIonBuffer as jest.Mock).mockClear();
 
       await parseIon(bytes);
@@ -187,7 +207,7 @@ describe("parseIon dispatch to backend primitives", () => {
         (mockBackend.parseIonPath as jest.Mock).mock.calls.length,
       ).toBe(0);
       expect(
-        (mockBackend.parseIonUrl as jest.Mock).mock.calls.length,
+        (mockBackend.parseIonRemote as jest.Mock).mock.calls.length,
       ).toBe(0);
       expect(
         (mockBackend.parseIonBuffer as jest.Mock).mock.calls.length,

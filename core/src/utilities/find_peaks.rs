@@ -53,13 +53,13 @@ impl Default for PeakFilter {
     fn default() -> Self {
         Self {
             min_integral: None,
-            min_peak_width_points: Some(5),
-            min_intensity: None,
+            min_peak_width_points: Some(3),
+            min_intensity: Some(500.0),
             noise: None,
-            auto_noise: Some(false),
-            auto_baseline: Some(false),
+            auto_noise: Some(true),
+            auto_baseline: Some(true),
             allow_overlap: Some(false),
-            min_snr: Some(1.0),
+            min_snr: Some(2.0),
             noise_method: None,
             kernel_size: None,
         }
@@ -134,8 +134,8 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
         return Vec::new();
     }
 
-    let auto_baseline = filter.auto_baseline.unwrap_or(false);
-    let auto_noise = filter.auto_noise.unwrap_or(false);
+    let auto_baseline = filter.auto_baseline.unwrap_or(true);
+    let auto_noise = filter.auto_noise.unwrap_or(true);
     let allow_overlap = filter.allow_overlap.unwrap_or(false);
 
     let baseline: Vec<f64> = if auto_baseline {

@@ -1,0 +1,11 @@
+[
+  {
+    "package": "0.1.0",
+    "format": {
+      "current": 2,
+      "min_supported": 2,
+      "max_supported": 2
+    },
+    "description": "feat: release v0.1.0"
+  }
+]

@@ -1,4 +1,4 @@
-import type { PeakOptions } from "../types/types";
+import type { NoiseLevel, PeakOptions } from "../types/types";
 
 export type FileHandle = unknown;
 export type MaybePromise<T> = T | Promise<T>;
@@ -20,7 +20,8 @@ export interface Backend {
     path: string,
     cacheSize: number,
   ): FileHandle | Promise<FileHandle>;
-  parseIonUrl(url: URL, cacheSize: number): FileHandle | Promise<FileHandle>;
+
+  parseIonRemote(url: URL, cacheSize: number): Promise<FileHandle>;
   parseIonBuffer(
     bytes: Uint8Array,
     cacheSize: number,
@@ -74,7 +75,7 @@ export interface Backend {
     opts: PeakOptions | undefined,
   ): any;
 
-  findNoiseLevel(y: Float32Array): number;
+  findNoiseLevel(y: Float32Array): NoiseLevel;
 
   calculateBaseline(
     y: Float64Array,

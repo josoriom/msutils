@@ -124,7 +124,7 @@ impl Default for MzScanGrid {
         Self {
             min_mz: 40.0,
             max_mz: 1000.0,
-            step: 0.006,
+            step: 0.005,
             ppm: 20.0,
         }
     }

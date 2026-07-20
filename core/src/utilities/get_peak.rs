@@ -36,7 +36,7 @@ pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> 
 
 fn position_weight(peak_rt: f64, target: f64, max_drift: f64) -> f64 {
     let drift = (peak_rt - target) / max_drift;
-    1.0 - drift * drift
+    1.0 - drift.abs()
 }
 
 fn pick_peak(peaks: &[Peak], target: f64, max_drift: f64) -> Peak {

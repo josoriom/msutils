@@ -1,7 +1,7 @@
 {
   "targets": [
     {
-      "target_name": "msutils",
+      "target_name": "quantion",
       "sources": [
         "src/bridge.cc"
       ],

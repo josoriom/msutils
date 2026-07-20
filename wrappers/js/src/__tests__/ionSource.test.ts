@@ -9,21 +9,37 @@ describe("ionSource classifier", () => {
       );
     });
 
-    test("string with http scheme throws", () => {
-      expect(() => getIonSource("http://example.com/file.ion")).toThrow(
-        "URL strings are not accepted",
+    test("string with http scheme returns url source", () => {
+      const source = getIonSource("http://example.com/file.ion");
+      expect(source.kind).toBe("url");
+      expect((source as { kind: "url"; url: URL }).url.href).toBe(
+        "http://example.com/file.ion",
       );
     });
 
-    test("string with https scheme throws", () => {
-      expect(() => getIonSource("https://example.com/file.ion")).toThrow(
-        "URL strings are not accepted",
+    test("string with https scheme returns url source", () => {
+      const source = getIonSource("https://example.com/file.ion");
+      expect(source.kind).toBe("url");
+      expect((source as { kind: "url"; url: URL }).url.href).toBe(
+        "https://example.com/file.ion",
       );
     });
 
     test("string with file scheme throws", () => {
       expect(() => getIonSource("file:///data/file.ion")).toThrow(
-        "URL strings are not accepted",
+        "only http and https URLs can be read remotely",
+      );
+    });
+
+    test("string with ftp scheme throws", () => {
+      expect(() => getIonSource("ftp://example.com/file.ion")).toThrow(
+        "only http and https URLs can be read remotely",
+      );
+    });
+
+    test("string with s3 scheme throws", () => {
+      expect(() => getIonSource("s3://bucket/file.ion")).toThrow(
+        "only http and https URLs can be read remotely",
       );
     });
 
@@ -58,11 +74,22 @@ describe("ionSource classifier", () => {
       expect((source as { kind: "url"; url: URL }).url).toBe(url);
     });
 
-    test("file URL returns url source", () => {
-      const url = new URL("file:///data/file.ion");
-      const source = getIonSource(url);
-      expect(source.kind).toBe("url");
-      expect((source as { kind: "url"; url: URL }).url).toBe(url);
+    test("file URL throws", () => {
+      expect(() => getIonSource(new URL("file:///data/file.ion"))).toThrow(
+        "only http and https URLs can be read remotely",
+      );
+    });
+
+    test("ftp URL throws", () => {
+      expect(() => getIonSource(new URL("ftp://example.com/file.ion"))).toThrow(
+        "only http and https URLs can be read remotely",
+      );
+    });
+
+    test("data URL throws", () => {
+      expect(() => getIonSource(new URL("data:application/octet-stream,x"))).toThrow(
+        "only http and https URLs can be read remotely",
+      );
     });
   });
 

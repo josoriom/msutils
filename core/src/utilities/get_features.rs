@@ -123,8 +123,8 @@ impl Default for AlignmentOptions {
     fn default() -> Self {
         Self {
             mz_tolerance: MzTolerance {
-                mz_absolute: 0.005,
-                ppm: 20.0,
+                mz_absolute: 0.0025,
+                ppm: 5.0,
             },
             rt_tolerance: 0.05,
             min_samples: 1,

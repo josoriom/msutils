@@ -5,14 +5,21 @@ declare const __WASM_DATA_URL__: string | undefined;
 declare var require: any;
 
 import type { Backend, FileHandle, ByteRangeResult } from "./backend";
-import type { PeakOptions } from "../types/types";
+import type { NoiseLevel, PeakOptions } from "../types/types";
 import { parseAndCamelize, toUint8 } from "./shared";
-import { ContainmentCache } from "./containmentCache";
+import {
+  fetchHeader,
+  newRemoteSource,
+  prefetchRanges as prefetchRangesForSource,
+  type RemoteSource,
+} from "./remoteSource";
 
 const IS_INLINE_BUILD = typeof __INLINE__ !== "undefined" && __INLINE__;
 const OUTPUT_BUFFER_PAIR_BYTES = 8;
+const NOISE_LEVEL_SLOT_BYTES = 16;
+const NOISE_LEVEL_INTENSITY_OFFSET = 8;
 const PEAK_OPTIONS_STRUCT_BYTES = 80;
-const MSUTILS_ABI_VERSION = 1;
+const QUANTION_ABI_VERSION = 2;
 const ERR_FAST_PATH = 6;
 
 function rcError(name: string, rc: number): Error {
@@ -23,11 +30,6 @@ function rcError(name: string, rc: number): Error {
   }
   return new Error(`${name} failed with code ${rc}`);
 }
-
-type RemoteSource = {
-  url: string;
-  cache: ContainmentCache;
-};
 
 class RangeSourceRegistry {
   private sources = new Map<number, RemoteSource>();
@@ -83,10 +85,10 @@ const SHAPE_CODES: Record<string, number> = { gaussian: 0, emg: 1 };
 const DEFAULT_SHAPE_CODE = 1;
 
 function shapeCode(value: unknown): number {
-  if (typeof value === 'number' && Number.isFinite(value)) {
+  if (typeof value === "number" && Number.isFinite(value)) {
     return value;
   }
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     const code = SHAPE_CODES[value.trim().toLowerCase()];
     return code === undefined ? DEFAULT_SHAPE_CODE : code;
   }
@@ -168,6 +170,11 @@ class WasmHeap {
     return this.view.getUint32(ptr, true);
   }
 
+  readF64(ptr: number): number {
+    this.refresh();
+    return this.view.getFloat64(ptr, true);
+  }
+
   readOutputSlot(slotPtr: number): { ptr: number; len: number } {
     this.refresh();
     return {
@@ -209,8 +216,8 @@ class WasmExports {
   readonly memory: WebAssembly.Memory;
   readonly alloc: (size: number) => number;
   readonly free: (ptr: number, size: number) => void;
-  readonly msutilsAbiVersion: () => number;
-  readonly msutilsSizeofPeakOptions: () => number;
+  readonly quantionAbiVersion: () => number;
+  readonly quantionSizeofPeakOptions: () => number;
   readonly parseMzml: (
     dataPtr: number,
     dataLen: number,
@@ -283,7 +290,12 @@ class WasmExports {
     cores: number,
     outBuf: number,
   ) => number;
-  readonly findNoiseLevel: (yPtr: number, len: number) => number;
+  readonly findNoiseLevel: (
+    yPtr: number,
+    len: number,
+    outWidth: number,
+    outIntensity: number,
+  ) => number;
   readonly calculateBaseline: (
     yPtr: number,
     len: number,
@@ -324,27 +336,43 @@ class WasmExports {
     level: number,
     outBuf: number,
   ) => number;
-  readonly parseIonUrl: ((sourceId: number, cacheBytes: number, outHandle: number) => number) | null;
-  readonly planOpen: ((headerPtr: number, headerLen: number, outBuf: number) => number) | null;
-  readonly planEic: (
-    (
-      handle: number,
-      target: number,
-      from: number,
-      to: number,
-      ppm: number,
-      mzTol: number,
-      outBuf: number,
-    ) => number
-  ) | null;
+  readonly parseIonUrl:
+    | ((sourceId: number, cacheBytes: number, outHandle: number) => number)
+    | null;
+  readonly planOpen:
+    | ((headerPtr: number, headerLen: number, outBuf: number) => number)
+    | null;
+  readonly planEic:
+    | ((
+        handle: number,
+        target: number,
+        from: number,
+        to: number,
+        ppm: number,
+        mzTol: number,
+        outBuf: number,
+      ) => number)
+    | null;
   readonly imageBegin:
-    | ((handle: number, mz: number, tolerance: number, level: number, outSession: number) => number)
+    | ((
+        handle: number,
+        mz: number,
+        tolerance: number,
+        level: number,
+        outSession: number,
+      ) => number)
     | null;
   readonly imageScanCount:
     | ((session: number, outCount: number) => number)
     | null;
   readonly imageRanges:
-    | ((handle: number, session: number, from: number, count: number, outBuf: number) => number)
+    | ((
+        handle: number,
+        session: number,
+        from: number,
+        count: number,
+        outBuf: number,
+      ) => number)
     | null;
   readonly imageFold:
     | ((handle: number, session: number, from: number, count: number) => number)
@@ -357,9 +385,9 @@ class WasmExports {
     this.memory = ex.memory as WebAssembly.Memory;
     this.alloc = this.resolve(ex, ["alloc"]);
     this.free = this.resolve(ex, ["free_", "free"]);
-    this.msutilsAbiVersion = this.resolve(ex, ["msutils_abi_version"]);
-    this.msutilsSizeofPeakOptions = this.resolve(ex, [
-      "msutils_sizeof_peak_options",
+    this.quantionAbiVersion = this.resolve(ex, ["quantion_abi_version"]);
+    this.quantionSizeofPeakOptions = this.resolve(ex, [
+      "quantion_sizeof_peak_options",
     ]);
     this.parseMzml = this.resolve(ex, ["parse_mzml"]);
     this.parseBin = this.resolve(ex, ["parse_bin"]);
@@ -377,58 +405,81 @@ class WasmExports {
     this.findFeature = this.resolve(ex, ["find_feature"]);
     this.getScans = this.resolve(ex, ["get_scans"]);
     this.getIonImage = this.resolve(ex, ["get_ion_image"]);
-    this.parseIonUrl = typeof ex["parse_ion_url"] === "function"
-      ? ex["parse_ion_url"] as unknown as (sourceId: number, cacheBytes: number, outHandle: number) => number
-      : null;
-    this.planOpen = typeof ex["plan_open"] === "function"
-      ? ex["plan_open"] as unknown as (headerPtr: number, headerLen: number, outBuf: number) => number
-      : null;
-    this.planEic = typeof ex["plan_eic"] === "function"
-      ? ex["plan_eic"] as unknown as (
-          handle: number,
-          target: number,
-          from: number,
-          to: number,
-          ppm: number,
-          mzTol: number,
-          outBuf: number,
-        ) => number
-      : null;
-    this.imageBegin = typeof ex["image_begin"] === "function"
-      ? ex["image_begin"] as unknown as (
-          handle: number,
-          mz: number,
-          tolerance: number,
-          level: number,
-          outSession: number,
-        ) => number
-      : null;
-    this.imageScanCount = typeof ex["image_scan_count"] === "function"
-      ? ex["image_scan_count"] as unknown as (session: number, outCount: number) => number
-      : null;
-    this.imageRanges = typeof ex["image_ranges"] === "function"
-      ? ex["image_ranges"] as unknown as (
-          handle: number,
-          session: number,
-          from: number,
-          count: number,
-          outBuf: number,
-        ) => number
-      : null;
-    this.imageFold = typeof ex["image_fold"] === "function"
-      ? ex["image_fold"] as unknown as (
-          handle: number,
-          session: number,
-          from: number,
-          count: number,
-        ) => number
-      : null;
-    this.imageFinish = typeof ex["image_finish"] === "function"
-      ? ex["image_finish"] as unknown as (session: number, outBuf: number) => number
-      : null;
-    this.imageFree = typeof ex["image_free"] === "function"
-      ? ex["image_free"] as unknown as (session: number) => void
-      : null;
+    this.parseIonUrl =
+      typeof ex["parse_ion_url"] === "function"
+        ? (ex["parse_ion_url"] as unknown as (
+            sourceId: number,
+            cacheBytes: number,
+            outHandle: number,
+          ) => number)
+        : null;
+    this.planOpen =
+      typeof ex["plan_open"] === "function"
+        ? (ex["plan_open"] as unknown as (
+            headerPtr: number,
+            headerLen: number,
+            outBuf: number,
+          ) => number)
+        : null;
+    this.planEic =
+      typeof ex["plan_eic"] === "function"
+        ? (ex["plan_eic"] as unknown as (
+            handle: number,
+            target: number,
+            from: number,
+            to: number,
+            ppm: number,
+            mzTol: number,
+            outBuf: number,
+          ) => number)
+        : null;
+    this.imageBegin =
+      typeof ex["image_begin"] === "function"
+        ? (ex["image_begin"] as unknown as (
+            handle: number,
+            mz: number,
+            tolerance: number,
+            level: number,
+            outSession: number,
+          ) => number)
+        : null;
+    this.imageScanCount =
+      typeof ex["image_scan_count"] === "function"
+        ? (ex["image_scan_count"] as unknown as (
+            session: number,
+            outCount: number,
+          ) => number)
+        : null;
+    this.imageRanges =
+      typeof ex["image_ranges"] === "function"
+        ? (ex["image_ranges"] as unknown as (
+            handle: number,
+            session: number,
+            from: number,
+            count: number,
+            outBuf: number,
+          ) => number)
+        : null;
+    this.imageFold =
+      typeof ex["image_fold"] === "function"
+        ? (ex["image_fold"] as unknown as (
+            handle: number,
+            session: number,
+            from: number,
+            count: number,
+          ) => number)
+        : null;
+    this.imageFinish =
+      typeof ex["image_finish"] === "function"
+        ? (ex["image_finish"] as unknown as (
+            session: number,
+            outBuf: number,
+          ) => number)
+        : null;
+    this.imageFree =
+      typeof ex["image_free"] === "function"
+        ? (ex["image_free"] as unknown as (session: number) => void)
+        : null;
   }
 
   private resolve<T extends Function>(
@@ -442,84 +493,6 @@ class WasmExports {
       `WasmExports: none of [${names.join(", ")}] found in WASM exports`,
     );
   }
-}
-
-async function fetchRange(url: string, range: ByteRangeResult): Promise<Uint8Array> {
-  const start = range.offset;
-  const end = range.offset + range.length - 1n;
-
-  const response = await fetch(url, {
-    headers: {
-      Range: `bytes=${start}-${end}`,
-      "Accept-Encoding": "identity",
-    },
-  });
-
-  if (response.status !== 206) {
-    throw new Error(
-      `range request failed: expected 206 Partial Content, got ${response.status}`
-    );
-  }
-
-  const contentRange = response.headers.get("Content-Range");
-  const expectedPrefix = `bytes ${start}-${end}/`;
-  if (!contentRange?.startsWith(expectedPrefix)) {
-    throw new Error(
-      `range response has wrong Content-Range: got ${contentRange}, expected to start with ${expectedPrefix}`
-    );
-  }
-
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (BigInt(bytes.length) !== range.length) {
-    throw new Error(
-      `range response length mismatch: got ${bytes.length}, expected ${range.length}`
-    );
-  }
-
-  return bytes;
-}
-
-function coalesceRanges(ranges: ByteRangeResult[]): ByteRangeResult[] {
-  if (ranges.length === 0) return [];
-
-  const sorted = [...ranges].sort((a, b) =>
-    a.offset < b.offset ? -1 : a.offset > b.offset ? 1 : 0
-  );
-
-  const result: ByteRangeResult[] = [];
-  let current = sorted[0];
-
-  for (let i = 1; i < sorted.length; i++) {
-    const next = sorted[i];
-    const gap = next.offset - (current.offset + current.length);
-
-    if (gap <= 65536n) {
-      current = {
-        offset: current.offset,
-        length: next.offset + next.length - current.offset,
-      };
-    } else {
-      result.push(current);
-      current = next;
-    }
-  }
-  result.push(current);
-  return result;
-}
-
-async function prefetchRangesForSource(
-  source: RemoteSource,
-  ranges: ByteRangeResult[]
-): Promise<void> {
-  const missing = source.cache.missing(ranges);
-  const coalesced = coalesceRanges(missing);
-
-  const fetches = coalesced.map(async (range) => {
-    const bytes = await fetchRange(source.url, range);
-    source.cache.add(range, bytes);
-  });
-
-  await Promise.all(fetches);
 }
 
 const IMAGE_BATCH_SCANS = 256;
@@ -541,22 +514,23 @@ class WasmApi {
   private readonly baselineScratchSlot: number;
   private readonly peakOptionsSlot: number;
   private readonly handleScratchSlot: number;
+  private readonly noiseLevelSlot: number;
   private readonly source_id_by_handle = new Map<number, number>();
 
   constructor(instance: WebAssembly.Instance) {
     this.fn = new WasmExports(instance);
 
-    const abi = this.fn.msutilsAbiVersion();
-    if (abi !== MSUTILS_ABI_VERSION) {
+    const abi = this.fn.quantionAbiVersion();
+    if (abi !== QUANTION_ABI_VERSION) {
       throw new Error(
-        `msutils WASM ABI version mismatch: binary=${abi}, ` +
-          `wrapper=${MSUTILS_ABI_VERSION}. Rebuild the WASM module.`,
+        `quantion WASM ABI version mismatch: binary=${abi}, ` +
+          `wrapper=${QUANTION_ABI_VERSION}. Rebuild the WASM module.`,
       );
     }
-    const size = this.fn.msutilsSizeofPeakOptions();
+    const size = this.fn.quantionSizeofPeakOptions();
     if (size !== PEAK_OPTIONS_STRUCT_BYTES) {
       throw new Error(
-        `msutils WASM PeakOptions size mismatch: binary=${size} bytes, ` +
+        `quantion WASM PeakOptions size mismatch: binary=${size} bytes, ` +
           `wrapper=${PEAK_OPTIONS_STRUCT_BYTES} bytes. ` +
           `Native binary and JS wrapper are out of sync — rebuild.`,
       );
@@ -572,6 +546,7 @@ class WasmApi {
     );
     this.peakOptionsSlot = this.heap.allocPermanent(PEAK_OPTIONS_STRUCT_BYTES);
     this.handleScratchSlot = this.heap.allocPermanent(4);
+    this.noiseLevelSlot = this.heap.allocPermanent(NOISE_LEVEL_SLOT_BYTES);
   }
 
   private assertLocalHandle(handle: number, functionName: string): void {
@@ -615,7 +590,7 @@ class WasmApi {
 
     if (bytes.length % 16 !== 0) {
       throw new Error(
-        `planned range buffer length must be divisible by 16, got ${bytes.length}`
+        `planned range buffer length must be divisible by 16, got ${bytes.length}`,
       );
     }
 
@@ -653,7 +628,7 @@ class WasmApi {
     from: number,
     to: number,
     ppmTol: number,
-    mzTol: number
+    mzTol: number,
   ): ByteRangeResult[] {
     if (!this.fn.planEic) {
       throw new Error("planEic not in WASM exports");
@@ -666,21 +641,33 @@ class WasmApi {
       to,
       ppmTol,
       mzTol,
-      this.blobScratchSlot
+      this.blobScratchSlot,
     );
     if (rc !== 0) throw new Error(`plan_eic failed with code ${rc}`);
     return this.readRangesFromSlot(this.blobScratchSlot);
   }
 
-  private imageBegin(handle: number, mz: number, tolerance: number, level: number): number {
+  private imageBegin(
+    handle: number,
+    mz: number,
+    tolerance: number,
+    level: number,
+  ): number {
     if (!this.fn.imageBegin) throw new Error("imageBegin not in WASM exports");
-    const rc = this.fn.imageBegin(handle, mz, tolerance, level, this.handleScratchSlot);
+    const rc = this.fn.imageBegin(
+      handle,
+      mz,
+      tolerance,
+      level,
+      this.handleScratchSlot,
+    );
     if (rc !== 0) throw new Error(`image_begin failed with code ${rc}`);
     return this.heap.readU32(this.handleScratchSlot);
   }
 
   private imageScanCount(session: number): number {
-    if (!this.fn.imageScanCount) throw new Error("imageScanCount not in WASM exports");
+    if (!this.fn.imageScanCount)
+      throw new Error("imageScanCount not in WASM exports");
     const rc = this.fn.imageScanCount(session, this.handleScratchSlot);
     if (rc !== 0) throw new Error(`image_scan_count failed with code ${rc}`);
     return this.heap.readU32(this.handleScratchSlot);
@@ -692,20 +679,33 @@ class WasmApi {
     from: number,
     count: number,
   ): ByteRangeResult[] {
-    if (!this.fn.imageRanges) throw new Error("imageRanges not in WASM exports");
-    const rc = this.fn.imageRanges(handle, session, from, count, this.blobScratchSlot);
+    if (!this.fn.imageRanges)
+      throw new Error("imageRanges not in WASM exports");
+    const rc = this.fn.imageRanges(
+      handle,
+      session,
+      from,
+      count,
+      this.blobScratchSlot,
+    );
     if (rc !== 0) throw new Error(`image_ranges failed with code ${rc}`);
     return this.readRangesFromSlot(this.blobScratchSlot);
   }
 
-  private imageFold(handle: number, session: number, from: number, count: number): void {
+  private imageFold(
+    handle: number,
+    session: number,
+    from: number,
+    count: number,
+  ): void {
     if (!this.fn.imageFold) throw new Error("imageFold not in WASM exports");
     const rc = this.fn.imageFold(handle, session, from, count);
     if (rc !== 0) throw new Error(`image_fold failed with code ${rc}`);
   }
 
   private imageFinish(session: number): any {
-    if (!this.fn.imageFinish) throw new Error("imageFinish not in WASM exports");
+    if (!this.fn.imageFinish)
+      throw new Error("imageFinish not in WASM exports");
     const rc = this.fn.imageFinish(session, this.jsonOutputSlot);
     if (rc !== 0) throw new Error(`image_finish failed with code ${rc}`);
     return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
@@ -733,7 +733,10 @@ class WasmApi {
       while (done < total) {
         let count = Math.min(IMAGE_BATCH_SCANS, total - done);
         let ranges = this.imageRanges(handle, session, done, count);
-        while (count > 1 && total_range_bytes(ranges) > BigInt(IMAGE_BATCH_BUDGET_BYTES)) {
+        while (
+          count > 1 &&
+          total_range_bytes(ranges) > BigInt(IMAGE_BATCH_BUDGET_BYTES)
+        ) {
           count = Math.floor(count / 2);
           ranges = this.imageRanges(handle, session, done, count);
         }
@@ -755,22 +758,18 @@ class WasmApi {
       throw new Error("parse_ion_url not in WASM exports");
     }
 
-    const source: RemoteSource = {
-      url,
-      cache: new ContainmentCache(),
-    };
+    const source = newRemoteSource(url);
     const sourceId = range_sources.add(source);
 
     try {
-      const headerRange: ByteRangeResult = { offset: 0n, length: 1024n };
-      const headerBytes = await fetchRange(url, headerRange);
-      source.cache.add(headerRange, headerBytes);
+      const headerBytes = await fetchHeader(source);
+      await prefetchRangesForSource(source, this.planOpen(headerBytes));
 
-      const plannedRanges = this.planOpen(headerBytes);
-
-      await prefetchRangesForSource(source, plannedRanges);
-
-      const rc = this.fn.parseIonUrl(sourceId, cacheSize, this.handleScratchSlot);
+      const rc = this.fn.parseIonUrl(
+        sourceId,
+        cacheSize,
+        this.handleScratchSlot,
+      );
       if (rc !== 0) {
         throw new Error(`parse_ion_url failed with code ${rc}`);
       }
@@ -875,22 +874,60 @@ class WasmApi {
         throw new Error("calculateEic: remote source is missing");
       }
 
-      const ranges = this.planEic(handle, targetMz, from, to, ppmTolerance, mzTolerance);
+      const ranges = this.planEic(
+        handle,
+        targetMz,
+        from,
+        to,
+        ppmTolerance,
+        mzTolerance,
+      );
       await prefetchRangesForSource(source, ranges);
     }
 
-    return this.calculateEicNow(handle, targetMz, from, to, ppmTolerance, mzTolerance);
+    return this.calculateEicNow(
+      handle,
+      targetMz,
+      from,
+      to,
+      ppmTolerance,
+      mzTolerance,
+    );
   }
 
-  getScans(handle: number, queryType: number, a: number, b: number, level: number): any {
+  getScans(
+    handle: number,
+    queryType: number,
+    a: number,
+    b: number,
+    level: number,
+  ): any {
     this.assertLocalHandle(handle, "getScans");
-    const rc = this.fn.getScans(handle, queryType, a, b, level, this.jsonOutputSlot);
+    const rc = this.fn.getScans(
+      handle,
+      queryType,
+      a,
+      b,
+      level,
+      this.jsonOutputSlot,
+    );
     if (rc !== 0) throw new Error("get_scans failed with code " + rc);
     return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
   }
 
-  private getIonImageNow(handle: number, mz: number, tolerance: number, level: number): any {
-    const rc = this.fn.getIonImage(handle, mz, tolerance, level, this.jsonOutputSlot);
+  private getIonImageNow(
+    handle: number,
+    mz: number,
+    tolerance: number,
+    level: number,
+  ): any {
+    const rc = this.fn.getIonImage(
+      handle,
+      mz,
+      tolerance,
+      level,
+      this.jsonOutputSlot,
+    );
     if (rc !== 0) throw new Error("get_ion_image failed with code " + rc);
     return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
   }
@@ -909,7 +946,14 @@ class WasmApi {
       if (!source) {
         throw new Error("getIonImage: remote source is missing");
       }
-      return this.computeImageStreaming(source, handle, mz, tolerance, level, onProgress);
+      return this.computeImageStreaming(
+        source,
+        handle,
+        mz,
+        tolerance,
+        level,
+        onProgress,
+      );
     }
 
     return this.getIonImageNow(handle, mz, tolerance, level);
@@ -963,12 +1007,22 @@ class WasmApi {
     return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
   }
 
-  findNoiseLevel(y: Float32Array): number {
-    if (y.length === 0) return Infinity;
+  findNoiseLevel(y: Float32Array): NoiseLevel {
     const [yPtr, yLen] = this.heap.allocAndWrite(toUint8View(y));
-    const noise = this.fn.findNoiseLevel(yPtr, y.length);
+    const rc = this.fn.findNoiseLevel(
+      yPtr,
+      y.length,
+      this.noiseLevelSlot,
+      this.noiseLevelSlot + NOISE_LEVEL_INTENSITY_OFFSET,
+    );
     this.fn.free(yPtr, yLen);
-    return noise;
+    if (rc !== 0) throw new Error("find_noise_level failed with code " + rc);
+    return {
+      width: this.heap.readU32(this.noiseLevelSlot),
+      intensity: this.heap.readF64(
+        this.noiseLevelSlot + NOISE_LEVEL_INTENSITY_OFFSET,
+      ),
+    };
   }
 
   calculateBaseline(
@@ -1147,7 +1201,13 @@ class WasmApi {
   }
 }
 
-function make_range_read_import(): (source_id: number, offset_lo: number, offset_hi: number, len: number, dest_ptr: number) => number {
+function make_range_read_import(): (
+  source_id: number,
+  offset_lo: number,
+  offset_hi: number,
+  len: number,
+  dest_ptr: number,
+) => number {
   return (
     source_id: number,
     offset_lo: number,
@@ -1171,7 +1231,9 @@ function make_range_read_import(): (source_id: number, offset_lo: number, offset
   };
 }
 
-async function load_and_instantiate(bytes: ArrayBuffer | Uint8Array): Promise<WasmApi> {
+async function load_and_instantiate(
+  bytes: ArrayBuffer | Uint8Array,
+): Promise<WasmApi> {
   const imports = {
     env: {
       js_log: (_ptr: number, _len: number) => {},
@@ -1200,12 +1262,12 @@ async function loadWasm(): Promise<WasmApi> {
       typeof __dirname !== "undefined"
         ? __dirname
         : npath.dirname(nurl.fileURLToPath((0, eval)("import.meta").url));
-    const bytes = nfs.readFileSync(npath.join(dir, "msutils.wasm"));
+    const bytes = nfs.readFileSync(npath.join(dir, "quantion.wasm"));
     return load_and_instantiate(bytes);
   }
 
   throw new Error(
-    "Browser ESM build requires the UMD inline bundle (msutils.js)",
+    "Browser ESM build requires the UMD inline bundle (quantion.js)",
   );
 }
 
@@ -1240,12 +1302,7 @@ export class WasmBackend implements Backend {
     );
   }
 
-  async parseIonUrl(url: URL, cacheSize = 0): Promise<FileHandle> {
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new Error(
-        "parseIon: the browser backend only reads http and https URLs",
-      );
-    }
+  async parseIonRemote(url: URL, cacheSize = 0): Promise<FileHandle> {
     return this.getApi().parseIonUrl(url.href, cacheSize);
   }
 
@@ -1312,7 +1369,13 @@ export class WasmBackend implements Backend {
     level: number,
     onProgress?: (fetched: number, total: number, heldBytes: number) => void,
   ): Promise<any> {
-    return this.getApi().getIonImage(handle as number, mz, tolerance, level, onProgress);
+    return this.getApi().getIonImage(
+      handle as number,
+      mz,
+      tolerance,
+      level,
+      onProgress,
+    );
   }
 
   findPeaks(
@@ -1333,7 +1396,7 @@ export class WasmBackend implements Backend {
     return this.getApi().getPeak(x, y, rt, range, opts);
   }
 
-  findNoiseLevel(y: Float32Array): number {
+  findNoiseLevel(y: Float32Array): NoiseLevel {
     const y32 = y instanceof Float32Array ? y : new Float32Array(y);
     return this.getApi().findNoiseLevel(y32);
   }
@@ -1435,8 +1498,3 @@ export class WasmBackend implements Backend {
   }
 }
 
-export const test_range_read_internals = {
-  set_wasm_memory(mem: WebAssembly.Memory | null) {
-    wasm_memory = mem;
-  },
-};

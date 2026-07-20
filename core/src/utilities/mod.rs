@@ -49,4 +49,5 @@ pub use find_feature::find_feature;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub mod get_features;
 pub mod mz_estimator;
-#[cfg(test)] mod tests;
+#[cfg(test)]
+mod tests;

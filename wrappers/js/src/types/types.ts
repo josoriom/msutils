@@ -22,6 +22,11 @@ export type BaselineOptions = Partial<{
   maxIterations: number;
 }>;
 
+export type NoiseLevel = {
+  width: number;
+  intensity: number;
+};
+
 export type Peak = {
   from: number;
   to: number;

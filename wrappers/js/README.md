@@ -1,11 +1,11 @@
-# msutils-js
+# quantion-js
 
-JavaScript wrappers for the msutils library for LC-MS data processing.
+JavaScript wrappers for the quantion library for LC-MS data processing.
 
 ## Install
 
 ```bash
-npm install msutils
+npm install quantion
 ```
 
 ## Concepts
@@ -19,13 +19,13 @@ npm install msutils
 Load a file and extract peaks in a few lines:
 
 ```js
-import * as msutils from "msutils";
+import * as quantion from "quantion";
 
 const raw = await fetch("sample.mzML").then((r) => r.arrayBuffer());
 
-const sample = await msutils.parseMzML(raw);
-const eic = await msutils.calculateEic(sample, 174.112, { from: 1, to: 15 });
-const peaks = msutils.findPeaks(eic.x, eic.y, {
+const sample = await quantion.parseMzML(raw);
+const eic = await quantion.calculateEic(sample, 174.112, { from: 1, to: 15 });
+const peaks = quantion.findPeaks(eic.x, eic.y, {
   autoNoise: true,
   snRatio: 3.0,
 });
@@ -42,7 +42,7 @@ peaks.forEach((p) => {
 Load an mzML file into a sample.
 
 ```js
-const sample = await msutils.parseMzML(buffer);
+const sample = await quantion.parseMzML(buffer);
 ```
 
 ### Load ion
@@ -50,10 +50,12 @@ const sample = await msutils.parseMzML(buffer);
 Open an ion binary source into a sample.
 
 ```js
-const sample = await msutils.parseIon(buffer);
-const sample = await msutils.parseIon(buffer, { maxCacheSize: 1000000 });
-const sample = await msutils.parseIon("./data/sample.ion");
-const sample = await msutils.parseIon(new URL("https://example.com/sample.ion"));
+const sample = await quantion.parseIon(buffer);
+const sample = await quantion.parseIon(buffer, { maxCacheSize: 1000000 });
+const sample = await quantion.parseIon("./data/sample.ion");
+const sample = await quantion.parseIon(
+  new URL("https://example.com/sample.ion"),
+);
 ```
 
 `string` inputs are filesystem paths only. URL inputs must use `new URL(...)`. URL range reads are supported by the Node.js backend.
@@ -65,7 +67,7 @@ const sample = await msutils.parseIon(new URL("https://example.com/sample.ion"))
 Get JSON from a sample.
 
 ```js
-const json = msutils.ionToJson(sample);
+const json = quantion.ionToJson(sample);
 ```
 
 ### Sample to mzML
@@ -73,7 +75,7 @@ const json = msutils.ionToJson(sample);
 Get mzML text from a sample.
 
 ```js
-const mzml = msutils.ionToMzml(sample);
+const mzml = quantion.ionToMzml(sample);
 ```
 
 ### Sample to ion
@@ -81,7 +83,7 @@ const mzml = msutils.ionToMzml(sample);
 Convert a sample to compressed ion bytes.
 
 ```js
-const ionBytes = msutils.mzmlToIon(sample, { level: 12, f32Compress: false });
+const ionBytes = quantion.mzmlToIon(sample, { level: 12, f32Compress: false });
 ```
 
 ## Extract from samples
@@ -91,7 +93,7 @@ const ionBytes = msutils.mzmlToIon(sample, { level: 12, f32Compress: false });
 Get an extracted ion chromatogram for one m/z from a sample.
 
 ```js
-const eic = await msutils.calculateEic(
+const eic = await quantion.calculateEic(
   sample,
   174.112,
   { from: 1, to: 15 },
@@ -107,20 +109,20 @@ Get scans from a sample by retention time range, m/z range, or closest value.
 
 ```js
 // Get scans in RT range
-const scans = msutils.getScans(sample, { rt: { from: 1, to: 15 } }, 1);
+const scans = quantion.getScans(sample, { rt: { from: 1, to: 15 } }, 1);
 
 // Get scan closest to RT
-const scan = msutils.getScans(sample, { rt: { closest: 5.3 } }, 1);
+const scan = quantion.getScans(sample, { rt: { closest: 5.3 } }, 1);
 
 // Get scans in m/z range
-const scans = msutils.getScans(
+const scans = quantion.getScans(
   sample,
   { selectedMz: { from: 100, to: 500 } },
   1,
 );
 
 // Get scan closest to m/z
-const scan = msutils.getScans(sample, { selectedMz: { closest: 174.112 } }, 1);
+const scan = quantion.getScans(sample, { selectedMz: { closest: 174.112 } }, 1);
 ```
 
 ## Process XY data
@@ -130,7 +132,7 @@ const scan = msutils.getScans(sample, { selectedMz: { closest: 174.112 } }, 1);
 Estimate a baseline for XY data.
 
 ```js
-const baseline = msutils.calculateBaseline(y, {
+const baseline = quantion.calculateBaseline(y, {
   baselineWindow: 101,
   baselineWindowFactor: 3,
 });
@@ -138,10 +140,11 @@ const baseline = msutils.calculateBaseline(y, {
 
 ### Find noise level
 
-Estimate the noise level in XY data.
+Estimate the noise level in XY data. The result has `width`, the number of
+points the estimate came from, and `intensity`, the noise level itself.
 
 ```js
-const noise = msutils.findNoiseLevel(y);
+const { width, intensity } = quantion.findNoiseLevel(y);
 ```
 
 ### Find peaks
@@ -149,7 +152,7 @@ const noise = msutils.findNoiseLevel(y);
 Find all peaks in XY data.
 
 ```js
-const peaks = msutils.findPeaks(x, y, {
+const peaks = quantion.findPeaks(x, y, {
   autoNoise: true,
   snRatio: 3.0,
 });
@@ -160,7 +163,7 @@ const peaks = msutils.findPeaks(x, y, {
 Find one peak near a target retention time in XY data.
 
 ```js
-const peak = msutils.getPeak(x, y, 5.3, 0.6, { autoNoise: true });
+const peak = quantion.getPeak(x, y, 5.3, 0.6, { autoNoise: true });
 ```
 
 ## Find peaks from samples
@@ -175,7 +178,7 @@ const targets = [
   { rt: 7.1, mz: 203.156, range: 0.5, id: "compound_B" },
 ];
 
-const peaks = msutils.getPeaksFromEic(
+const peaks = quantion.getPeaksFromEic(
   sample,
   targets,
   { from: 0.5, to: 10.0 },
@@ -194,7 +197,7 @@ const items = [
   { idx: 5, rt: 7.1, window: 0.5 },
 ];
 
-const peaks = msutils.getPeaksFromChrom(sample, items, { autoNoise: true }, 2);
+const peaks = quantion.getPeaksFromChrom(sample, items, { autoNoise: true }, 2);
 ```
 
 ## Untargeted
@@ -209,7 +212,7 @@ const targets = [
   { rt: 7.1, mz: 203.156, range: 0.5, id: "B" },
 ];
 
-const features = msutils.findFeature(sample, targets, {
+const features = quantion.findFeature(sample, targets, {
   scanEic: { ppmTolerance: 10, mzTolerance: 0.003 },
   eic: { ppmTolerance: 20, mzTolerance: 0.005 },
   findPeak: { autoNoise: true },
@@ -222,7 +225,7 @@ const features = msutils.findFeature(sample, targets, {
 Find all features in a sample (Node.js only).
 
 ```js
-const features = msutils.findFeatures(
+const features = quantion.findFeatures(
   sample,
   { from: 1, to: 15 },
   {
@@ -239,7 +242,7 @@ const features = msutils.findFeatures(
 Find and align features across many samples (Node.js only).
 
 ```js
-const features = msutils.getFeatures(
+const features = quantion.getFeatures(
   "/path/to/ion/dir",
   { from: 0, to: 20 },
   {

@@ -20,7 +20,11 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
 SEXP C_mzml_to_ion(SEXP bin, SEXP level, SEXP f32_compress);
 SEXP C_mzml_to_ion_file(SEXP input_path, SEXP output_path, SEXP level, SEXP f32_compress, SEXP section_on_disk);
 SEXP C_parse_ion(SEXP bin, SEXP max_cache_size);
-SEXP C_parse_ion_url(SEXP url, SEXP max_cache_size);
+SEXP C_plan_open(SEXP header);
+SEXP C_plan_eic(SEXP ptr, SEXP target, SEXP from, SEXP to, SEXP ppm, SEXP mz_tol);
+SEXP C_store_new(void);
+SEXP C_store_add(SEXP store_ptr, SEXP offset, SEXP bytes);
+SEXP C_parse_ion_source(SEXP store_ptr, SEXP max_cache_size);
 SEXP C_parse_ion_path(SEXP path, SEXP max_cache_size);
 SEXP C_get_scans(SEXP bin, SEXP query_type, SEXP a, SEXP b, SEXP level);
 SEXP C_find_noise_level(SEXP y);
@@ -49,7 +53,11 @@ static const R_CallMethodDef CallEntries[] = {
     {"C_mzml_to_ion", (DL_FUNC)&C_mzml_to_ion, 3},
     {"C_mzml_to_ion_file", (DL_FUNC)&C_mzml_to_ion_file, 5},
     {"C_parse_ion", (DL_FUNC)&C_parse_ion, 2},
-    {"C_parse_ion_url", (DL_FUNC)&C_parse_ion_url, 2},
+    {"C_plan_open", (DL_FUNC)&C_plan_open, 1},
+    {"C_plan_eic", (DL_FUNC)&C_plan_eic, 6},
+    {"C_store_new", (DL_FUNC)&C_store_new, 0},
+    {"C_store_add", (DL_FUNC)&C_store_add, 3},
+    {"C_parse_ion_source", (DL_FUNC)&C_parse_ion_source, 2},
     {"C_parse_ion_path", (DL_FUNC)&C_parse_ion_path, 2},
     {"C_get_scans", (DL_FUNC)&C_get_scans, 5},
     {"C_find_noise_level", (DL_FUNC)&C_find_noise_level, 1},
@@ -57,7 +65,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"C_dispose_mzml", (DL_FUNC)&C_dispose_mzml, 1},
     {NULL, NULL, 0}};
 
-void R_init_msutils(DllInfo *dll)
+void R_init_quantion(DllInfo *dll)
 {
   R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
   R_useDynamicSymbols(dll, FALSE);

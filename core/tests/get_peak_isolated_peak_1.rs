@@ -1,6 +1,6 @@
 // Bug #1 guard: a lone clean peak on a flat baseline must be found. The bug was that
 // find_noise_level returned the peak's own apex as the noise floor, so get_peak rejected it.
-// Fully synthetic (no fixture) so it runs identically here and in msutils/core/tests/.
+// Fully synthetic (no fixture) so it runs identically here and in quantion/core/tests/.
 
 use quantion::utilities::{
     find_noise_level::find_noise_level,

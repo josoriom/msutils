@@ -8,6 +8,7 @@ import type {
   IonInput,
   PeakOptions,
   BaselineOptions,
+  NoiseLevel,
   Peak,
   Target,
   ChromItem,
@@ -30,6 +31,7 @@ export type {
   IonInput,
   PeakOptions,
   BaselineOptions,
+  NoiseLevel,
   Peak,
   Target,
   ChromItem,
@@ -62,6 +64,8 @@ const DEFAULTS = {
     autoNoise: true,
     autoBaseline: true,
     minSnr: 2,
+    minR2: 0.0,
+    shape: "emg",
   },
 } as const;
 
@@ -146,7 +150,7 @@ function parseIonSource(
     return backend.parseIonPath(source.path, cacheSize);
   }
   if (source.kind === "url") {
-    return backend.parseIonUrl(source.url, cacheSize);
+    return backend.parseIonRemote(source.url, cacheSize);
   }
   return backend.parseIonBuffer(source.bytes, cacheSize);
 }
@@ -200,10 +204,6 @@ export function mzmlToIon(
     throw new TypeError("mzmlToIon: f32Compress must be a boolean");
   }
   return backend().fileToBin(file._handle!, level, f32Compress);
-}
-
-export function mzmlToIonFile(): never {
-  throw new Error("mzmlToIonFile is not implemented in the JS wrapper");
 }
 
 /**
@@ -298,21 +298,13 @@ export function getPeak(
   return backend().getPeak(x, y, rt, range, opts);
 }
 
-export function fitPeak(): never {
-  throw new Error("fitPeak is not implemented in the JS wrapper");
-}
-
-export function drawPeak(): never {
-  throw new Error("drawPeak is not implemented in the JS wrapper");
-}
-
 /**
  * Estimate the noise level of an intensity array.
  *
  * @param y - Intensity array.
- * @returns Estimated noise level.
+ * @returns The window width the estimate came from and the noise intensity.
  */
-export function findNoiseLevel(y: Float64Array | Float32Array): number {
+export function findNoiseLevel(y: Float64Array | Float32Array): NoiseLevel {
   const y32 = y instanceof Float32Array ? y : new Float32Array(y);
   return backend().findNoiseLevel(y32);
 }
@@ -517,7 +509,12 @@ export function getPeaksFromChrom(
       : Number.isFinite(item.index)
         ? (item.index as number)
         : -1;
-    indices[i] = idx >= 0 ? idx >>> 0 : 0xffffffff;
+    if (idx < 0 || !Number.isInteger(idx)) {
+      throw new RangeError(
+        `getPeaksFromChrom: item ${i} needs a non-negative integer idx`,
+      );
+    }
+    indices[i] = idx >>> 0;
     rts[i] = +item.rt;
     windows[i] = +(item.window ?? item.range ?? 0);
   }

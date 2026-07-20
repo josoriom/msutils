@@ -1,11 +1,14 @@
-Package: msutils
+Package: quantion
 Type: Package
-Title: msutils
+Title: quantion
 Version: 0.1.0
 Authors@R: person("J", "Osorio", email = "josoriom93@gmail.com", role = c("aut","cre"))
 Author: J Osorio
 Maintainer: J Osorio <josoriom93@gmail.com>
-Description: Base-R bindings to the msutils native library built in Rust.
+Description: Base-R bindings to the quantion native library built in Rust.
+Depends: R (>= 4.0)
+Imports: jsonlite, utils
+Suggests: parallel, testthat, callr
 License: MIT
 Encoding: UTF-8
 LazyData: true

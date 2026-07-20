@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(opts.seed_eic_options.ppm_tolerance, 10.0);
         assert_eq!(opts.final_eic_options.ppm_tolerance, 20.0);
         assert_eq!(opts.min_seed_width_points, 5);
-        assert_eq!(opts.mz_scan_grid.step, 0.006);
+        assert_eq!(opts.mz_scan_grid.step, 0.005);
     }
 
     #[test]

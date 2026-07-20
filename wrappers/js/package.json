@@ -1,7 +1,7 @@
 {
-  "name": "msutils",
+  "name": "quantion",
   "version": "0.1.0",
-  "description": "ULCMS: Rust core with WASM bindings",
+  "description": "quantion: Rust core with WASM bindings",
   "license": "MIT",
   "type": "module",
   "main": "./lib/index-node.js",
@@ -10,7 +10,7 @@
     ".": {
       "browser": {
         "types": "./dist/index-wasm.d.ts",
-        "default": "./dist/msutils.js"
+        "default": "./dist/quantion.js"
       },
       "require": {
         "types": "./lib/index-node.d.ts",
@@ -38,7 +38,7 @@
     "clean": "rimraf dist lib types",
     "check-types": "tsc --noEmit",
     "prepack": "npm run clean && npm run build && npm run tsc-cjs",
-    "build": "webpack --config webpack.config.cjs && cp ./native/msutils.wasm dist/msutils.wasm && tsc --project tsconfig.wasm-types.json",
+    "build": "webpack --config webpack.config.cjs && node scripts/copy-wasm.mjs && tsc --project tsconfig.wasm-types.json",
     "tsc-cjs": "tsc --project tsconfig.cjs.json && node -e \"const fs=require('fs');fs.mkdirSync('lib',{recursive:true});fs.writeFileSync('lib/package.json','{\\n  \\\"type\\\": \\\"commonjs\\\"\\n}\\n')\"",
     "prettier": "prettier --check src",
     "prettier-write": "prettier --write src",

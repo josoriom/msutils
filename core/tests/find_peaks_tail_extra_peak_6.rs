@@ -63,6 +63,8 @@ fn find_3_peaks_aminobutyric_acid_1_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(10),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -90,6 +92,8 @@ fn find_3_peaks_alanine_acid_1_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(5),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -119,6 +123,8 @@ fn find_1_peak_glutaime_with_tail_6() {
                 auto_baseline: Some(true),
                 auto_noise: Some(true),
                 min_peak_width_points: Some(8),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -145,6 +151,7 @@ fn find_2_peaks_leucine_6() {
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(8),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -173,6 +180,7 @@ fn find_2_peaks_aspartic_acid_6() {
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(6),
                 min_intensity: Some(300.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -201,6 +209,7 @@ fn find_1_peak_proline_is_6() {
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(8),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -224,6 +233,8 @@ fn find_1_peak_glutamic_acid_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(8),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -248,6 +259,7 @@ fn find_1_peak_valine_is_6() {
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(8),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -272,6 +284,7 @@ fn find_4_peaks_sarcosine_6() {
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(5),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -300,6 +313,8 @@ fn find_4_peaks_ce_18_1_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(5),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -326,6 +341,8 @@ fn find_4_peaks_ce_18_11_6() {
                 auto_noise: Some(false),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(8),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -350,6 +367,8 @@ fn find_4_peaks_ce_18_12_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(8),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -375,6 +394,8 @@ fn find_6_peaks_285_114_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(8),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -418,6 +439,7 @@ fn find_6_peaks_287_130_6() {
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(10),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -451,6 +473,8 @@ fn find_6_peaks_345_167_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(0),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -478,6 +502,8 @@ fn find_6_peaks_344_226_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(10),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -504,6 +530,8 @@ fn find_6_peaks_303_110_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(0),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -531,6 +559,8 @@ fn find_6_peaks_188_082_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(0),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -556,6 +586,7 @@ fn find_6_peaks_379_239_6() {
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(10),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -581,6 +612,7 @@ fn find_3_peaks_260_103_6() {
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(9),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -610,6 +642,7 @@ fn find_1_peak_324_135_6() {
                 auto_noise: Some(true),
                 min_peak_width_points: Some(5),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -641,6 +674,7 @@ fn find_covp23_cov02260_peaks_6() {
                 min_peak_width_points: Some(5),
                 min_intensity: Some(400.0),
                 allow_overlap: Some(false),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -724,6 +758,7 @@ fn find_rocit20_plate_3_ltr_19_6() {
                 auto_noise: Some(false),
                 min_peak_width_points: Some(10),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             baseline: Some(BaselineOptions {
@@ -754,6 +789,7 @@ fn find_rocit20_plate_3_ltr_19_898_8_577_5_6() {
                 auto_noise: Some(false),
                 min_peak_width_points: Some(5),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             baseline: Some(BaselineOptions {
@@ -784,6 +820,7 @@ fn find_rocit20_plate_3_rocit10263_692_6_369_4_6() {
                 auto_noise: Some(false),
                 min_peak_width_points: Some(8),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             baseline: Some(BaselineOptions {
@@ -815,6 +852,7 @@ fn find_rocit20_plate_3_rocit10059_952_8_679_5_6() {
                 auto_noise: Some(false),
                 min_peak_width_points: Some(4),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             baseline: Some(BaselineOptions {
@@ -845,6 +883,7 @@ fn find_rocit20_plate_3_rocit10192_886_8_565_5_6() {
                 auto_noise: Some(false),
                 min_peak_width_points: Some(4),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             baseline: Some(BaselineOptions {
@@ -875,6 +914,7 @@ fn find_rocit20_plate_3_ltr_19_902_8_565_5_6() {
                 auto_noise: Some(false),
                 min_peak_width_points: Some(4),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             baseline: Some(BaselineOptions {
@@ -905,6 +945,7 @@ fn find_rocit20_plate_3_ltr_19_902_8_603_5_6() {
                 auto_noise: Some(false),
                 min_peak_width_points: Some(4),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             baseline: Some(BaselineOptions {
@@ -938,6 +979,7 @@ fn find_rocit20_plate_3_10213_924_8_627_5_6() {
                 auto_noise: Some(false),
                 min_peak_width_points: Some(4),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             baseline: Some(BaselineOptions {
@@ -968,6 +1010,7 @@ fn find_rocit20_plate_4_ltr_19_894_8_597_5_6() {
                 auto_noise: Some(false),
                 min_peak_width_points: Some(8),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             baseline: Some(BaselineOptions {
@@ -1001,6 +1044,7 @@ fn find_mauritius_cov2989_876_88_577_5_6() {
                 auto_noise: Some(false),
                 min_peak_width_points: Some(4),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             baseline: Some(BaselineOptions {
@@ -1035,6 +1079,7 @@ fn find_mauritius_cov2989_815_7_184_1_6() {
                 auto_noise: Some(false),
                 min_peak_width_points: Some(4),
                 min_intensity: Some(400.0),
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             baseline: Some(BaselineOptions {
@@ -1068,6 +1113,8 @@ fn find_1_peaks_covp26_cov02499_324_1353_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(10),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -1096,6 +1143,8 @@ fn find_2_peaks_covp20_cov02037_302_1499_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(10),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -1122,6 +1171,8 @@ fn find_1_peaks_covp24_cov02302_326_124_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(9),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -1146,6 +1197,8 @@ fn find_1_peaks_covp20_cov02022_274_1186_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(3),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -1172,6 +1225,8 @@ fn find_1_peaks_covp22_cal_8_6_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(5),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -1198,6 +1253,8 @@ fn find_1_peaks_covp23_cal_4_120_237_1008_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(5),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -1222,6 +1279,8 @@ fn find_1_peaks_covp24_cal_2_12_274_1186_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(5),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -1251,6 +1310,8 @@ fn find_1_peaks_covp26_cov02485_309_1671_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(5),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),
@@ -1277,6 +1338,8 @@ fn find_1_peaks_covp25_cal_7_117_288_1343_6() {
                 auto_noise: Some(true),
                 auto_baseline: Some(true),
                 min_peak_width_points: Some(5),
+                min_intensity: None,
+                min_snr: Some(1.0),
                 ..Default::default()
             }),
             artifact_filter: get_artifact_options(),

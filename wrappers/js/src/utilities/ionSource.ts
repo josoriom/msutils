@@ -16,9 +16,12 @@ function getPathSource(value: string): IonSource {
   if (value.length === 0) {
     throw new TypeError("parseIon: path string must not be empty");
   }
+  if (/^https?:/i.test(value)) {
+    return { kind: "url", url: new URL(value) };
+  }
   if (isUrlString(value)) {
     throw new TypeError(
-      "parseIon: URL strings are not accepted; pass new URL(value) for remote ion sources",
+      "parseIon: only http and https URLs can be read remotely",
     );
   }
   return { kind: "path", path: value };
@@ -30,7 +33,14 @@ function isBytes(value: unknown): value is Uint8Array | ArrayBuffer {
 
 export function getIonSource(input: IonInput): IonSource {
   if (typeof input === "string") return getPathSource(input);
-  if (input instanceof URL) return { kind: "url", url: input };
+  if (input instanceof URL) {
+    if (input.protocol !== "http:" && input.protocol !== "https:") {
+      throw new TypeError(
+        "parseIon: only http and https URLs can be read remotely",
+      );
+    }
+    return { kind: "url", url: input };
+  }
   if (isBytes(input)) return { kind: "buffer", bytes: toUint8(input) };
   throw new TypeError(
     "parseIon: source must be a path string, a URL, or a byte buffer",

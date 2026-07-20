@@ -1,11 +1,11 @@
-# msutils-py
+# quantion-py
 
-Python wrappers for the msutils Rust library for LC-MS data processing.
+Python wrappers for the quantion Rust library for LC-MS data processing.
 
 ## Install
 
 ```bash
-pip install git+https://github.com/josoriom/msutils#subdirectory=wrappers/python
+pip install git+https://github.com/josoriom/quantion#subdirectory=wrappers/python
 ```
 
 ## Concepts
@@ -19,13 +19,13 @@ pip install git+https://github.com/josoriom/msutils#subdirectory=wrappers/python
 Load a file and extract peaks in a few lines:
 
 ```python
-import msutils
+import quantion
 
 raw = open("sample.mzML", "rb").read()
 
-with msutils.parse_mzml(raw) as sample:
-    eic   = msutils.calculate_eic(sample, target_mz=174.112, from_rt=1, to_rt=15)
-    peaks = msutils.find_peaks(eic["x"], eic["y"], options={"auto_noise": True, "min_snr": 3.0})
+with quantion.parse_mzml(raw) as sample:
+    eic   = quantion.calculate_eic(sample, target_mz=174.112, from_rt=1, to_rt=15)
+    peaks = quantion.find_peaks(eic["x"], eic["y"], options={"auto_noise": True, "min_snr": 3.0})
     for p in peaks:
         print(f"rt={p['rt']:.3f}  intensity={p['intensity']:.0f}")
 ```
@@ -39,7 +39,7 @@ The library loads automatically on import. No initialization call needed.
 Load an mzML file into a sample.
 
 ```python
-sample = msutils.parse_mzml(bytes)
+sample = quantion.parse_mzml(bytes)
 ```
 
 ### Load ion
@@ -47,7 +47,7 @@ sample = msutils.parse_mzml(bytes)
 Load an ion binary file into a sample.
 
 ```python
-sample = msutils.parse_ion(bytes)
+sample = quantion.parse_ion(bytes)
 ```
 
 ## Convert
@@ -57,7 +57,7 @@ sample = msutils.parse_ion(bytes)
 Get JSON from a sample.
 
 ```python
-json = msutils.ion_to_json(sample)
+json = quantion.ion_to_json(sample)
 ```
 
 ### Sample to mzML
@@ -65,7 +65,7 @@ json = msutils.ion_to_json(sample)
 Get mzML text from a sample.
 
 ```python
-mzml = msutils.ion_to_mzml(sample)
+mzml = quantion.ion_to_mzml(sample)
 ```
 
 ### Sample to ion
@@ -73,7 +73,7 @@ mzml = msutils.ion_to_mzml(sample)
 Convert a sample to compressed ion bytes.
 
 ```python
-ion_bytes = msutils.mzml_to_ion(sample, level=5, f32_compress=False)
+ion_bytes = quantion.mzml_to_ion(sample, level=5, f32_compress=False)
 ```
 
 ### Sample instance methods
@@ -81,7 +81,7 @@ ion_bytes = msutils.mzml_to_ion(sample, level=5, f32_compress=False)
 Convert using sample methods.
 
 ```python
-with msutils.parse_mzml(data) as sample:
+with quantion.parse_mzml(data) as sample:
     json = sample.to_json()
     mzml = sample.to_mzml()
     ion_bytes = sample.to_ion(level=12)
@@ -95,7 +95,7 @@ with msutils.parse_mzml(data) as sample:
 Get an extracted ion chromatogram for one m/z from a sample.
 
 ```python
-eic = msutils.calculate_eic(sample, target_mz=174.112, from_rt=1, to_rt=15, ppm_tol=20.0, mz_tol=0.005)
+eic = quantion.calculate_eic(sample, target_mz=174.112, from_rt=1, to_rt=15, ppm_tol=20.0, mz_tol=0.005)
 ```
 
 ### Get scans
@@ -103,7 +103,7 @@ eic = msutils.calculate_eic(sample, target_mz=174.112, from_rt=1, to_rt=15, ppm_
 Get scans from a sample by retention time range and MS level.
 
 ```python
-scans = msutils.get_scans(sample, rt_range=(1, 15), level=1)
+scans = quantion.get_scans(sample, rt_range=(1, 15), level=1)
 ```
 
 ## Process XY data
@@ -113,15 +113,16 @@ scans = msutils.get_scans(sample, rt_range=(1, 15), level=1)
 Estimate a baseline for XY data.
 
 ```python
-baseline = msutils.calculate_baseline(y, lambda_=0, max_iterations=0)
+baseline = quantion.calculate_baseline(y, lambda_=0, max_iterations=0)
 ```
 
 ### Find noise level
 
-Estimate the noise level in XY data.
+Estimate the noise level in XY data. The result has `width`, the number of
+points the estimate came from, and `intensity`, the noise level itself.
 
 ```python
-noise = msutils.find_noise_level(y)
+noise = quantion.find_noise_level(y)["intensity"]
 ```
 
 ### Find peaks
@@ -129,7 +130,7 @@ noise = msutils.find_noise_level(y)
 Find all peaks in XY data.
 
 ```python
-peaks = msutils.find_peaks(x, y, options={"auto_noise": True, "min_snr": 3.0})
+peaks = quantion.find_peaks(x, y, options={"auto_noise": True, "min_snr": 3.0})
 ```
 
 ### Get single peak
@@ -137,7 +138,7 @@ peaks = msutils.find_peaks(x, y, options={"auto_noise": True, "min_snr": 3.0})
 Find one peak near a target retention time in XY data.
 
 ```python
-peak = msutils.get_peak(x, y, rt=5.3, range_=0.6, options={"auto_noise": True})
+peak = quantion.get_peak(x, y, rt=5.3, range_=0.6, options={"auto_noise": True})
 ```
 
 ## Find peaks from samples
@@ -152,7 +153,7 @@ targets = [
     {"rt": 7.1, "mz": 203.156, "range": 0.5, "id": "compound_B"},
 ]
 
-peaks = msutils.get_peaks_from_eic(
+peaks = quantion.get_peaks_from_eic(
     sample, targets,
     from_rt=0.5, to_rt=10.0,
     options={"auto_noise": True},
@@ -170,7 +171,7 @@ items = [
     {"idx": 5, "rt": 7.1, "window": 0.5},
 ]
 
-peaks = msutils.get_peaks_from_chrom(sample, items, options=None, cores=2)
+peaks = quantion.get_peaks_from_chrom(sample, items, options=None, cores=2)
 ```
 
 ## Untargeted
@@ -185,7 +186,7 @@ targets = [
     {"rt": 7.1, "mz": 203.156, "range": 0.5, "id": "B"},
 ]
 
-features = msutils.find_feature(
+features = quantion.find_feature(
     sample, targets,
     scan_eic={"ppm_tolerance": 10, "mz_tolerance": 0.003},
     eic={"ppm_tolerance": 20, "mz_tolerance": 0.005},
@@ -199,7 +200,7 @@ features = msutils.find_feature(
 Find all features in a sample.
 
 ```python
-features = msutils.find_features(
+features = quantion.find_features(
     sample,
     from_rt=1, to_rt=15,
     eic={"ppm_tolerance": 10, "mz_tolerance": 0.005},
@@ -214,7 +215,7 @@ features = msutils.find_features(
 Find and align features across many samples.
 
 ```python
-features = msutils.get_features(
+features = quantion.get_features(
     "/path/to/ion/dir",
     from_rt=0, to_rt=20,
     eic={"ppm_tolerance": 5},

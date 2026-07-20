@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define QUANTION_ABI_VERSION 1
+#define QUANTION_ABI_VERSION 2
 
 typedef struct ImageSession ImageSession;
 
@@ -38,8 +38,22 @@ uint32_t quantion_abi_version(void);
 
 uintptr_t quantion_sizeof_peak_options(void);
 
-#if (defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
-extern void js_log(const uint8_t *ptr, uintptr_t len);
+#if !(defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
+/**
+ * Open an ion file whose bytes the caller supplies on demand.
+ *
+ * The library never reads a file or a socket itself: every time it needs a slice
+ * it calls `read`. Use this for a file that lives somewhere the library cannot
+ * reach, such as a URL.
+ *
+ * # Safety
+ * `read` must stay callable, and `context` must stay valid, until the returned
+ * handle is freed with `free_mzml`.
+ */
+int parse_ion_source(int32_t (*read)(void *context, uint64_t offset, uint64_t length, uint8_t *dest),
+                     void *context,
+                     uintptr_t max_cache_size,
+                     struct ParsedFile **out);
 #endif
 
 #if (defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
@@ -72,7 +86,6 @@ void free_(uint8_t *ptr_raw, uintptr_t size);
  */
 void free_mzml(struct ParsedFile *handle);
 
-#if !(defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
 /**
  * Parse mzML bytes and store the result in `dest`.
  *
@@ -82,19 +95,6 @@ void free_mzml(struct ParsedFile *handle);
  * On success, `*dest` must be freed with `free_mzml`.
  */
 int parse_mzml(const uint8_t *data_ptr, uintptr_t data_len, struct ParsedFile **dest);
-#endif
-
-#if (defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
-/**
- * Parse mzML bytes and store the result in `dest` (wasm variant).
- *
- * # Safety
- * `data_ptr` must point to `data_len` readable bytes.
- * `dest` must be a valid writable pointer to `*mut ParsedFile`.
- * On success, `*dest` must be freed with `free_mzml`.
- */
-int parse_mzml(const uint8_t *data_ptr, uintptr_t data_len, struct ParsedFile **dest);
-#endif
 
 #if (defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
 int parse_ion_url(uint32_t source_id, uintptr_t cache_bytes, struct ParsedFile **dest);
@@ -117,10 +117,13 @@ int parse_bin(const uint8_t *data_ptr,
 int parse_ion_path(const char *path_ptr, uintptr_t max_cache_size, struct ParsedFile **dest);
 #endif
 
-#if !(defined(QUANTION_TARGET_WASM32) && !defined(QUANTION_TARGET_WASI))
-int parse_ion_url(const char *url_ptr, uintptr_t cache_bytes, struct ParsedFile **out);
-#endif
-
+/**
+ * Plan the byte ranges an open needs.
+ *
+ * # Safety
+ * `header_ptr` must point to at least `header_len` readable bytes, and `header_len` must be at
+ * least 408 so the total file size can be read.
+ */
 int plan_open(const uint8_t *header_ptr, uintptr_t header_len, struct Buf *out);
 
 /**
@@ -272,12 +275,16 @@ int find_peaks(const double *x_ptr,
                struct Buf *out);
 
 /**
- * Compute the noise intensity for an intensity array.
+ * Write the noise window width and the noise intensity for an intensity array.
  *
  * # Safety
  * `y_ptr` must point to `len` readable `f32` values.
+ * `out_width` and `out_intensity` must be valid writable pointers.
  */
-float find_noise_level(const float *y_ptr, uintptr_t len);
+int find_noise_level(const float *y_ptr,
+                     uintptr_t len,
+                     uintptr_t *out_width,
+                     double *out_intensity);
 
 /**
  * Calculate an EIC and write `x` and `y` to `out_x` and `out_y`.

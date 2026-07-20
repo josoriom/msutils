@@ -8,6 +8,7 @@ describe("parseIonUrl Real WASM End-to-End", () => {
   let range_source_registry: Map<number, string> | null = null;
   let next_source_id: number = 1;
   let range_read_calls: Array<{ source_id: number; offset: number; len: number }> = [];
+  let allowed_ranges: Array<[number, number]> | null = null;
 
   beforeAll(async () => {
     const test_ion_path = path.join(__dirname, "../../..", "test.ion");
@@ -20,12 +21,23 @@ describe("parseIonUrl Real WASM End-to-End", () => {
     range_source_registry = null;
     next_source_id = 1;
     range_read_calls = [];
+    allowed_ranges = null;
   });
+
+  function is_allowed(offset: number, len: number): boolean {
+    if (!allowed_ranges) return true;
+    return allowed_ranges.some(
+      ([start, size]) => offset >= start && offset + len <= start + size
+    );
+  }
 
   async function load_wasm_instance() {
     if (wasm_instance) return wasm_instance;
 
-    const wasm_path = path.join(__dirname, "../../native/msutils.wasm");
+    const version = require("../../package.json").version;
+    const wasm_path = path.join(
+      __dirname, "../../../../artifacts", version, "wasm/quantion.wasm",
+    );
     const wasm_bytes = fs.readFileSync(wasm_path);
 
     range_source_registry = new Map<number, string>();
@@ -45,6 +57,8 @@ describe("parseIonUrl Real WASM End-to-End", () => {
           range_read_calls.push({ source_id, offset, len });
 
           if (len === 0) return 0;
+
+          if (!is_allowed(offset, len)) return -1;
 
           const url = range_source_registry!.get(source_id);
           if (!url) return -1;
@@ -89,6 +103,40 @@ describe("parseIonUrl Real WASM End-to-End", () => {
     return instance;
   }
 
+  function read_planned_ranges(
+    instance: WebAssembly.Instance
+  ): Array<[number, number]> {
+    const header_len = 1024;
+    const header_ptr = (instance.exports.alloc as any)(header_len);
+    new Uint8Array(wasm_memory!.buffer, header_ptr, header_len).set(
+      test_ion_data.subarray(0, header_len)
+    );
+
+    const plan_slot = (instance.exports.alloc as any)(8);
+    const plan_open = instance.exports.plan_open as any;
+    expect(plan_open).toBeTruthy();
+    expect(plan_open(header_ptr, header_len, plan_slot)).toBe(0);
+
+    const slot_view = new Uint32Array(wasm_memory!.buffer, plan_slot, 2);
+    const packed_ptr = slot_view[0];
+    const packed_len = slot_view[1];
+    const packed = new DataView(wasm_memory!.buffer, packed_ptr, packed_len);
+
+    const ranges: Array<[number, number]> = [];
+    for (let at = 0; at + 16 <= packed_len; at += 16) {
+      ranges.push([
+        Number(packed.getBigUint64(at, true)),
+        Number(packed.getBigUint64(at + 8, true)),
+      ]);
+    }
+
+    (instance.exports.free_ as any)(packed_ptr, packed_len);
+    (instance.exports.free_ as any)(plan_slot, 8);
+    (instance.exports.free_ as any)(header_ptr, header_len);
+
+    return ranges;
+  }
+
   function read_json_from_slot(slot_ptr: number): any {
     if (!wasm_memory) throw new Error("WASM memory not initialized");
 
@@ -113,11 +161,7 @@ describe("parseIonUrl Real WASM End-to-End", () => {
       range_source_registry!.set(source_id, test_url);
 
       const parse_ion_url = instance.exports.parse_ion_url as any;
-      if (!parse_ion_url) {
-        console.log("parse_ion_url not exported; skipping real wasm test");
-        expect(true).toBe(true);
-        return;
-      }
+      expect(parse_ion_url).toBeTruthy();
 
       const handle_scratch = (instance.exports.alloc as any)(8);
       const output_slot = (instance.exports.alloc as any)(8);
@@ -187,11 +231,7 @@ describe("parseIonUrl Real WASM End-to-End", () => {
       range_source_registry!.set(source_id_2, url_2);
 
       const parse_ion_url = instance.exports.parse_ion_url as any;
-      if (!parse_ion_url) {
-        console.log("parse_ion_url not exported; skipping isolation test");
-        expect(true).toBe(true);
-        return;
-      }
+      expect(parse_ion_url).toBeTruthy();
 
       const handle_scratch_1 = (instance.exports.alloc as any)(8);
       const handle_scratch_2 = (instance.exports.alloc as any)(8);
@@ -249,6 +289,53 @@ describe("parseIonUrl Real WASM End-to-End", () => {
       (instance.exports.free_ as any)(handle_scratch_1, 8);
       (instance.exports.free_ as any)(handle_scratch_2, 8);
       (instance.exports.free_ as any)(output_slot, 8);
+    });
+  });
+
+  describe("the open plan covers every range the open needs", () => {
+    test("parseIonUrl opens while range_read serves only the planned ranges", async () => {
+      const instance = await load_wasm_instance();
+
+      const parse_ion_url = instance.exports.parse_ion_url as any;
+      expect(parse_ion_url).toBeTruthy();
+
+      const source_id = next_source_id++;
+      range_source_registry!.set(source_id, "http://example.com/test.ion");
+
+      const planned = read_planned_ranges(instance);
+      expect(planned.length).toBeGreaterThan(0);
+
+      allowed_ranges = planned;
+      range_read_calls = [];
+
+      const handle_scratch = (instance.exports.alloc as any)(8);
+      const rc = parse_ion_url(source_id, 0, handle_scratch);
+      expect(rc).toBe(0);
+
+      const handle = new Uint32Array(wasm_memory!.buffer, handle_scratch, 1)[0];
+      expect(handle).toBeGreaterThan(0);
+      expect(range_read_calls.length).toBeGreaterThan(0);
+
+      (instance.exports.free_mzml as any)(handle);
+      (instance.exports.free_ as any)(handle_scratch, 8);
+    });
+
+    test("parseIonUrl fails when range_read serves nothing, so the seam really bites", async () => {
+      const instance = await load_wasm_instance();
+
+      const parse_ion_url = instance.exports.parse_ion_url as any;
+      expect(parse_ion_url).toBeTruthy();
+
+      const source_id = next_source_id++;
+      range_source_registry!.set(source_id, "http://example.com/test.ion");
+
+      allowed_ranges = [];
+
+      const handle_scratch = (instance.exports.alloc as any)(8);
+      const rc = parse_ion_url(source_id, 0, handle_scratch);
+      expect(rc).not.toBe(0);
+
+      (instance.exports.free_ as any)(handle_scratch, 8);
     });
   });
 });
