@@ -37,8 +37,9 @@
   "scripts": {
     "clean": "rimraf dist lib types",
     "check-types": "tsc --noEmit",
-    "prepack": "npm run clean && npm run build && npm run tsc-cjs",
-    "build": "webpack --config webpack.config.cjs && node scripts/copy-wasm.mjs && tsc --project tsconfig.wasm-types.json",
+    "prepack": "npm run clean && npm run build && npm run tsc-cjs && node scripts/stage-native.mjs",
+    "postpack": "node scripts/stage-native.mjs --clean",
+    "build": "webpack --config webpack.config.cjs && node scripts/copy-wasm.mjs && tsc --project tsconfig.esm.json",
     "tsc-cjs": "tsc --project tsconfig.cjs.json && node -e \"const fs=require('fs');fs.mkdirSync('lib',{recursive:true});fs.writeFileSync('lib/package.json','{\\n  \\\"type\\\": \\\"commonjs\\\"\\n}\\n')\"",
     "prettier": "prettier --check src",
     "prettier-write": "prettier --write src",
