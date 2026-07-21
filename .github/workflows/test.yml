@@ -44,12 +44,15 @@ jobs:
       - name: Install numpy
         run: python3 -m pip install --upgrade pip numpy
 
+      - name: Install the R packages the wrapper declares
+        run: Rscript -e 'install.packages(c("jsonlite", "testthat", "callr"), repos = "https://cloud.r-project.org")'
+
       - name: Build the JS addon
         working-directory: wrappers/js
         run: |
           npm install --ignore-scripts
           npx node-gyp rebuild
-          npx tsc --project tsconfig.cjs.json
+          npm run tsc-cjs
 
       - name: The 5 version numbers agree
         run: make check-version
@@ -94,7 +97,7 @@ jobs:
         run: |
           npm install --ignore-scripts
           npx node-gyp rebuild
-          npx tsc --project tsconfig.cjs.json
+          npm run tsc-cjs
           npm run build
           npx jest
 

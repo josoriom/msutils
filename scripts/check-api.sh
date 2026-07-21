@@ -63,7 +63,9 @@ if command -v Rscript >/dev/null 2>&1 && [ -f "$here/run_r.R" ]; then
   mkdir -p "$r_lib"
   cp -R "$root/wrappers/r" "$work/rpkg"
   if R CMD INSTALL --no-docs --no-byte-compile -l "$r_lib" "$work/rpkg" > "$work/r_install.log" 2>&1; then
-    export R_LIBS_USER="$r_lib"
+    r_user_lib="$(Rscript -e 'cat(Sys.getenv("R_LIBS_USER"))')"
+    r_path_sep="$(Rscript -e 'cat(.Platform$path.sep)')"
+    export R_LIBS_USER="$r_lib${r_user_lib:+$r_path_sep$r_user_lib}"
     run_language r run_r.R Rscript
   else
     echo "the R package failed to install:"
