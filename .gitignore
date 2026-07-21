@@ -1,4 +1,4 @@
-Cargo.lock
+/wrappers/**/Cargo.lock
 **/node_modules
 **/__pycache__
 **/.DS_Store
@@ -15,3 +15,8 @@ Cargo.lock
 **/.vscode
 debug/*
 *workplan*
+wrappers/js/native/*/
+wrappers/r/src/*.o
+wrappers/r/src/*.so
+*.Rcheck/
+wrappers/r/src/symbols.rds

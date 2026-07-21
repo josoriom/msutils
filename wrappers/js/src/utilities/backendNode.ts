@@ -2,61 +2,95 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { fileURLToPath } from "url";
 import type { Backend, FileHandle } from "./backend";
-import type { PeakOptions } from "../types/types";
+import type { NoiseLevel, PeakOptions } from "../types/types";
 import { parseAndCamelize } from "./shared";
+import {
+  ByteRangeResult,
+  RemoteSource,
+  fetchHeader,
+  newRemoteSource,
+  prefetchRanges,
+} from "./remoteSource";
 
-function firstExisting(...candidates: string[]): string {
-  for (const p of candidates) if (fs.existsSync(p)) return p;
-  return candidates[0];
+function libraryFileName(platform: string): string {
+  if (platform === "win32") return "libquantion.dll";
+  if (platform === "darwin") return "libquantion.dylib";
+  return "libquantion.so";
+}
+
+function platformDirName(platform: string, arch: string): string {
+  const arm = arch === "arm64";
+  if (platform === "darwin") return arm ? "macos-arm64" : "macos-x86_64";
+  if (platform === "linux") return arm ? "linux-arm64" : "linux-x86_64";
+  if (platform === "win32") return arm ? "windows-arm64" : "windows-x86_64";
+  throw new Error(`quantion: unsupported ${platform}/${arch}`);
+}
+
+function isPackageRoot(directory: string): boolean {
+  const manifest = path.join(directory, "package.json");
+  if (!fs.existsSync(manifest)) return false;
+  try {
+    return JSON.parse(fs.readFileSync(manifest, "utf8")).name === "quantion";
+  } catch {
+    return false;
+  }
+}
+
+function artifactsRoot(): string | null {
+  const fromEnv = process.env.QUANTION_ARTIFACTS_ROOT;
+  if (fromEnv) return fs.existsSync(fromEnv) ? fromEnv : null;
+  let here = __dirname;
+  for (;;) {
+    const candidate = path.join(here, "artifacts");
+    if (fs.existsSync(candidate)) return candidate;
+    if (isPackageRoot(here)) return null;
+    const parent = path.dirname(here);
+    if (parent === here) return null;
+    here = parent;
+  }
 }
 
 function platformLibPath(proc: NodeJS.Process): string {
-  const base = path.join(__dirname, "..", "..", "native");
-  const { platform, arch } = proc;
+  const fromEnv = proc.env.QUANTION_LIB;
+  if (fromEnv) return fromEnv;
 
-  const file =
-    platform === "win32"
-      ? "msutils.dll"
-      : platform === "darwin"
-        ? "libmsutils.dylib"
-        : "libmsutils.so";
+  const root = artifactsRoot();
+  const wanted = platformDirName(proc.platform, proc.arch);
+  const file = libraryFileName(proc.platform);
 
-  let dir: string;
+  if (root) {
+    const direct = path.join(root, wanted, file);
+    if (fs.existsSync(direct)) return direct;
 
-  if (platform === "darwin") {
-    dir =
-      arch === "arm64"
-        ? firstExisting(
-            path.join(base, "darwin-arm64"),
-            path.join(base, "macos-arm64"),
-          )
-        : firstExisting(
-            path.join(base, "darwin-x64"),
-            path.join(base, "macos-x86_64"),
-          );
-  } else if (platform === "linux") {
-    dir =
-      arch === "arm64"
-        ? firstExisting(
-            path.join(base, "linux-arm64-gnu"),
-            path.join(base, "linux-arm64"),
-          )
-        : firstExisting(
-            path.join(base, "linux-x64-gnu"),
-            path.join(base, "linux-x86_64"),
-          );
-  } else if (platform === "win32") {
-    dir = firstExisting(
-      path.join(base, "win32-x64"),
-      path.join(base, "windows-x86_64"),
-    );
-  } else {
-    throw new Error(`Unsupported ${platform}/${arch}`);
+    const own = require("../../package.json").version as string;
+    const preferred = path.join(root, own, wanted, file);
+    if (fs.existsSync(preferred)) return preferred;
+
+    const parts = (name: string) => name.split(".").map((p) => Number(p) || 0);
+    const newest = fs
+      .readdirSync(root)
+      .filter((entry) => fs.existsSync(path.join(root, entry, wanted, file)))
+      .filter((entry) => fs.existsSync(path.join(root, entry, "manifest.json")))
+      .sort((left, right) => {
+        const a = parts(left);
+        const b = parts(right);
+        for (let i = 0; i < Math.max(a.length, b.length); i++) {
+          if ((a[i] ?? 0) !== (b[i] ?? 0)) return (b[i] ?? 0) - (a[i] ?? 0);
+        }
+        return 0;
+      })[0];
+    if (newest) return path.join(root, newest, wanted, file);
   }
 
-  return path.join(dir, file);
+  const bundled = path.join(__dirname, "..", "..", "native", wanted, file);
+  if (fs.existsSync(bundled)) return bundled;
+
+  throw new Error(
+    `quantion: no library for ${wanted}. Build one with 'make ${wanted}', ` +
+      `or set QUANTION_LIB to a library file, ` +
+      `or QUANTION_ARTIFACTS_ROOT to the artifacts folder.`,
+  );
 }
 
 function toNodeBuffer(data: Uint8Array): Buffer {
@@ -83,6 +117,7 @@ function unpackIds(
 
 export class NodeBackend implements Backend {
   private native: any;
+  private remote_by_handle = new WeakMap<object, RemoteSource>();
   ready = false;
   readonly handlesAreGcFinalized = true;
 
@@ -93,7 +128,7 @@ export class NodeBackend implements Backend {
       "..",
       "build",
       "Release",
-      "msutils.node",
+      "quantion.node",
     );
     this.native = require(addonPath);
     if (typeof this.native.bind === "function") {
@@ -116,11 +151,24 @@ export class NodeBackend implements Backend {
     return this.native.parseIonPath(path, cacheSize);
   }
 
-  parseIonUrl(url: URL, cacheSize = 0): FileHandle {
-    if (url.protocol === "file:") {
-      return this.native.parseIonPath(fileURLToPath(url), cacheSize);
-    }
-    return this.native.parseIonUrl(url.href, cacheSize);
+
+  planOpen(header: Uint8Array): ByteRangeResult[] {
+    return this.native.planOpen(toNodeBuffer(header));
+  }
+
+  async parseIonRemote(url: URL, cacheSize = 0): Promise<FileHandle> {
+    const source = newRemoteSource(url.href);
+    const header = await fetchHeader(source);
+    await prefetchRanges(source, this.planOpen(header));
+
+    const serve = (offset: number, length: number): Buffer | null => {
+      const bytes = source.cache.read(BigInt(offset), BigInt(length));
+      return bytes ? toNodeBuffer(bytes) : null;
+    };
+
+    const handle = this.native.parseIonSource(serve, cacheSize) as FileHandle;
+    this.remote_by_handle.set(handle as object, source);
+    return handle;
   }
 
   parseIonBuffer(bytes: Uint8Array, cacheSize = 0): FileHandle {
@@ -128,6 +176,7 @@ export class NodeBackend implements Backend {
   }
 
   freeFile(handle: FileHandle): void {
+    this.remote_by_handle.delete(handle as object);
     this.native.dispose(handle);
   }
 
@@ -147,14 +196,26 @@ export class NodeBackend implements Backend {
     return this.native.mzmlToBin(handle, level, f32Compress ? 1 : 0) as Buffer;
   }
 
-  calculateEic(
+  async calculateEic(
     handle: FileHandle,
     targetMz: number,
     from: number,
     to: number,
     ppmTol: number,
     mzTol: number,
-  ): { x: Float64Array; y: Float64Array } {
+  ): Promise<{ x: Float64Array; y: Float64Array }> {
+    const source = this.remote_by_handle.get(handle as object);
+    if (source) {
+      const ranges = this.native.planEic(
+        handle,
+        targetMz,
+        from,
+        to,
+        ppmTol,
+        mzTol,
+      ) as ByteRangeResult[];
+      await prefetchRanges(source, ranges);
+    }
     return this.native.calculateEic(
       handle,
       targetMz,
@@ -211,9 +272,9 @@ export class NodeBackend implements Backend {
     );
   }
 
-  findNoiseLevel(y: Float64Array | Float32Array): number {
-    const y64 = y instanceof Float64Array ? y : new Float64Array(y);
-    return this.native.findNoiseLevel(y64) as number;
+  findNoiseLevel(y: Float64Array | Float32Array): NoiseLevel {
+    const y32 = y instanceof Float32Array ? y : new Float32Array(y);
+    return this.native.findNoiseLevel(y32) as NoiseLevel;
   }
 
   calculateBaseline(
@@ -221,7 +282,11 @@ export class NodeBackend implements Backend {
     lambda: number,
     maxIterations: number,
   ): Float64Array {
-    return this.native.calculateBaseline(y, lambda, maxIterations) as Float64Array;
+    return this.native.calculateBaseline(
+      y,
+      lambda,
+      maxIterations,
+    ) as Float64Array;
   }
 
   getPeaksFromEic(
@@ -287,8 +352,6 @@ export class NodeBackend implements Backend {
     gridStep: number,
     opts: PeakOptions | undefined,
     cores: number,
-    useGpu: number,
-    batchSize: number,
   ): any {
     return parseAndCamelize(
       this.native.findFeatures(
@@ -302,8 +365,6 @@ export class NodeBackend implements Backend {
         gridStep,
         opts ?? null,
         cores,
-        useGpu,
-        batchSize,
       ) as string,
     );
   }
@@ -358,8 +419,6 @@ export class NodeBackend implements Backend {
     prevalence: number,
     opts: PeakOptions | undefined,
     cores: number,
-    useGpu: number,
-    batchSize: number,
   ): any {
     return parseAndCamelize(
       this.native.getFeatures(
@@ -377,8 +436,6 @@ export class NodeBackend implements Backend {
         prevalence,
         opts ?? null,
         cores,
-        useGpu,
-        batchSize,
       ) as string,
     );
   }

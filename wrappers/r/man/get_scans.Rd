@@ -5,12 +5,19 @@
 Fetches scans from a loaded file. Exactly one query mode must be provided per call.
 }
 \usage{
-get_scans(file, rt_from = NULL, rt_to = NULL, rt = NULL,
-          mz_from = NULL, mz_to = NULL, mz = NULL,
-          level = 1L)
+get_scans(
+  bin,
+  rt_from = NULL,
+  rt_to = NULL,
+  rt = NULL,
+  mz_from = NULL,
+  mz_to = NULL,
+  mz = NULL,
+  level = 1L
+)
 }
 \arguments{
-  \item{file}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
+  \item{bin}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
   \item{rt_from}{RT range start (minutes). Use with \code{rt_to}.}
   \item{rt_to}{RT range end (minutes). Use with \code{rt_from}.}
   \item{rt}{Target RT — returns the single closest scan.}

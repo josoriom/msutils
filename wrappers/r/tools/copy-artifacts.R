@@ -1,3 +1,8 @@
+if (nzchar(Sys.getenv("QUANTION_ARTIFACTS_ROOT", "")) || nzchar(Sys.getenv("QUANTION_LIB", ""))) {
+  message("quantion: the package will load the library at run time - nothing copied in")
+  quit(status = 0L)
+}
+
 read_value <- function(name) {
   value <- tryCatch(read.dcf("DESCRIPTION")[1, name], error = function(e) "")
   if (length(value) == 0 || is.na(value) || !nzchar(value)) "" else trimws(value)
@@ -21,19 +26,29 @@ find_platform <- function() {
     if (grepl("x86_64|amd64|x86-64", cpu)) return("linux-x86_64")
   }
   if (os == "windows") {
-    if (grepl("arm64|aarch64", cpu)) stop_install("msutils: Windows ARM64 is not supported yet")
+    if (grepl("arm64|aarch64", cpu)) stop_install("quantion: Windows ARM64 is not supported yet")
     if (grepl("x86_64|amd64|x86-64", cpu)) return("windows-x86_64")
   }
-  stop_install(sprintf("msutils: unsupported platform: %s (%s)", os, cpu))
+  stop_install(sprintf("quantion: unsupported platform: %s (%s)", os, cpu))
+}
+
+find_platform_dir <- function(root, platform) {
+  direct <- file.path(root, platform)
+  if (dir.exists(direct)) return(direct)
+  found <- list.dirs(root, recursive = FALSE, full.names = FALSE)
+  found <- found[vapply(found, function(v) dir.exists(file.path(root, v, platform)), logical(1))]
+  if (!length(found)) return("")
+  best <- found[order(numeric_version(found, strict = FALSE), decreasing = TRUE, na.last = TRUE)][1]
+  file.path(root, best, platform)
 }
 
 copy_files <- function(source, target, platform) {
   files <- list.files(source, full.names = TRUE)
-  if (!length(files)) stop_install("msutils: no files found in ", source)
+  if (!length(files)) stop_install("quantion: no files found in ", source)
   dir.create(target, recursive = TRUE, showWarnings = FALSE)
   ok <- file.copy(files, target, overwrite = TRUE)
-  if (!all(ok)) stop_install("msutils: failed to copy files into ", target)
-  message("msutils: staged ", platform, " into ", target)
+  if (!all(ok)) stop_install("quantion: failed to copy files into ", target)
+  message("quantion: staged ", platform, " into ", target)
 }
 
 find_local_files <- function(platform) {
@@ -42,8 +57,8 @@ find_local_files <- function(platform) {
   if (type != "local" || !nzchar(path)) return("")
   roots <- c(path, dirname(path), dirname(dirname(path)))
   for (root in roots) {
-    source <- file.path(root, "artifacts", platform)
-    if (dir.exists(source)) return(source)
+    source <- find_platform_dir(file.path(root, "artifacts"), platform)
+    if (nzchar(source)) return(source)
   }
   ""
 }
@@ -53,46 +68,62 @@ download_files <- function(platform, target) {
   user <- read_value("RemoteUsername")
   repo <- read_value("RemoteRepo")
   if (!nzchar(sha) || !nzchar(user) || !nzchar(repo)) {
-    stop_install("msutils: missing GitHub metadata and no local artifacts found")
+    stop_install("quantion: missing GitHub metadata and no local artifacts found")
   }
-  temp <- tempfile("msutils-")
+  temp <- tempfile("quantion-")
   dir.create(temp)
   on.exit(unlink(temp, recursive = TRUE), add = TRUE)
   archive <- file.path(temp, "repo.tar.gz")
   url <- sprintf("https://codeload.github.com/%s/%s/tar.gz/%s", user, repo, sha)
   status <- tryCatch(utils::download.file(url, archive, mode = "wb", quiet = TRUE), error = function(e) 1L)
-  if (!identical(status, 0L) || !file.exists(archive)) stop_install("msutils: failed to download ", url)
+  if (!identical(status, 0L) || !file.exists(archive)) stop_install("quantion: failed to download ", url)
   untar_ok <- tryCatch({
     utils::untar(archive, exdir = temp)
     TRUE
   }, error = function(e) FALSE)
-  if (!untar_ok) stop_install("msutils: failed to unpack ", archive)
+  if (!untar_ok) stop_install("quantion: failed to unpack ", archive)
   roots <- list.dirs(temp, recursive = FALSE, full.names = TRUE)
   source <- ""
   for (root in roots) {
-    path <- file.path(root, "artifacts", platform)
-    if (dir.exists(path)) {
+    path <- find_platform_dir(file.path(root, "artifacts"), platform)
+    if (nzchar(path)) {
       source <- path
       break
     }
   }
-  if (!nzchar(source)) stop_install("msutils: artifacts/", platform, " not found for ", sha)
+  if (!nzchar(source)) stop_install("quantion: artifacts/", platform, " not found for ", sha)
   copy_files(source, target, platform)
+}
+
+repo_artifacts <- function() {
+  here <- normalizePath(getwd(), mustWork = FALSE)
+  repeat {
+    candidate <- file.path(here, "artifacts")
+    if (dir.exists(candidate)) return(candidate)
+    parent <- dirname(here)
+    if (identical(parent, here)) return("")
+    here <- parent
+  }
+}
+
+if (nzchar(repo_artifacts())) {
+  message("quantion: building against ", repo_artifacts(), " - nothing copied into the package")
+  quit(status = 0L)
 }
 
 platform <- find_platform()
 target <- file.path("inst", "libs", platform)
-env_root <- Sys.getenv("MSUTILS_ARTIFACTS_ROOT", "")
+env_root <- Sys.getenv("QUANTION_ARTIFACTS_ROOT", "")
 
 if (nzchar(env_root)) {
-  source <- file.path(env_root, platform)
-  if (!dir.exists(source)) stop_install("msutils: artifacts not found at ", source)
+  source <- find_platform_dir(env_root, platform)
+  if (!nzchar(source)) stop_install("quantion: artifacts not found at ", env_root)
   copy_files(source, target, platform)
   quit(status = 0L)
 }
 
-source <- file.path("..", "..", "artifacts", platform)
-if (dir.exists(source)) {
+source <- find_platform_dir(file.path("..", "..", "artifacts"), platform)
+if (nzchar(source)) {
   copy_files(source, target, platform)
   quit(status = 0L)
 }

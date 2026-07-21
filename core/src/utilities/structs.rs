@@ -10,6 +10,15 @@ pub struct DataXY {
     pub y: Vec<f64>,
 }
 
+impl DataXY {
+    pub fn empty() -> DataXY {
+        Self {
+            x: Vec::new(),
+            y: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct FromTo {
     pub from: f64,
@@ -51,51 +60,52 @@ impl Default for Peak {
 }
 
 #[derive(Clone, Debug)]
-pub struct Roi {
-    pub rt: f64,
-    pub half_width: f64,
+pub enum Roi {
+    Peak {
+        rt: f64,
+        range: f64,
+    },
+    Eic {
+        id: String,
+        rt: f64,
+        mz: f64,
+        range: f64,
+    },
+    Chrom {
+        id: String,
+        sample_index: usize,
+        rt: f64,
+        range: f64,
+    },
 }
 
 impl Roi {
-    pub fn new(rt: f64, half_width: f64) -> Self {
-        Self { rt, half_width }
+    pub fn peak(rt: f64, range: f64) -> Self {
+        Self::Peak { rt, range }
     }
-}
 
-#[derive(Clone, Debug)]
-pub struct ChromRoi {
-    pub id: String,
-    pub sample_index: usize,
-    pub rt: f64,
-    pub half_width: f64,
-}
-
-impl ChromRoi {
-    pub fn new(id: impl Into<String>, sample_index: usize, rt: f64, half_width: f64) -> Self {
-        Self {
-            id: id.into(),
-            sample_index,
-            rt,
-            half_width,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Deserialize)]
-pub struct EicRoi {
-    pub id: String,
-    pub rt: f64,
-    pub mz: f64,
-    pub half_width: f64,
-}
-
-impl EicRoi {
-    pub fn new(id: impl Into<String>, rt: f64, mz: f64, half_width: f64) -> Self {
-        Self {
+    pub fn eic(id: impl Into<String>, rt: f64, mz: f64, range: f64) -> Self {
+        Self::Eic {
             id: id.into(),
             rt,
             mz,
-            half_width,
+            range,
+        }
+    }
+
+    pub fn chrom(id: impl Into<String>, sample_index: usize, rt: f64, range: f64) -> Self {
+        Self::Chrom {
+            id: id.into(),
+            sample_index,
+            rt,
+            range,
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Peak { .. } => "",
+            Self::Eic { id, .. } | Self::Chrom { id, .. } => id,
         }
     }
 }

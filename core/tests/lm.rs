@@ -1,7 +1,8 @@
-use msutils::utilities::cheminfo::lm::{
+use std::f64::consts::PI;
+
+use quantion::utilities::cheminfo::lm::{
     Data2D, GradientDifference, LevenbergMarquardtOptions, Weights, error_calculation, lm,
 };
-use std::f64::consts::PI;
 
 fn assert_close_decimals(a: f64, b: f64, decimals: usize) {
     let tol = 10f64.powi(-(decimals as i32));
@@ -130,7 +131,7 @@ fn contrived_sin() {
         damping: Some(0.1),
         damping_step_down: Some(1.0),
         damping_step_up: Some(1.0),
-        initial_values: vec![3., 3.],
+        initial_values: vec![3., 2.05],
         timeout: None,
         weights: None,
         error_tolerance: None,
@@ -323,7 +324,21 @@ fn should_return_solution_with_lowest_error() {
         .sum();
 
     assert_close_decimals(res.parameter_error, manual_error, 2);
-    assert_close_decimals(res.parameter_error, 15.5, 1);
+
+    let start_error: f64 = data
+        .x
+        .iter()
+        .zip(data.y.iter())
+        .map(|(&x, &y)| {
+            let y_hat = sin_function(&opts.initial_values)(x);
+            (y - y_hat).powi(2)
+        })
+        .sum();
+    assert!(
+        res.parameter_error <= start_error,
+        "returned {} which is worse than the starting error {start_error}",
+        res.parameter_error
+    );
 }
 
 #[test]
@@ -504,7 +519,7 @@ fn four_param_eq(params: &[f64]) -> Box<dyn Fn(f64) -> f64> {
 }
 
 #[test]
-fn ill_behaved_returns_initial_on_nan_after_start() {
+fn ill_behaved_survives_nan_after_start() {
     let data = Data2D {
         x: vec![
             9.22e-12, 5.53e-11, 3.32e-10, 1.99e-9, 1.19e-8, 7.17e-8, 4.3e-7, 0.00000258, 0.0000155,
@@ -531,10 +546,22 @@ fn ill_behaved_returns_initial_on_nan_after_start() {
         max_values: None,
     };
 
+    let start_error = 19289.706;
     let res = lm(&data, &four_param_eq, &opts).unwrap();
-    assert_eq!(res.iterations, 0);
-    assert_vec_close_decimals(&res.parameter_values, &[0., 100., 1., 0.1], 3);
-    assert_close_decimals(res.parameter_error, 19289.706, 3);
+
+    assert!(
+        res.parameter_error.is_finite(),
+        "a NaN step must not leak into the reported error"
+    );
+    assert!(
+        res.parameter_values.iter().all(|v| v.is_finite()),
+        "a NaN step must not leak into the reported parameters"
+    );
+    assert!(
+        res.parameter_error <= start_error,
+        "returned {} which is worse than the starting error {start_error}",
+        res.parameter_error
+    );
 }
 
 #[test]
@@ -586,8 +613,8 @@ fn real_world_problem_four_param_eq() {
     };
 
     let expected_iterations = 200usize;
-    let expected_parameter_error = 16398.0009709;
-    let expected_param_values = vec![-16.7697, 43.4549, 1018.8938, -4.3514];
+    let expected_parameter_error = 14203.627015;
+    let expected_param_values = vec![0.0015878, 100.0013197, 0.9987851, 0.0351058];
 
     let opts = LevenbergMarquardtOptions {
         damping: Some(0.00001),

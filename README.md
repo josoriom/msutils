@@ -1,6 +1,6 @@
-[![CI](https://github.com/josoriom/msutils/actions/workflows/rust-tests.yml/badge.svg)](https://github.com/josoriom/msutils/actions/workflows/rust-tests.yml)
+[![test](https://github.com/josoriom/msutils/actions/workflows/test.yml/badge.svg)](https://github.com/josoriom/msutils/actions/workflows/test.yml)
 
-# MSUTILS
+# QUANTION
 
 - [R](wrappers/r/README.md)
 - [Python](wrappers/python/README.md)

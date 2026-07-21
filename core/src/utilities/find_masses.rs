@@ -1,7 +1,9 @@
-use crate::utilities::calculate_eic::{SpectrumKind, lower_bound, upper_bound};
-use crate::utilities::find_peaks::{FindPeaksOptions, PeakFilter, find_peaks};
-use crate::utilities::mz_estimator::SampleMz;
-use crate::utilities::structs::DataXY;
+use crate::utilities::{
+    calculate_eic::{SpectrumKind, lower_bound, upper_bound},
+    find_peaks::{FindPeaksOptions, PeakFilter, find_peaks},
+    mz_estimator::SampleMz,
+    structs::DataXY,
+};
 
 pub fn find_masses(
     mz: &[f64],

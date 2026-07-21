@@ -1,10 +1,43 @@
-use crate::utilities::fit_peak::{PeakSeed, fit_peak};
-use crate::utilities::structs::DataXY;
-
 pub use crate::utilities::fit_peak::PeakShape;
+use crate::utilities::{
+    fit_peak::{PeakSeed, fit_peak},
+    structs::DataXY,
+};
 
 const MIN_FIT_POINTS: usize = 5;
 const FIT_HALF_WIDTH_FWHM: f64 = 1.15;
+const MIN_FLAT_TOP_POINTS: usize = 4;
+const MIN_FLAT_TOP_SHARE: f64 = 0.2;
+
+fn longest_run_at_maximum(y: &[f64], maximum: f64) -> usize {
+    let tolerance = maximum.abs() * 1e-9;
+    let mut longest = 0usize;
+    let mut run = 0usize;
+    for value in y {
+        if (maximum - value).abs() <= tolerance {
+            run += 1;
+            if run > longest {
+                longest = run;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    longest
+}
+
+fn is_flat_topped(y: &[f64]) -> bool {
+    let maximum = y.iter().copied().fold(f64::MIN, f64::max);
+    if !(maximum > 0.0) {
+        return false;
+    }
+    let plateau = longest_run_at_maximum(y, maximum);
+    if plateau < MIN_FLAT_TOP_POINTS {
+        return false;
+    }
+    let above_half = y.iter().filter(|value| **value >= 0.5 * maximum).count();
+    plateau as f64 >= MIN_FLAT_TOP_SHARE * above_half.max(1) as f64
+}
 
 pub trait Candidate {
     fn bounds(&self) -> (usize, usize);
@@ -54,6 +87,9 @@ impl ShapeFilter {
     pub fn keeps_peak(&self, x: &[f64], y: &[f64]) -> bool {
         if self.is_off() {
             return true;
+        }
+        if is_flat_topped(y) {
+            return false;
         }
         match self.score(x, y) {
             Some(r2) => r2 >= self.min_r2,

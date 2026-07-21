@@ -1,0 +1,131 @@
+name: test
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use the Rust that ships with the runner
+        run: rustup update stable && rustup default stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: core
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: "release"
+          use-public-rspm: true
+
+      - name: Install numpy
+        run: python3 -m pip install --upgrade pip numpy
+
+      - name: Install the R packages the wrapper declares
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: wrappers/r
+
+      - name: Build the JS addon
+        working-directory: wrappers/js
+        run: |
+          npm install --ignore-scripts
+          npx node-gyp rebuild
+          npm run tsc-cjs
+
+      - name: The 5 version numbers agree
+        run: make check-version
+
+      - name: The committed headers match a fresh build
+        run: make header-check
+
+      - name: The Rust tests pass
+        run: make test
+
+      - name: Build the native library
+        run: make native
+
+      - name: Rust, R, Python and JS return the same numbers
+        run: make check-api
+
+      - name: The R package checks with no warnings
+        run: |
+          R CMD check wrappers/r --no-manual | tee r-check.log
+          if grep -qE "^Status:.*(WARNING|ERROR)" r-check.log; then
+            echo "R CMD check did not come back clean"
+            exit 1
+          fi
+
+  wasm:
+    name: wasm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: rustup update stable && rustup default stable && rustup target add wasm32-unknown-unknown
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Build the wasm artifact
+        run: make wasm LLVM_PREFIX=/usr/lib/llvm-18
+
+      - name: The JS wrapper builds and its tests pass
+        working-directory: wrappers/js
+        run: |
+          npm install --ignore-scripts
+          npx node-gyp rebuild
+          npm run tsc-cjs
+          npm run build
+          npx jest
+
+  release:
+    name: release is clear
+    needs: [check, wasm]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag matches the version in the tree
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' core/Cargo.toml | head -1)"
+          [ "$tag" = "$version" ] || { echo "tag $GITHUB_REF_NAME does not match $version"; exit 1; }
+
+      - name: Every released artifact matches its checksum
+        run: |
+          python3 - <<'PY'
+          import json, hashlib, os, sys
+          version = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          directory = os.path.join("artifacts", version)
+          manifest = json.load(open(os.path.join(directory, "manifest.json")))
+          bad = [name for name, want in manifest["files"].items()
+                 if "sha256:" + hashlib.sha256(open(os.path.join(directory, name), "rb").read()).hexdigest() != want]
+          sys.exit("checksum mismatch: " + ", ".join(bad)) if bad else print("checksums match")
+          PY

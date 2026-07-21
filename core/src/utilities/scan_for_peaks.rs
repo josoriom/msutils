@@ -1,11 +1,13 @@
 use core::f64;
 
-use crate::utilities::cheminfo::{
-    sgg::{SggOptions, sgg},
-    {Point, kmeans},
+use crate::utilities::{
+    cheminfo::{
+        Point, kmeans,
+        sgg::{SggOptions, sgg},
+    },
+    closest_index,
+    structs::DataXY,
 };
-use crate::utilities::closest_index;
-use crate::utilities::structs::DataXY;
 
 const DEFAULT_WINDOW_SIZES: &[usize] = &[5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27];
 const EPSILON: f64 = 1e-5;

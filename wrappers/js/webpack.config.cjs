@@ -3,11 +3,15 @@ const path = require("node:path");
 const fs = require("node:fs");
 const webpack = require("webpack");
 
-const wasmPath = path.resolve(__dirname, "native/msutils.wasm");
+const version = require("./package.json").version;
+const wasmPath = path.resolve(__dirname, "..", "..", "artifacts", version, "wasm", "quantion.wasm");
+
+if (!fs.existsSync(wasmPath)) {
+  throw new Error(`quantion: ${wasmPath} is missing. Run 'make wasm' at the repo root first.`);
+}
 
 const wasmDataUrl =
-  "data:application/wasm;base64," +
-  fs.readFileSync(wasmPath).toString("base64");
+  "data:application/wasm;base64," + fs.readFileSync(wasmPath).toString("base64");
 
 module.exports = {
   entry: "./src/index-wasm.ts",
@@ -38,8 +42,8 @@ module.exports = {
   },
   output: {
     path: path.resolve(__dirname, "dist"),
-    filename: "msutils.js",
-    library: "msutils",
+    filename: "quantion.js",
+    library: "quantion",
     libraryTarget: "umd",
     globalObject: "this",
   },

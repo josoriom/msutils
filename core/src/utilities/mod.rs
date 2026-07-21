@@ -1,8 +1,8 @@
 pub mod calculate_eic;
 pub mod ion_image;
 pub use calculate_eic::{
-    Eic, EicOptions, EicReader, FastError, ScanTime, calculate_eic, get_scan_times,
-    plan_eic_ranges, read_mz_window, sort_and_dedup_ranges,
+    EicOptions, EicReader, FastError, ScanTime, calculate_eic, get_scan_times, plan_eic_ranges,
+    read_mz_window, sort_and_dedup_ranges,
 };
 
 pub mod parallel;
@@ -49,6 +49,5 @@ pub use find_feature::find_feature;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 pub mod get_features;
 pub mod mz_estimator;
-pub mod tests;
-
-pub mod gpu;
+#[cfg(test)]
+mod tests;

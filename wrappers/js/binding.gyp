@@ -1,16 +1,13 @@
 {
   "targets": [
     {
-      "target_name": "msutils",
+      "target_name": "quantion",
       "sources": [
         "src/bridge.cc"
       ],
       "include_dirs": [
         "<!@(node -p \"require('node-addon-api').include\")",
         "src"
-      ],
-      "dependencies": [
-        "<!@(node -p \"require('node-addon-api').gyp\")"
       ],
       "defines": [ "NAPI_CPP_EXCEPTIONS" ],
       "cflags_cc!": [ "-fno-exceptions" ],

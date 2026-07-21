@@ -3,19 +3,23 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "msutils"
+name = "quantion"
 version = "0.1.0"
-description = "MSutils library"
+description = "Quantion library"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = ["numpy>=1.21"]
 
 [project.optional-dependencies]
 pandas = ["pandas>=1.3"]
+test = ["pytest>=7"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["msutils*"]
+include = ["quantion*"]
 
 [tool.setuptools.package-data]
-msutils = ["native/**/*"]
+quantion = ["native/**/*"]

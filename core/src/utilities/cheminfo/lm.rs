@@ -145,20 +145,26 @@ pub fn lm(
         let perturbations = step_out.perturbations;
         let jacobian_weight_residual_error = step_out.jacobian_weight_residual_error;
 
-        for k in 0..parameters.len() {
-            let new_val = parameters[k] - perturbations[k];
-            parameters[k] = new_val.max(min_values[k]).min(max_values[k]);
+        let mut trial_parameters = parameters.clone();
+        for k in 0..trial_parameters.len() {
+            let new_val = trial_parameters[k] - perturbations[k];
+            trial_parameters[k] = new_val.max(min_values[k]).min(max_values[k]);
         }
 
-        error = error_calculation(data, &parameters, parameterized_function, &weight_square);
+        let trial_error = error_calculation(
+            data,
+            &trial_parameters,
+            parameterized_function,
+            &weight_square,
+        );
 
-        if error.is_nan() {
-            break;
-        }
-
-        if error < optimal_error - error_tolerance {
-            optimal_error = error;
-            optimal_parameters = parameters.clone();
+        if trial_error.is_finite() && trial_error < previous_error {
+            parameters = trial_parameters;
+            error = trial_error;
+            if error < optimal_error {
+                optimal_error = error;
+                optimal_parameters = parameters.clone();
+            }
         }
 
         let denom: f64 = perturbations
@@ -168,7 +174,7 @@ pub fn lm(
             .sum();
 
         let improvement_metric = if denom.abs() > 1e-18 && denom.is_finite() {
-            (previous_error - error) / denom
+            (previous_error - trial_error) / denom
         } else {
             0.0
         };

@@ -1,7 +1,10 @@
-use msutils::utilities::{find_noise_level::find_noise_level, structs::DataXY};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
+
+use quantion::utilities::{find_noise_level::find_noise_level, structs::DataXY};
 
 mod helpers;
 use helpers::{Eic, approx_eq, load_chromatograms_from};

@@ -7,32 +7,31 @@ No target list is needed.
 }
 \usage{
 find_features(
-  file,
+  data,
   from = 0,
   to = 10,
-  ppm_tolerance = 10,
-  mz_tolerance = 0.005,
-  grid_start = 40,
-  grid_end = 1000,
-  grid_step_ppm = 0.005,
+  ppm_tolerance = .DEFAULTS$eic_ppm_tol,
+  mz_tolerance = .DEFAULTS$eic_mz_tol,
+  grid_start = .DEFAULTS$grid_start,
+  grid_end = .DEFAULTS$grid_end,
+  grid_step_ppm = .DEFAULTS$grid_step,
   cores = 1L,
-  use_gpu = FALSE,
-  batch_size = 0L,
   min_integral = NaN,
-  min_intensity = 1000,
-  min_peak_width_points = 5L,
+  min_intensity = .DEFAULTS$min_intensity,
+  min_peak_width_points = .DEFAULTS$min_peak_width_points,
   noise = NaN,
-  auto_noise = TRUE,
-  auto_baseline = TRUE,
+  auto_noise = .DEFAULTS$auto_noise,
+  auto_baseline = .DEFAULTS$auto_baseline,
   lambda = 0L,
   max_iterations = 0L,
   allow_overlap = FALSE,
-  min_snr = 1,
-  min_r2 = 0.3
+  min_snr = .DEFAULTS$min_snr,
+  min_r2 = .DEFAULTS$min_r2,
+  shape = .DEFAULTS$shape
 )
 }
 \arguments{
-  \item{file}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
+  \item{data}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
   \item{from}{Start retention time (minutes). Default 0.}
   \item{to}{End retention time (minutes). Default 10.}
   \item{ppm_tolerance}{PPM tolerance for EIC extraction.}
@@ -41,8 +40,6 @@ find_features(
   \item{grid_end}{Upper m/z bound of the search grid (Da). Default 1000.}
   \item{grid_step_ppm}{Grid step size (ppm). Default 0.005.}
   \item{cores}{Number of CPU cores to use. Default 1.}
-  \item{use_gpu}{Use GPU acceleration if available. Default \code{FALSE}.}
-  \item{batch_size}{GPU batch size. \code{0} selects automatically.}
   \item{min_integral}{Minimum peak area. \code{NaN} disables.}
   \item{min_intensity}{Minimum apex intensity. Default 1000.}
   \item{min_peak_width_points}{Minimum peak width in points. Default 5.}
@@ -53,6 +50,8 @@ find_features(
   \item{max_iterations}{Maximum airPLS iterations. \code{0} uses a default.}
   \item{allow_overlap}{Allow overlapping peak boundaries. Default \code{FALSE}.}
   \item{min_snr}{Minimum signal-to-noise ratio. Default 1.}
+  \item{shape}{Peak shape used when fitting.}
+
   \item{min_r2}{Minimum fit R-squared (Gaussian or EMG) for the artifact filter; \code{0} disables it (keep peaks regardless of shape). Default 0.3.}
 }
 \value{

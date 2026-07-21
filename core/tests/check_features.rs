@@ -1,12 +1,17 @@
 mod helpers;
 
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
+
 use helpers::{Eic, load_chromatograms_from, param_f64};
-use msutils::utilities::find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter};
-use msutils::utilities::get_peak::get_peak;
-use msutils::utilities::shape_filter::PeakShape;
-use msutils::utilities::structs::{DataXY, Roi};
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use quantion::utilities::{
+    find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter},
+    get_peak::get_peak,
+    shape_filter::PeakShape,
+    structs::{DataXY, Roi},
+};
 
 const RT_WINDOW: f64 = 0.3;
 const EXPECTED_FEATURES: usize = 80;
@@ -49,10 +54,8 @@ fn detects_peak(eic: &Eic) -> bool {
     };
     let rt = param_f64(eic, "rt");
     let span = eic.time[eic.time.len() - 1] - eic.time[0];
-    match get_peak(&data, &Roi::new(rt, span), Some(peak_options())) {
-        Some(peak) => (peak.rt - rt).abs() <= RT_WINDOW,
-        None => false,
-    }
+    let peak = get_peak(&data, &Roi::peak(rt, span), Some(peak_options()));
+    peak.intensity > 0.0 && (peak.rt - rt).abs() <= RT_WINDOW
 }
 
 struct Recovery {

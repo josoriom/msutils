@@ -1,41 +1,47 @@
-use crate::utilities::find_peaks::{FindPeaksOptions, find_peaks};
-use crate::utilities::structs::{DataXY, Peak, Roi};
+use crate::utilities::{
+    find_peaks::{FindPeaksOptions, find_peaks},
+    structs::{DataXY, Peak, Roi},
+};
 
 const LOCAL_WINDOW_MINUTES: f64 = 2.0;
 const DEFAULT_MAX_DRIFT: f64 = 0.5;
 
-pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> Option<Peak> {
-    let target = roi.rt;
+pub fn get_peak(data: &DataXY, roi: &Roi, options: Option<FindPeaksOptions>) -> Peak {
+    let Roi::Peak { rt, range } = roi else {
+        return Peak::default();
+    };
+    let (rt, range) = (*rt, *range);
 
     let local;
-    let section: &DataXY = if target.is_finite() {
-        local = crop_around(data, target, LOCAL_WINDOW_MINUTES);
+    let section: &DataXY = if rt.is_finite() {
+        local = crop_around(data, rt, LOCAL_WINDOW_MINUTES);
         &local
     } else {
         data
     };
 
     if section.x.is_empty() {
-        return None;
+        return Peak::default();
     }
 
     let peaks = find_peaks(section, options);
-    let max_drift = if roi.half_width.is_finite() && roi.half_width > 0.0 {
-        roi.half_width
+    let max_drift = if range.is_finite() && range > 0.0 {
+        range
     } else {
         DEFAULT_MAX_DRIFT
     };
 
-    pick_peak(&peaks, target, max_drift).copied()
+    pick_peak(&peaks, rt, max_drift)
 }
 
 fn position_weight(peak_rt: f64, target: f64, max_drift: f64) -> f64 {
     let drift = (peak_rt - target) / max_drift;
-    1.0 - drift * drift
+    1.0 - drift.abs()
 }
 
-fn pick_peak(peaks: &[Peak], target: f64, max_drift: f64) -> Option<&Peak> {
-    let mut best_peak: Option<&Peak> = None;
+fn pick_peak(peaks: &[Peak], target: f64, max_drift: f64) -> Peak {
+    let mut best_peak = Peak::default();
+    let mut found = false;
     let mut best_score = 0.0;
     for peak in peaks {
         if !peak.rt.is_finite() {
@@ -46,25 +52,23 @@ fn pick_peak(peaks: &[Peak], target: f64, max_drift: f64) -> Option<&Peak> {
             continue;
         }
         let score = peak.intensity * weight;
-        if best_peak.is_none() || score > best_score {
-            best_peak = Some(peak);
+        if !found || score > best_score {
+            best_peak = *peak;
             best_score = score;
+            found = true;
         }
     }
     best_peak
 }
 
-fn crop_around(data: &DataXY, center: f64, half_width: f64) -> DataXY {
+fn crop_around(data: &DataXY, center: f64, range: f64) -> DataXY {
     if data.x.is_empty() {
-        return DataXY {
-            x: Vec::new(),
-            y: Vec::new(),
-        };
+        return DataXY::empty();
     }
     let eic_min = data.x.iter().copied().fold(f64::INFINITY, f64::min);
     let eic_max = data.x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let from = (center - half_width).max(eic_min);
-    let to = (center + half_width).min(eic_max);
+    let from = (center - range).max(eic_min);
+    let to = (center + range).min(eic_max);
     let mut x = Vec::new();
     let mut y = Vec::new();
     for (rt, value) in data.x.iter().zip(data.y.iter()) {
@@ -78,10 +82,12 @@ fn crop_around(data: &DataXY, center: f64, half_width: f64) -> DataXY {
 
 #[cfg(test)]
 mod tests {
-    use crate::utilities::calculate_baseline::BaselineOptions;
-    use crate::utilities::find_peaks::{FindPeaksOptions, PeakFilter};
-    use crate::utilities::get_peak::get_peak;
-    use crate::utilities::structs::{DataXY, Roi};
+    use crate::utilities::{
+        calculate_baseline::BaselineOptions,
+        find_peaks::{FindPeaksOptions, PeakFilter},
+        get_peak::get_peak,
+        structs::{DataXY, Roi},
+    };
 
     fn bell(rt: f64, center: f64, width: f64, height: f64) -> f64 {
         height * (-0.5 * ((rt - center) / width).powi(2)).exp()
@@ -111,7 +117,12 @@ mod tests {
         }
     }
 
-    fn build_eic(from: f64, to: f64, points: usize, mut height_at: impl FnMut(f64) -> f64) -> DataXY {
+    fn build_eic(
+        from: f64,
+        to: f64,
+        points: usize,
+        mut height_at: impl FnMut(f64) -> f64,
+    ) -> DataXY {
         let mut x = Vec::with_capacity(points);
         let mut y = Vec::with_capacity(points);
         for index in 0..points {
@@ -133,11 +144,9 @@ mod tests {
             }
             height
         });
-        let roi = Roi {
-            rt: center,
-            half_width: 1.0,
-        };
-        let peak = get_peak(&eic, &roi, Some(default_options())).expect("strong peak should be found");
+        let roi = Roi::peak(center, 1.0);
+        let peak = get_peak(&eic, &roi, Some(default_options()));
+        assert!(peak.intensity > 0.0, "strong peak should be found");
         assert!((peak.rt - center).abs() < 0.05);
         assert!(peak.intensity > 100_000.0);
     }
@@ -146,12 +155,12 @@ mod tests {
     fn finds_isolated_peak_without_local_baseline_1() {
         let center = 28.6;
         let eic = build_eic(28.1, 29.1, 120, |rt| bell(rt, center, 0.05, 350_000.0));
-        let roi = Roi {
-            rt: center,
-            half_width: 1.0,
-        };
-        let peak = get_peak(&eic, &roi, Some(default_options()))
-            .expect("isolated peak on a flat baseline should be found");
+        let roi = Roi::peak(center, 1.0);
+        let peak = get_peak(&eic, &roi, Some(default_options()));
+        assert!(
+            peak.intensity > 0.0,
+            "isolated peak on a flat baseline should be found"
+        );
         assert!((peak.rt - center).abs() < 0.05);
         assert!(peak.intensity > 100_000.0);
     }

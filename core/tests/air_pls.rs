@@ -1,4 +1,4 @@
-use msutils::utilities::cheminfo::air_pls::{AirPlsOptions, air_pls};
+use quantion::utilities::cheminfo::air_pls::{AirPlsOptions, air_pls};
 
 #[test]
 fn small_vector_finds_flat_baseline() {

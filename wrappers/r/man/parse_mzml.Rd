@@ -5,13 +5,15 @@
 Reads raw mzML bytes and returns a file handle.
 }
 \usage{
-parse_mzml(data)
+parse_mzml(
+  data
+)
 }
 \arguments{
   \item{data}{Raw vector — bytes from one mzML file.}
 }
 \value{
-A file handle for use in other \code{msutils} functions.
+A file handle for use in other \code{quantion} functions.
 }
 \examples{
 \donttest{

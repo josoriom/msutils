@@ -5,7 +5,11 @@
 Fits an airPLS baseline to one numeric signal vector.
 }
 \usage{
-calculate_baseline(y, lambda = 0L, max_iterations = 0L)
+calculate_baseline(
+  y,
+  lambda = 0L,
+  max_iterations = 0L
+)
 }
 \arguments{
   \item{y}{Numeric signal vector.}

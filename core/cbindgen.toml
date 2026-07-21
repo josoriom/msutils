@@ -3,12 +3,16 @@ include_version = true
 pragma_once = true
 
 [export]
-item_types = ["constants", "enums", "structs", "unions", "typedefs", "opaque"]
+item_types = ["constants", "enums", "structs", "unions", "typedefs", "opaque", "functions"]
 include = [
   "CPeakOptions",
   "Buf",
-  "MSUTILS_ABI_VERSION",
+  "QUANTION_ABI_VERSION",
 ]
+
+[defines]
+"target_arch = wasm32" = "QUANTION_TARGET_WASM32"
+"target_os = wasi" = "QUANTION_TARGET_WASI"
 
 [parse]
 parse_deps = false

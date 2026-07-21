@@ -8,6 +8,7 @@ import type {
   IonInput,
   PeakOptions,
   BaselineOptions,
+  NoiseLevel,
   Peak,
   Target,
   ChromItem,
@@ -30,6 +31,7 @@ export type {
   IonInput,
   PeakOptions,
   BaselineOptions,
+  NoiseLevel,
   Peak,
   Target,
   ChromItem,
@@ -48,20 +50,22 @@ export type {
 };
 
 const DEFAULTS = {
-  eic: { mzTolerance: 0.005, ppmTolerance: 20.0 },
+  eic: { mzTolerance: 0.005, ppmTolerance: 10.0 },
   grid: { start: 40, end: 1000, stepSize: 0.005 },
   grouping: {
-    ppmTolerance: 10.0,
+    ppmTolerance: 5.0,
     mzTolerance: 0.0025,
     rtTolerance: 0.05,
     frequency: 1,
   },
   findPeak: {
-    minIntensity: 150,
-    minPeakWidthPoints: 5,
+    minIntensity: 500,
+    minPeakWidthPoints: 3,
     autoNoise: true,
     autoBaseline: true,
-    minSnr: 1,
+    minSnr: 2,
+    minR2: 0.0,
+    shape: "emg",
   },
 } as const;
 
@@ -146,7 +150,7 @@ function parseIonSource(
     return backend.parseIonPath(source.path, cacheSize);
   }
   if (source.kind === "url") {
-    return backend.parseIonUrl(source.url, cacheSize);
+    return backend.parseIonRemote(source.url, cacheSize);
   }
   return backend.parseIonBuffer(source.bytes, cacheSize);
 }
@@ -177,7 +181,7 @@ export function ionToMzml(file: SampleFile): string {
  * Encode a sample as compressed ion binary bytes.
  *
  * @param file - Loaded sample file.
- * @param options.level - Compression level, 0 (none) to 22 (max). Default 5.
+ * @param options.level - Compression level, 0 (none) to 22 (max). Default 12.
  * @param options.f32Compress - Compress intensity values to 32-bit float. Default false.
  * @returns Raw ion binary bytes.
  */
@@ -186,7 +190,7 @@ export function mzmlToIon(
   options: { level?: number; f32Compress?: boolean } = {},
 ): Uint8Array {
   assertFile(file, "mzmlToIon");
-  const { level = 5, f32Compress = false } = options;
+  const { level = 12, f32Compress = false } = options;
   if (
     typeof level !== "number" ||
     !Number.isFinite(level) ||
@@ -298,10 +302,11 @@ export function getPeak(
  * Estimate the noise level of an intensity array.
  *
  * @param y - Intensity array.
- * @returns Estimated noise level.
+ * @returns The window width the estimate came from and the noise intensity.
  */
-export function findNoiseLevel(y: Float64Array | Float32Array): number {
-  return backend().findNoiseLevel(y);
+export function findNoiseLevel(y: Float64Array | Float32Array): NoiseLevel {
+  const y32 = y instanceof Float32Array ? y : new Float32Array(y);
+  return backend().findNoiseLevel(y32);
 }
 
 /**
@@ -504,7 +509,12 @@ export function getPeaksFromChrom(
       : Number.isFinite(item.index)
         ? (item.index as number)
         : -1;
-    indices[i] = idx >= 0 ? idx >>> 0 : 0xffffffff;
+    if (idx < 0 || !Number.isInteger(idx)) {
+      throw new RangeError(
+        `getPeaksFromChrom: item ${i} needs a non-negative integer idx`,
+      );
+    }
+    indices[i] = idx >>> 0;
     rts[i] = +item.rt;
     windows[i] = +(item.window ?? item.range ?? 0);
   }
@@ -521,6 +531,7 @@ export function getPeaksFromChrom(
 
 /**
  * Detect all chromatographic features across an m/z grid.
+ * Node.js only — not available in the WASM build.
  *
  * @param file - Loaded sample file.
  * @param fromTo - Retention time range `{ from, to }` in minutes.
@@ -532,14 +543,16 @@ export function findFeatures(
   fromTo: FromTo,
   options: FindFeaturesOptions = {},
 ): Feature[] {
+  const back = backend();
+  if (!back.findFeatures) {
+    throw new Error("findFeatures is not supported in the WASM build");
+  }
   assertFile(file, "findFeatures");
   const {
     eic = DEFAULTS.eic,
     grid = DEFAULTS.grid,
     findPeak = DEFAULTS.findPeak,
     cores = 1,
-    useGpu = false,
-    batchSize = 0,
   } = options;
   const { from, to } = fromTo;
   const eicPpm =
@@ -566,7 +579,7 @@ export function findFeatures(
     grid.stepSize > 0
       ? grid.stepSize
       : NaN;
-  return backend().findFeatures(
+  return back.findFeatures!(
     file._handle!,
     from,
     to,
@@ -577,8 +590,6 @@ export function findFeatures(
     gridStep,
     findPeak,
     toCores(cores),
-    useGpu ? 1 : 0,
-    batchSize | 0,
   );
 }
 
@@ -636,7 +647,7 @@ export function findFeature(
     +scanMz,
     +eicPpm,
     +eicMz,
-    options.findPeak,
+    options.findPeak ?? DEFAULTS.findPeak,
   );
 }
 
@@ -667,8 +678,6 @@ export function getFeatures(
     grouping = DEFAULTS.grouping,
     findPeak = DEFAULTS.findPeak,
     cores = 1,
-    useGpu = false,
-    batchSize = 0,
   } = options;
   const { from, to } = fromTo;
   const eicPpm = Number.isFinite(eic.ppmTolerance)
@@ -701,7 +710,5 @@ export function getFeatures(
     +prevalence,
     findPeak,
     toCores(cores),
-    useGpu ? 1 : 0,
-    batchSize | 0,
   );
 }

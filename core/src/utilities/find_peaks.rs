@@ -1,15 +1,17 @@
 use std::cmp::Ordering;
 
-use crate::utilities::calculate_baseline::{BaselineOptions, calculate_baseline};
-use crate::utilities::cheminfo::sgg::{SggOptions, sgg};
-use crate::utilities::closest_index;
-use crate::utilities::find_noise_level::{find_noise_level, find_noise_level_san_plot};
-use crate::utilities::fit_peak::PeakShape;
-use crate::utilities::get_boundaries::{Boundaries, BoundariesOptions, get_boundaries};
-use crate::utilities::math::xy_integration;
-use crate::utilities::scan_for_peaks::scan_for_peaks;
-use crate::utilities::shape_filter::{Candidate, ShapeFilter};
-use crate::utilities::structs::{DataXY, Peak};
+use crate::utilities::{
+    calculate_baseline::{BaselineOptions, calculate_baseline},
+    cheminfo::sgg::{SggOptions, sgg},
+    closest_index,
+    find_noise_level::{find_noise_level, find_noise_level_san_plot},
+    fit_peak::PeakShape,
+    get_boundaries::{Boundaries, BoundariesOptions, get_boundaries},
+    math::xy_integration,
+    scan_for_peaks::scan_for_peaks,
+    shape_filter::{Candidate, ShapeFilter},
+    structs::{DataXY, Peak},
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ArtifactFilter {
@@ -51,13 +53,13 @@ impl Default for PeakFilter {
     fn default() -> Self {
         Self {
             min_integral: None,
-            min_peak_width_points: Some(5),
-            min_intensity: None,
+            min_peak_width_points: Some(3),
+            min_intensity: Some(500.0),
             noise: None,
-            auto_noise: Some(false),
-            auto_baseline: Some(false),
+            auto_noise: Some(true),
+            auto_baseline: Some(true),
             allow_overlap: Some(false),
-            min_snr: Some(1.0),
+            min_snr: Some(2.0),
             noise_method: None,
             kernel_size: None,
         }
@@ -132,8 +134,8 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
         return Vec::new();
     }
 
-    let auto_baseline = filter.auto_baseline.unwrap_or(false);
-    let auto_noise = filter.auto_noise.unwrap_or(false);
+    let auto_baseline = filter.auto_baseline.unwrap_or(true);
+    let auto_noise = filter.auto_noise.unwrap_or(true);
     let allow_overlap = filter.allow_overlap.unwrap_or(false);
 
     let baseline: Vec<f64> = if auto_baseline {
@@ -555,7 +557,12 @@ fn height_at(values: &[f64], index: usize) -> f64 {
     values.get(index).copied().unwrap_or(0.0)
 }
 
-fn peaks_are_separate(prominence: f64, smaller_height: f64, taller_height: f64, noise: f64) -> bool {
+fn peaks_are_separate(
+    prominence: f64,
+    smaller_height: f64,
+    taller_height: f64,
+    noise: f64,
+) -> bool {
     if smaller_height <= 0.0 {
         return false;
     }
@@ -576,7 +583,11 @@ fn merge_peaks(data: &DataXY, keeper: Peak, other: Peak) -> Peak {
     let to = keeper.to.max(other.to);
     let left = closest_index(&data.x, from);
     let right = closest_index(&data.x, to);
-    let (lo, hi) = if left <= right { (left, right) } else { (right, left) };
+    let (lo, hi) = if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    };
     let (integral, _) = xy_integration(&data.x[lo..=hi], &data.y[lo..=hi]);
     Peak {
         from,
@@ -620,7 +631,11 @@ fn valley_index(values: &[f64], first: usize, second: usize) -> usize {
 fn reframe(data: &DataXY, peak: Peak, from: f64, to: f64) -> Peak {
     let left = closest_index(&data.x, from);
     let right = closest_index(&data.x, to);
-    let (lo, hi) = if left <= right { (left, right) } else { (right, left) };
+    let (lo, hi) = if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    };
     let (integral, _) = xy_integration(&data.x[lo..=hi], &data.y[lo..=hi]);
     Peak {
         from,

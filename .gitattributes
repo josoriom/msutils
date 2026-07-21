@@ -1,0 +1,9 @@
+* text=auto eol=lf
+
+*.ion binary
+*.wasm binary
+*.dylib binary
+*.so binary
+*.dll binary
+*.node binary
+*.png binary

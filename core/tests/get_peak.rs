@@ -1,7 +1,9 @@
-use msutils::utilities::find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter};
-use msutils::utilities::get_peak::get_peak;
-use msutils::utilities::shape_filter::PeakShape;
-use msutils::utilities::structs::{DataXY, Roi};
+use quantion::utilities::{
+    find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter},
+    get_peak::get_peak,
+    shape_filter::PeakShape,
+    structs::{DataXY, Roi},
+};
 
 const STEP_MINUTES: f64 = 0.006;
 
@@ -48,14 +50,13 @@ fn build_eic(from: f64, to: f64, signal: impl Fn(usize, f64) -> f64) -> DataXY {
 }
 
 fn find_at(eic: &DataXY, target: f64) -> f64 {
-    let peak = get_peak(eic, &Roi::new(target, 0.5), Some(options()))
-        .unwrap_or_else(|| panic!("expected a peak near rt {target}"));
+    let peak = get_peak(eic, &Roi::peak(target, 0.5), Some(options()));
+    assert!(peak.intensity > 0.0, "expected a peak near rt {target}");
     assert!(
         (peak.rt - target).abs() < 0.1,
         "found rt {} but expected near {target}",
         peak.rt
     );
-    assert!(peak.intensity > 0.0, "peak intensity must be positive");
     peak.rt
 }
 
@@ -106,8 +107,8 @@ fn picks_peak_closest_to_target_over_taller_neighbor() {
         let target = gaussian(time, 28.63, 300_000.0, 0.03);
         taller_neighbor + target + ripple(index, 20_000.0)
     });
-    let peak = get_peak(&eic, &Roi::new(28.63, 0.2), Some(options()))
-        .expect("expected a peak near rt 28.63");
+    let peak = get_peak(&eic, &Roi::peak(28.63, 0.2), Some(options()));
+    assert!(peak.intensity > 0.0, "expected a peak near rt 28.63");
     assert!(
         (peak.rt - 28.4).abs() > 0.1,
         "selected the taller neighbor at 28.4 instead of the target at 28.63",

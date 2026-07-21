@@ -1,14 +1,14 @@
+use ionic::ScanSource;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::{ThreadPoolBuilder, prelude::*};
+
 use crate::utilities::{
     calculate_eic::{EicOptions, ScanQuery, get_eic_for_mz, get_scans, lower_bound, upper_bound},
     find_features::max_intensity_centroid,
     find_peaks::FindPeaksOptions,
     get_peak::get_peak,
-    structs::{DataXY, EicRoi, FromTo, Peak, Roi},
+    structs::{DataXY, FromTo, Peak, Roi},
 };
-
-use ionic::ScanSource;
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use rayon::{ThreadPoolBuilder, prelude::*};
 
 #[derive(Clone, Debug, Default)]
 pub struct TargetedFeature {
@@ -45,7 +45,7 @@ impl Default for FindFeatureOptions {
 
 pub fn find_feature(
     source: &mut impl ScanSource,
-    rois: &[&EicRoi],
+    rois: &[&Roi],
     cores: usize,
     options: Option<FindFeatureOptions>,
 ) -> Vec<Option<TargetedFeature>> {
@@ -69,9 +69,13 @@ pub fn find_feature(
     let mut rt_min = f64::MAX;
     let mut rt_max = f64::MIN;
     for roi in rois {
-        if roi.rt.is_finite() && roi.half_width.is_finite() && roi.half_width > 0.0 {
-            rt_min = rt_min.min(roi.rt - roi.half_width);
-            rt_max = rt_max.max(roi.rt + roi.half_width);
+        let Roi::Eic { rt, range, .. } = *roi else {
+            continue;
+        };
+        let (rt, range) = (*rt, *range);
+        if rt.is_finite() && range.is_finite() && range > 0.0 {
+            rt_min = rt_min.min(rt - range);
+            rt_max = rt_max.max(rt + range);
         }
     }
 
@@ -93,13 +97,17 @@ pub fn find_feature(
         return vec![None; rois.len()];
     }
 
-    let process = |roi: &&EicRoi| -> Option<TargetedFeature> {
-        if !roi.rt.is_finite() || !roi.mz.is_finite() || roi.half_width <= 0.0 {
+    let process = |roi: &&Roi| -> Option<TargetedFeature> {
+        let Roi::Eic { id, rt, mz, range } = *roi else {
+            return None;
+        };
+        let (rt, mz, range) = (*rt, *mz, *range);
+        if !rt.is_finite() || !mz.is_finite() || range <= 0.0 {
             return None;
         }
 
-        let local_from = roi.rt - roi.half_width;
-        let local_to = roi.rt + roi.half_width;
+        let local_from = rt - range;
+        let local_to = rt + range;
         let start = lower_bound(&rts, local_from);
         let end = upper_bound(&rts, local_to).min(rts.len());
         if end <= start {
@@ -109,24 +117,20 @@ pub fn find_feature(
         let local_rts = &rts[start..end];
         let local_scans = &scans[start..end];
 
-        let refined_mz = max_intensity_centroid(local_scans, local_rts, roi.rt, roi.mz, scan_opts)?;
+        let refined_mz = max_intensity_centroid(local_scans, local_rts, rt, mz, scan_opts)?;
         let y = get_eic_for_mz(local_scans, local_rts.len(), refined_mz, eic_opts);
         let data = DataXY {
             x: local_rts.to_vec(),
             y,
         };
 
-        let picked = get_peak(
-            &data,
-            &Roi {
-                rt: roi.rt,
-                half_width: roi.half_width,
-            },
-            Some(fp_opts.clone()),
-        )?;
+        let picked = get_peak(&data, &Roi::peak(rt, range), Some(fp_opts.clone()));
+        if picked.intensity <= 0.0 {
+            return None;
+        }
 
         Some(TargetedFeature {
-            id: roi.id.clone(),
+            id: id.clone(),
             mz: refined_mz,
             rt: picked.rt,
             peak: picked,

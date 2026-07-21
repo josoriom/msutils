@@ -11,9 +11,9 @@ mod tests {
 
     fn f06961_centroids() -> Vec<f64> {
         vec![
-            119.02877, 119.02881, 119.02881, 119.02875, 119.02879, 119.02873, 119.02870,
-            119.02885, 119.02894, 119.02895, 119.03149, 119.03152, 119.03153, 119.03150, 119.03153,
-            119.03152, 119.03148, 119.03160, 119.03167, 119.03166, 119.02556, 119.02554,
+            119.02877, 119.02881, 119.02881, 119.02875, 119.02879, 119.02873, 119.02870, 119.02885,
+            119.02894, 119.02895, 119.03149, 119.03152, 119.03153, 119.03150, 119.03153, 119.03152,
+            119.03148, 119.03160, 119.03167, 119.03166, 119.02556, 119.02554,
         ]
     }
 
@@ -40,8 +40,16 @@ mod tests {
 
         let mut medians: Vec<f64> = masses.iter().map(|g| group_median(g)).collect();
         medians.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        assert!((medians[0] - 119.0288).abs() < 0.0005, "low mass {}", medians[0]);
-        assert!((medians[1] - 119.0315).abs() < 0.0005, "high mass {}", medians[1]);
+        assert!(
+            (medians[0] - 119.0288).abs() < 0.0005,
+            "low mass {}",
+            medians[0]
+        );
+        assert!(
+            (medians[1] - 119.0315).abs() < 0.0005,
+            "high mass {}",
+            medians[1]
+        );
 
         let merged = groups
             .iter()
@@ -232,7 +240,9 @@ mod tests {
 
     #[test]
     fn test_apex_combine_single() {
-        let result = MedianMzApex.combine(&[sample(100.002, 90.0)], &tol()).unwrap();
+        let result = MedianMzApex
+            .combine(&[sample(100.002, 90.0)], &tol())
+            .unwrap();
         assert!(close(result, 100.002));
     }
 

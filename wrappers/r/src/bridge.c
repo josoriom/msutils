@@ -4,8 +4,10 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include <stdlib.h>
 #include <math.h>
-#include "include/msutils.h"
+#include <limits.h>
+#include "include/quantion.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -20,13 +22,13 @@ static const char *last_err = "LoadLibrary/GetProcAddress failed";
 #define DLOPEN(p) dlopen(p, RTLD_NOW | RTLD_GLOBAL)
 #define DLSYM(h, s) dlsym(h, s)
 #define DLCLOSE(h) dlclose(h)
-static const char *last_err = NULL;
+static const char *last_err = "dlopen or dlsym failed";
 #endif
 
 typedef struct MzML MzML;
 
-typedef uint32_t (*fn_msutils_abi_version)(void);
-typedef size_t (*fn_msutils_sizeof_peak_options)(void);
+typedef uint32_t (*fn_quantion_abi_version)(void);
+typedef size_t (*fn_quantion_sizeof_peak_options)(void);
 typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
 typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *);
 typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *);
@@ -34,26 +36,30 @@ typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, d
 typedef int32_t (*fn_fit_peak)(const double *, const double *, size_t, double, double, int32_t, Buf *);
 typedef int32_t (*fn_draw_peak)(const double *, size_t, int32_t, double, double, double, double, Buf *);
 typedef int32_t (*fn_calculate_eic)(const MzML *, double, double, double, double, double, Buf *, Buf *);
-typedef float (*fn_find_noise_level)(const float *, size_t);
+typedef int32_t (*fn_find_noise_level)(const float *, size_t, size_t *, double *);
 typedef int32_t (*fn_get_peaks_from_eic)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, double, double, const CPeakOptions *, size_t, Buf *);
 typedef int32_t (*fn_get_peaks_from_chrom)(const MzML *, const uint32_t *, const double *, const double *, size_t, const CPeakOptions *, size_t, Buf *);
 typedef int32_t (*fn_find_peaks)(const double *, const double *, size_t, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_calculate_baseline)(const double *, size_t, int32_t, int32_t, Buf *);
-typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
+typedef int32_t (*fn_find_features)(const MzML *, double, double, double, double, double, double, double, const CPeakOptions *, int32_t, Buf *);
 typedef int32_t (*fn_find_feature)(const MzML *, const double *, const double *, const double *, const uint32_t *, const uint32_t *, const unsigned char *, size_t, size_t, size_t, double, double, double, double, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_mzml_to_bin)(const MzML *, Buf *, uint8_t, uint8_t);
 typedef int32_t (*fn_convert_mzml_file_to_ion_file)(const char *, const char *, uint8_t, uint8_t, uint8_t);
 typedef int32_t (*fn_parse_bin)(const unsigned char *, size_t, size_t, MzML **);
-typedef int32_t (*fn_parse_ion_url)(const char *, size_t, MzML **);
-typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, int32_t, int32_t, Buf *);
+typedef int32_t (*fn_read_range)(void *, uint64_t, uint64_t, uint8_t *);
+typedef int32_t (*fn_parse_ion_source)(fn_read_range, void *, size_t, MzML **);
+typedef int32_t (*fn_plan_open)(const uint8_t *, size_t, Buf *);
+typedef int32_t (*fn_plan_eic)(MzML *, double, double, double, double, double, Buf *);
+typedef int32_t (*fn_parse_ion_path)(const char *, size_t, MzML **);
+typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, Buf *);
 typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
 typedef void (*fn_free_)(unsigned char *, size_t);
 typedef void (*fn_free_mzml)(MzML *);
 
 typedef struct
 {
-  fn_msutils_abi_version msutils_abi_version;
-  fn_msutils_sizeof_peak_options msutils_sizeof_peak_options;
+  fn_quantion_abi_version quantion_abi_version;
+  fn_quantion_sizeof_peak_options quantion_sizeof_peak_options;
   fn_parse_mzml parse_mzml;
   fn_bin_to_json bin_to_json;
   fn_bin_to_mzml bin_to_mzml;
@@ -72,7 +78,10 @@ typedef struct
   fn_mzml_to_bin mzml_to_bin;
   fn_convert_mzml_file_to_ion_file convert_mzml_file_to_ion_file;
   fn_parse_bin parse_bin;
-  fn_parse_ion_url parse_ion_url;
+  fn_parse_ion_source parse_ion_source;
+  fn_plan_open plan_open;
+  fn_plan_eic plan_eic;
+  fn_parse_ion_path parse_ion_path;
   fn_free_mzml free_mzml;
   fn_get_features get_features;
   fn_get_scans get_scans;
@@ -83,8 +92,18 @@ abi_type ABI = (abi_type){0};
 
 static int resolve_required(void **fn, const char *name)
 {
+#if !defined(_WIN32)
+  dlerror();
+#endif
   *fn = DLSYM(abi_handle, name);
-  return *fn ? 0 : -1;
+  if (!*fn)
+  {
+#if !defined(_WIN32)
+    last_err = dlerror();
+#endif
+    return -1;
+  }
+  return 0;
 }
 
 int abi_load(const char *path, const char **err)
@@ -106,20 +125,18 @@ int abi_load(const char *path, const char **err)
       *err = last_err;
     return -1;
   }
-  if (resolve_required((void **)&ABI.msutils_abi_version, "msutils_abi_version"))
+  if (resolve_required((void **)&ABI.quantion_abi_version, "quantion_abi_version"))
     goto fail;
-  if (ABI.msutils_abi_version() != MSUTILS_ABI_VERSION)
+  if (ABI.quantion_abi_version() != QUANTION_ABI_VERSION)
   {
-    if (err)
-      *err = "ABI version mismatch: recompile the R wrapper";
+    last_err = "ABI version mismatch: recompile the R wrapper";
     goto fail;
   }
-  if (resolve_required((void **)&ABI.msutils_sizeof_peak_options, "msutils_sizeof_peak_options"))
+  if (resolve_required((void **)&ABI.quantion_sizeof_peak_options, "quantion_sizeof_peak_options"))
     goto fail;
-  if (ABI.msutils_sizeof_peak_options() != sizeof(CPeakOptions))
+  if (ABI.quantion_sizeof_peak_options() != sizeof(CPeakOptions))
   {
-    if (err)
-      *err = "PeakOptions size mismatch: native binary and R wrapper are out of sync — reinstall msutils";
+    last_err = "PeakOptions size mismatch: native binary and R wrapper are out of sync — reinstall quantion";
     goto fail;
   }
   if (resolve_required((void **)&ABI.parse_mzml, "parse_mzml"))
@@ -154,9 +171,12 @@ int abi_load(const char *path, const char **err)
     goto fail;
   if (resolve_required((void **)&ABI.convert_mzml_file_to_ion_file, "convert_mzml_file_to_ion_file"))
     goto fail;
+  ABI.parse_ion_source = (fn_parse_ion_source)DLSYM(abi_handle, "parse_ion_source");
+  ABI.plan_open = (fn_plan_open)DLSYM(abi_handle, "plan_open");
+  ABI.plan_eic = (fn_plan_eic)DLSYM(abi_handle, "plan_eic");
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
     goto fail;
-  if (resolve_required((void **)&ABI.parse_ion_url, "parse_ion_url"))
+  if (resolve_required((void **)&ABI.parse_ion_path, "parse_ion_path"))
     goto fail;
   if (resolve_required((void **)&ABI.free_mzml, "free_mzml"))
     goto fail;
@@ -205,12 +225,41 @@ static void die_code(const char *fname, int code)
     msg = "encode error";
   else if (code == 6)
     msg = "fast EIC path unavailable: this .ion file has no usable spectrum bounds (A3); re-encode it with the current Ionic to use the fast EIC path";
-  error("msutils/%s failed: %s (code=%d)", fname, msg, code);
+  error("quantion/%s failed: %s (code=%d)", fname, msg, code);
+}
+
+struct mk_string_data
+{
+  const unsigned char *ptr;
+  size_t len;
+};
+
+static SEXP mk_string_build(void *data)
+{
+  struct mk_string_data *d = (struct mk_string_data *)data;
+  return Rf_ScalarString(Rf_mkCharLenCE((const char *)d->ptr, (int)d->len, CE_UTF8));
+}
+
+static void mk_string_free(void *data, Rboolean jump)
+{
+  (void)jump;
+  struct mk_string_data *d = (struct mk_string_data *)data;
+  if (d->ptr && ABI.free_)
+    ABI.free_((unsigned char *)d->ptr, d->len);
+  d->ptr = NULL;
 }
 
 static SEXP mk_string_len(const unsigned char *ptr, size_t len)
 {
-  SEXP s = PROTECT(Rf_ScalarString(Rf_mkCharLenCE((const char *)ptr, (int)len, CE_UTF8)));
+  if (len > (size_t)INT_MAX)
+  {
+    if (ABI.free_)
+      ABI.free_((unsigned char *)ptr, len);
+    error("quantion: result too large for an R string (%zu bytes)", len);
+  }
+  struct mk_string_data d = {ptr, len};
+  SEXP cont = PROTECT(R_MakeUnwindCont());
+  SEXP s = R_UnwindProtect(mk_string_build, &d, mk_string_free, &d, cont);
   UNPROTECT(1);
   return s;
 }
@@ -219,7 +268,7 @@ static SEXP mk_string_len(const unsigned char *ptr, size_t len)
   do                                                                        \
   {                                                                         \
     if ((ptr) == NULL)                                                      \
-      error("msutils: symbol %s is not bound; did .onLoad() run?", (name)); \
+      error("quantion: symbol %s is not bound; did .onLoad() run?", (name)); \
   } while (0)
 
 static SEXP list_get(SEXP lst, const char *name)
@@ -314,7 +363,7 @@ static int as_opts_ptr(SEXP options, CPeakOptions *copy, const CPeakOptions **ou
   if (TYPEOF(options) == RAWSXP)
   {
     if ((size_t)XLENGTH(options) != sizeof(CPeakOptions))
-      error("msutils: options raw blob must be length %zu", sizeof(CPeakOptions));
+      error("quantion: options raw blob must be length %zu", sizeof(CPeakOptions));
     memcpy((void *)copy, (const void *)RAW(options), sizeof(CPeakOptions));
     *out_ptr = copy;
     return 1;
@@ -333,10 +382,10 @@ static int as_opts_ptr(SEXP options, CPeakOptions *copy, const CPeakOptions **ou
 static MzML *GetHandle(SEXP ptr)
 {
   if (TYPEOF(ptr) != EXTPTRSXP)
-    error("msutils: expected ExternalPtr");
+    error("quantion: expected ExternalPtr");
   MzML *h = (MzML *)R_ExternalPtrAddr(ptr);
   if (!h)
-    error("msutils: use of disposed or null pointer");
+    error("quantion: use of disposed or null pointer");
   return h;
 }
 
@@ -349,6 +398,92 @@ SEXP C_bind_rust(SEXP path_)
   if (abi_load(path, &err) != 0)
     error("dlopen failed: %s", err ? err : "unknown");
   return R_NilValue;
+}
+
+SEXP C_unbind_rust(SEXP unused)
+{
+  abi_unload();
+  return R_NilValue;
+}
+
+typedef struct
+{
+  uint64_t offset;
+  uint64_t length;
+  uint8_t *bytes;
+} held_range;
+
+typedef struct
+{
+  held_range *ranges;
+  size_t count;
+  size_t room;
+} range_store;
+
+static range_store *store_new(void)
+{
+  range_store *store = (range_store *)calloc(1, sizeof(range_store));
+  return store;
+}
+
+static void store_free(range_store *store)
+{
+  if (store == NULL)
+    return;
+  for (size_t index = 0; index < store->count; index++)
+    free(store->ranges[index].bytes);
+  free(store->ranges);
+  free(store);
+}
+
+static int store_add(range_store *store, uint64_t offset, const uint8_t *bytes, uint64_t length)
+{
+  if (store->count == store->room)
+  {
+    size_t room = store->room == 0 ? 8 : store->room * 2;
+    held_range *grown = (held_range *)realloc(store->ranges, room * sizeof(held_range));
+    if (grown == NULL)
+      return -1;
+    store->ranges = grown;
+    store->room = room;
+  }
+  uint8_t *copy = (uint8_t *)malloc(length > 0 ? (size_t)length : 1);
+  if (copy == NULL)
+    return -1;
+  memcpy(copy, bytes, (size_t)length);
+  store->ranges[store->count].offset = offset;
+  store->ranges[store->count].length = length;
+  store->ranges[store->count].bytes = copy;
+  store->count++;
+  return 0;
+}
+
+static int32_t store_serve(void *context, uint64_t offset, uint64_t length, uint8_t *dest)
+{
+  range_store *store = (range_store *)context;
+  if (store == NULL)
+    return -1;
+  for (size_t index = 0; index < store->count; index++)
+  {
+    held_range *range = &store->ranges[index];
+    if (offset < range->offset)
+      continue;
+    uint64_t inside = offset - range->offset;
+    if (inside > range->length || length > range->length - inside)
+      continue;
+    memcpy(dest, range->bytes + inside, (size_t)length);
+    return 0;
+  }
+  return -1;
+}
+
+static void finalize_store(SEXP ptr)
+{
+  if (R_ExternalPtrAddr(ptr))
+  {
+    store_free((range_store *)R_ExternalPtrAddr(ptr));
+    R_ClearExternalPtr(ptr);
+  }
 }
 
 static void finalize_mzml(SEXP ptr)
@@ -393,7 +528,6 @@ SEXP C_ion_to_json(SEXP bin)
   int code = ABI.bin_to_json(handle, &out);
   die_code("bin_to_json", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -406,7 +540,6 @@ SEXP C_ion_to_mzml(SEXP bin)
   int code = ABI.bin_to_mzml(handle, &out);
   die_code("bin_to_mzml", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -479,7 +612,6 @@ SEXP C_get_peak(SEXP x, SEXP y, SEXP rt, SEXP range, SEXP options)
   int code = ABI.get_peak(REAL(x), REAL(y), (size_t)n, asReal(rt), asReal(range), opt_ptr, &out);
   die_code("get_peak", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -497,7 +629,6 @@ SEXP C_fit_peak(SEXP x, SEXP y, SEXP rt, SEXP intensity, SEXP shape)
                           asReal(rt), asReal(intensity), (int32_t)asInteger(shape), &out);
   die_code("fit_peak", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -514,7 +645,7 @@ SEXP C_draw_peak(SEXP x, SEXP shape, SEXP height, SEXP center, SEXP fwhm, SEXP t
   die_code("draw_peak", code);
   size_t ny = out.len / 8;
   SEXP Ry = PROTECT(Rf_allocVector(REALSXP, (R_xlen_t)ny));
-  memcpy(REAL(Ry), out.ptr, out.len);
+  memcpy(REAL(Ry), out.ptr, ny * sizeof(double));
   ABI.free_(out.ptr, out.len);
   UNPROTECT(1);
   return Ry;
@@ -527,10 +658,10 @@ SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, S
   REQUIRE_BOUND(ABI.free_, "free_");
 
   if (TYPEOF(rts) != REALSXP || TYPEOF(mzs) != REALSXP || TYPEOF(ranges) != REALSXP)
-    error("msutils: bad numeric arguments");
+    error("quantion: bad numeric arguments");
   R_xlen_t n = XLENGTH(rts);
   if (XLENGTH(mzs) != n || XLENGTH(ranges) != n)
-    error("msutils: length mismatch");
+    error("quantion: length mismatch");
   uint32_t *offs = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
   uint32_t *lens = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
   unsigned char *ids_buf = NULL;
@@ -538,7 +669,9 @@ SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, S
   if (ids != R_NilValue)
   {
     if (TYPEOF(ids) != STRSXP)
-      error("msutils: ids must be character");
+      error("quantion: ids must be character");
+    if (XLENGTH(ids) != n)
+      error("quantion: ids must have the same length as rt");
     size_t total = 0;
     for (R_xlen_t i = 0; i < n; i++)
     {
@@ -569,6 +702,8 @@ SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, S
   }
 
   size_t ncores = (cores == R_NilValue) ? 1 : (size_t)asInteger(cores);
+  if (ncores < 1)
+    ncores = 1;
   CPeakOptions opts;
   const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
@@ -581,7 +716,6 @@ SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, S
 
   die_code("get_peaks_from_eic", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -590,11 +724,11 @@ SEXP C_get_peaks_from_chrom(SEXP bin, SEXP idxs, SEXP rts, SEXP ranges, SEXP opt
   MzML *handle = GetHandle(bin);
 
   if (TYPEOF(rts) != REALSXP || TYPEOF(ranges) != REALSXP)
-    error("msutils: numeric (double) required for rts/ranges");
+    error("quantion: numeric (double) required for rts/ranges");
 
   R_xlen_t n = XLENGTH(rts);
   if (XLENGTH(ranges) != n || XLENGTH(idxs) != n)
-    error("msutils: length mismatch for chrom parameters");
+    error("quantion: length mismatch for chrom parameters");
 
   REQUIRE_BOUND(ABI.get_peaks_from_chrom, "get_peaks_from_chrom");
   REQUIRE_BOUND(ABI.free_, "free_");
@@ -620,7 +754,7 @@ SEXP C_get_peaks_from_chrom(SEXP bin, SEXP idxs, SEXP rts, SEXP ranges, SEXP opt
   }
   else
   {
-    error("msutils: idx must be integer or numeric");
+    error("quantion: idx must be integer or numeric");
   }
 
   size_t ncores = (cores == R_NilValue) ? 1 : (size_t)asInteger(cores);
@@ -638,7 +772,6 @@ SEXP C_get_peaks_from_chrom(SEXP bin, SEXP idxs, SEXP rts, SEXP ranges, SEXP opt
 
   die_code("get_peaks_from_chrom", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -659,8 +792,8 @@ SEXP C_calculate_eic(SEXP bin, SEXP targets, SEXP from, SEXP to, SEXP ppm_tol, S
   size_t nx = bx.len / 8, ny = by.len / 8;
   SEXP Rx = PROTECT(Rf_allocVector(REALSXP, (R_xlen_t)nx));
   SEXP Ry = PROTECT(Rf_allocVector(REALSXP, (R_xlen_t)ny));
-  memcpy(REAL(Rx), bx.ptr, bx.len);
-  memcpy(REAL(Ry), by.ptr, by.len);
+  memcpy(REAL(Rx), bx.ptr, nx * sizeof(double));
+  memcpy(REAL(Ry), by.ptr, ny * sizeof(double));
   ABI.free_(bx.ptr, bx.len);
   ABI.free_(by.ptr, by.len);
   SEXP out = PROTECT(Rf_allocVector(VECSXP, 2));
@@ -690,7 +823,6 @@ SEXP C_find_peaks(SEXP x, SEXP y, SEXP options)
   int code = ABI.find_peaks(REAL(x), REAL(y), (size_t)n, opt_ptr, &out);
   die_code("find_peaks", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -708,13 +840,36 @@ SEXP C_calculate_baseline(SEXP y, SEXP lambda, SEXP max_iterations)
   die_code("calculate_baseline", code);
   size_t m = out.len / 8;
   SEXP Ry = PROTECT(Rf_allocVector(REALSXP, (R_xlen_t)m));
-  memcpy(REAL(Ry), out.ptr, out.len);
+  memcpy(REAL(Ry), out.ptr, m * sizeof(double));
   ABI.free_(out.ptr, out.len);
   UNPROTECT(1);
   return Ry;
 }
 
-SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol, SEXP grid_start, SEXP grid_end, SEXP grid_step_ppm, SEXP options, SEXP cores, SEXP use_gpu, SEXP batch_size)
+SEXP C_find_noise_level(SEXP y)
+{
+  REQUIRE_BOUND(ABI.find_noise_level, "find_noise_level");
+  R_xlen_t n = XLENGTH(y);
+  const double *yd = REAL(y);
+  float *yf = (float *)R_alloc((size_t)n, sizeof(float));
+  for (R_xlen_t i = 0; i < n; i++)
+    yf[i] = (float)yd[i];
+  size_t width = 0;
+  double intensity = 0.0;
+  int code = ABI.find_noise_level(yf, (size_t)n, &width, &intensity);
+  die_code("find_noise_level", code);
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 2));
+  SET_VECTOR_ELT(out, 0, Rf_ScalarInteger((int)width));
+  SET_VECTOR_ELT(out, 1, Rf_ScalarReal(intensity));
+  SEXP nms = PROTECT(Rf_allocVector(STRSXP, 2));
+  SET_STRING_ELT(nms, 0, Rf_mkChar("width"));
+  SET_STRING_ELT(nms, 1, Rf_mkChar("intensity"));
+  Rf_setAttrib(out, R_NamesSymbol, nms);
+  UNPROTECT(2);
+  return out;
+}
+
+SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, SEXP eic_mz_tol, SEXP grid_start, SEXP grid_end, SEXP grid_step_ppm, SEXP options, SEXP cores)
 {
   MzML *handle = GetHandle(data);
   REQUIRE_BOUND(ABI.find_features, "find_features");
@@ -723,9 +878,6 @@ SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, 
   int ncores = asInteger(cores);
   if (ncores < 1)
     ncores = 1;
-
-  int32_t gpu = (use_gpu == R_NilValue) ? 0 : (asLogical(use_gpu) == TRUE ? 1 : 0);
-  int32_t bsz = (batch_size == R_NilValue) ? 0 : asInteger(batch_size);
 
   CPeakOptions opts;
   const CPeakOptions *opt_ptr = NULL;
@@ -738,11 +890,10 @@ SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, 
       asReal(eic_ppm_tol), asReal(eic_mz_tol),
       asReal(grid_start), asReal(grid_end),
       asReal(grid_step_ppm),
-      opt_ptr, (int32_t)ncores, gpu, bsz, &out);
+      opt_ptr, (int32_t)ncores, &out);
 
   die_code("find_features", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -753,11 +904,11 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
   REQUIRE_BOUND(ABI.free_, "free_");
 
   if (TYPEOF(rts) != REALSXP || TYPEOF(mzs) != REALSXP || TYPEOF(wins) != REALSXP)
-    error("msutils: numeric (double) required for rts/mzs/wins");
+    error("quantion: numeric (double) required for rts/mzs/wins");
 
   R_xlen_t n = XLENGTH(rts);
   if (XLENGTH(mzs) != n || XLENGTH(wins) != n)
-    error("msutils: length mismatch for rts/mzs/wins");
+    error("quantion: length mismatch for rts/mzs/wins");
 
   uint32_t *offs = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
   uint32_t *lens = (uint32_t *)R_alloc((size_t)n, sizeof(uint32_t));
@@ -767,7 +918,9 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
   if (ids != R_NilValue)
   {
     if (TYPEOF(ids) != STRSXP)
-      error("msutils: ids must be character");
+      error("quantion: ids must be character");
+    if (XLENGTH(ids) != n)
+      error("quantion: ids must have the same length as rt");
     size_t total = 0;
     for (R_xlen_t i = 0; i < n; i++)
     {
@@ -798,6 +951,8 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
   }
 
   size_t ncores = (cores == R_NilValue) ? 1 : (size_t)asInteger(cores);
+  if (ncores < 1)
+    ncores = 1;
   CPeakOptions opts;
   const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
@@ -812,14 +967,103 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
 
   die_code("find_feature", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
+}
+
+static SEXP ranges_to_matrix(Buf *out)
+{
+  size_t count = out->len / 16;
+  SEXP result = PROTECT(allocMatrix(REALSXP, (int)count, 2));
+  double *values = REAL(result);
+  for (size_t index = 0; index < count; index++)
+  {
+    uint64_t offset = 0;
+    uint64_t length = 0;
+    memcpy(&offset, out->ptr + index * 16, 8);
+    memcpy(&length, out->ptr + index * 16 + 8, 8);
+    values[index] = (double)offset;
+    values[count + index] = (double)length;
+  }
+  if (ABI.free_ && out->ptr)
+    ABI.free_(out->ptr, out->len);
+  UNPROTECT(1);
+  return result;
+}
+
+SEXP C_plan_open(SEXP header)
+{
+  if (TYPEOF(header) != RAWSXP)
+    error("quantion: header must be a raw vector");
+  REQUIRE_BOUND(ABI.plan_open, "plan_open");
+
+  Buf out;
+  memset(&out, 0, sizeof(out));
+  int code = ABI.plan_open((const uint8_t *)RAW(header), (size_t)XLENGTH(header), &out);
+  die_code("plan_open", code);
+  return ranges_to_matrix(&out);
+}
+
+SEXP C_plan_eic(SEXP ptr, SEXP target, SEXP from, SEXP to, SEXP ppm, SEXP mz_tol)
+{
+  REQUIRE_BOUND(ABI.plan_eic, "plan_eic");
+  MzML *handle = (MzML *)R_ExternalPtrAddr(ptr);
+  if (handle == NULL)
+    error("quantion: the file handle is not valid");
+
+  Buf out;
+  memset(&out, 0, sizeof(out));
+  int code = ABI.plan_eic(handle, asReal(target), asReal(from), asReal(to),
+                          asReal(ppm), asReal(mz_tol), &out);
+  die_code("plan_eic", code);
+  return ranges_to_matrix(&out);
+}
+
+SEXP C_store_new(void)
+{
+  range_store *store = store_new();
+  if (store == NULL)
+    error("quantion: cannot make a range store");
+  SEXP ptr = PROTECT(R_MakeExternalPtr(store, R_NilValue, R_NilValue));
+  R_RegisterCFinalizerEx(ptr, finalize_store, TRUE);
+  UNPROTECT(1);
+  return ptr;
+}
+
+SEXP C_store_add(SEXP store_ptr, SEXP offset, SEXP bytes)
+{
+  range_store *store = (range_store *)R_ExternalPtrAddr(store_ptr);
+  if (store == NULL)
+    error("quantion: the range store is not valid");
+  if (TYPEOF(bytes) != RAWSXP)
+    error("quantion: bytes must be a raw vector");
+  if (store_add(store, (uint64_t)asReal(offset), (const uint8_t *)RAW(bytes),
+                (uint64_t)XLENGTH(bytes)) != 0)
+    error("quantion: cannot hold that range");
+  return R_NilValue;
+}
+
+SEXP C_parse_ion_source(SEXP store_ptr, SEXP max_cache_size)
+{
+  REQUIRE_BOUND(ABI.parse_ion_source, "parse_ion_source");
+  range_store *store = (range_store *)R_ExternalPtrAddr(store_ptr);
+  if (store == NULL)
+    error("quantion: the range store is not valid");
+
+  size_t cache = (max_cache_size == R_NilValue) ? 0 : (size_t)asReal(max_cache_size);
+  MzML *handle = NULL;
+  int code = ABI.parse_ion_source(store_serve, store, cache, &handle);
+  die_code("parse_ion_source", code);
+
+  SEXP ptr = PROTECT(R_MakeExternalPtr(handle, store_ptr, R_NilValue));
+  R_RegisterCFinalizerEx(ptr, finalize_mzml, TRUE);
+  UNPROTECT(1);
+  return ptr;
 }
 
 SEXP C_parse_ion(SEXP bin, SEXP max_cache_size)
 {
   if (TYPEOF(bin) != RAWSXP)
-    error("msutils: data must be a raw vector");
+    error("quantion: data must be a raw vector");
   REQUIRE_BOUND(ABI.parse_bin, "parse_bin");
 
   size_t cache = (max_cache_size == R_NilValue) ? 0 : (size_t)asReal(max_cache_size);
@@ -838,43 +1082,19 @@ SEXP C_parse_ion(SEXP bin, SEXP max_cache_size)
   return ptr;
 }
 
-SEXP C_parse_ion_url(SEXP url, SEXP max_cache_size)
-{
-  if (TYPEOF(url) != STRSXP || LENGTH(url) != 1)
-    error("msutils: url must be a single string");
-
-  const char *value = CHAR(STRING_ELT(url, 0));
-  size_t cache = (max_cache_size == R_NilValue) ? 0 : (size_t)asReal(max_cache_size);
-
-  REQUIRE_BOUND(ABI.parse_ion_url, "parse_ion_url");
-
-  MzML *handle = NULL;
-  int code = ABI.parse_ion_url(value, cache, &handle);
-  die_code("parse_ion_url", code);
-
-  SEXP ptr = PROTECT(R_MakeExternalPtr(handle, R_NilValue, R_NilValue));
-  R_RegisterCFinalizerEx(ptr, finalize_mzml, TRUE);
-  UNPROTECT(1);
-  return ptr;
-}
 
 SEXP C_parse_ion_path(SEXP path, SEXP max_cache_size)
 {
   if (TYPEOF(path) != STRSXP || LENGTH(path) != 1)
-    error("msutils: path must be a single string");
-  if (!abi_handle)
-    error("msutils: native library not loaded");
-
-  typedef int32_t (*fn_pip)(const char *, size_t, MzML **);
-  fn_pip parse_ion_path_fn = (fn_pip)DLSYM(abi_handle, "parse_ion_path");
-  if (!parse_ion_path_fn)
-    error("msutils: native symbol 'parse_ion_path' not found in loaded library");
+    error("quantion: path must be a single string");
 
   const char *value = CHAR(STRING_ELT(path, 0));
   size_t cache = (max_cache_size == R_NilValue) ? 0 : (size_t)asReal(max_cache_size);
 
+  REQUIRE_BOUND(ABI.parse_ion_path, "parse_ion_path");
+
   MzML *handle = NULL;
-  int code = parse_ion_path_fn(value, cache, &handle);
+  int code = ABI.parse_ion_path(value, cache, &handle);
   die_code("parse_ion_path", code);
 
   SEXP ptr = PROTECT(R_MakeExternalPtr(handle, R_NilValue, R_NilValue));
@@ -892,7 +1112,6 @@ SEXP C_get_scans(SEXP bin, SEXP query_type, SEXP a, SEXP b, SEXP level)
   int code = ABI.get_scans(handle, (uint8_t)asInteger(query_type), asReal(a), asReal(b), (uint8_t)asInteger(level), &out);
   die_code("get_scans", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }
 
@@ -900,8 +1119,7 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
                     SEXP eic_ppm_tol, SEXP eic_mz_tol,
                     SEXP grid_start, SEXP grid_end, SEXP grid_step,
                     SEXP group_ppm_tol, SEXP group_mz_tol, SEXP group_rt_tol,
-                    SEXP frequency, SEXP options, SEXP cores,
-                    SEXP use_gpu, SEXP batch_size)
+                    SEXP frequency, SEXP options, SEXP cores)
 {
   if (TYPEOF(dir_path) != STRSXP || LENGTH(dir_path) != 1)
     error("dir_path must be a length-1 character string");
@@ -913,9 +1131,6 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
   int ncores = asInteger(cores);
   if (ncores < 1)
     ncores = 1;
-
-  int32_t gpu = (use_gpu == R_NilValue) ? 0 : (asLogical(use_gpu) == TRUE ? 1 : 0);
-  int32_t bsz = (batch_size == R_NilValue) ? 0 : asInteger(batch_size);
 
   CPeakOptions opts;
   const CPeakOptions *opt_ptr = NULL;
@@ -929,11 +1144,10 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
       asReal(grid_start), asReal(grid_end), asReal(grid_step),
       asReal(group_ppm_tol), asReal(group_mz_tol), asReal(group_rt_tol),
       asInteger(frequency),
-      opt_ptr, (int32_t)ncores, gpu, bsz,
+      opt_ptr, (int32_t)ncores,
       &out);
 
   die_code("get_features", code);
   SEXP res = mk_string_len(out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
   return res;
 }

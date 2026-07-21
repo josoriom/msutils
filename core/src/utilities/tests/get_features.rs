@@ -1,9 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::sync::Arc;
+    use std::{fs, sync::Arc};
 
-    use ionic::{ion::encode, mzml::structs::*};
+    use ionic::{WriteOptions, mzml::structs::*, write_mzml_to_ion};
 
     use crate::utilities::{
         calculate_eic::{CentroidScan, EicOptions, SpectrumKind, SpectrumSummary},
@@ -901,12 +900,21 @@ mod tests {
 
     fn to_ion_bytes(mzml: &MzML) -> Vec<u8> {
         let mut bytes = Vec::new();
-        encode(mzml, 0, false, &mut bytes).expect("ion encode should succeed");
+        write_mzml_to_ion(
+            mzml,
+            WriteOptions {
+                compression_level: 0,
+                force_f32: false,
+                ..Default::default()
+            },
+            &mut bytes,
+        )
+        .expect("ion encode should succeed");
         bytes
     }
 
     fn write_ion_dir(tag: &str, samples: &[Vec<u8>]) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("msutils_test_{tag}"));
+        let dir = std::env::temp_dir().join(format!("quantion_test_{tag}"));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("create temp dir");
         for (i, bytes) in samples.iter().enumerate() {
@@ -1013,8 +1021,16 @@ mod tests {
             (5.1, vec![100.002], vec![0.0]),
         ];
         let bounds = bounds_at(100.0, 5.0, 4.85, 5.15);
-        let resolved =
-            resolve_cluster(&scans, None, &bounds, 99.99, 100.01, 20.0, None, SpectrumKind::Centroid);
+        let resolved = resolve_cluster(
+            &scans,
+            None,
+            &bounds,
+            99.99,
+            100.01,
+            20.0,
+            None,
+            SpectrumKind::Centroid,
+        );
         assert!(resolved.feature.is_none());
         assert!(resolved.apex.is_none());
     }
@@ -1029,8 +1045,16 @@ mod tests {
             })
             .collect();
         let bounds = bounds_at(peak_mz, 5.0, 4.7, 5.3);
-        let resolved =
-            resolve_cluster(&scans, None, &bounds, 299.99, 300.01, 20.0, None, SpectrumKind::Centroid);
+        let resolved = resolve_cluster(
+            &scans,
+            None,
+            &bounds,
+            299.99,
+            300.01,
+            20.0,
+            None,
+            SpectrumKind::Centroid,
+        );
 
         let feature = resolved
             .feature
@@ -1626,7 +1650,16 @@ mod tests {
         let mz_b = 200.0310;
         let peak_rt = 5.0;
         let samples: Vec<Vec<u8>> = (0..6)
-            .map(|_| to_ion_bytes(&build_mzml_masses(&[mz_a, mz_b], peak_rt, 10_000.0, 4.0, 6.0, 60)))
+            .map(|_| {
+                to_ion_bytes(&build_mzml_masses(
+                    &[mz_a, mz_b],
+                    peak_rt,
+                    10_000.0,
+                    4.0,
+                    6.0,
+                    60,
+                ))
+            })
             .collect();
         let dir = write_ion_dir("within_cutoff", &samples);
         let features = get_features(
@@ -1644,7 +1677,8 @@ mod tests {
             .filter(|f| f.mz > 200.028 && f.mz < 200.033 && (f.rt - peak_rt).abs() < 0.2)
             .count();
         assert_eq!(
-            near, 1,
+            near,
+            1,
             "masses closer than the cutoff must stay one feature, got {:?}",
             features.iter().map(|f| f.mz).collect::<Vec<_>>()
         );
@@ -1755,7 +1789,11 @@ mod tests {
 
         let reported: Vec<f64> = features.iter().map(|f| f.mz).collect();
         for &mz in &mzs {
-            assert_eq!(count_near(&features, mz, peak_rt), 1, "mass {mz} once, got {reported:?}");
+            assert_eq!(
+                count_near(&features, mz, peak_rt),
+                1,
+                "mass {mz} once, got {reported:?}"
+            );
         }
     }
 
@@ -1765,7 +1803,16 @@ mod tests {
         let mz_b = 200.0330;
         let peak_rt = 5.0;
         let samples: Vec<Vec<u8>> = (0..6)
-            .map(|_| to_ion_bytes(&build_mzml_masses(&[mz_a, mz_b], peak_rt, 10_000.0, 4.0, 6.0, 60)))
+            .map(|_| {
+                to_ion_bytes(&build_mzml_masses(
+                    &[mz_a, mz_b],
+                    peak_rt,
+                    10_000.0,
+                    4.0,
+                    6.0,
+                    60,
+                ))
+            })
             .collect();
         let dir = write_ion_dir("wide_tolerance", &samples);
         let mut cfg = alignment_cfg();
@@ -1785,7 +1832,8 @@ mod tests {
             .filter(|f| f.mz > 200.028 && f.mz < 200.035 && (f.rt - peak_rt).abs() < 0.2)
             .count();
         assert_eq!(
-            near, 1,
+            near,
+            1,
             "a wider ppm tolerance must keep the masses merged, got {:?}",
             features.iter().map(|f| f.mz).collect::<Vec<_>>()
         );

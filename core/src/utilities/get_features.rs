@@ -2,25 +2,16 @@ use std::{
     cmp::Ordering,
     fmt::{Display, Formatter},
     io::Error,
-    sync::Arc,
 };
-
-use serde::Serialize;
-
-use crate::utilities::structs::ser_finite_f64;
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::gpu::GpuContext;
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::parallel::run_with_cores;
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use rayon::prelude::*;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use ionic::ion::{IonReader, ReadOptions};
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::prelude::*;
+use serde::Serialize;
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use crate::utilities::parallel::run_with_cores;
 use crate::utilities::{
     calculate_eic::{
         CentroidScan, EicOptions, EicReader, MS1_LEVEL, SpectrumKind, get_scan_times,
@@ -33,16 +24,12 @@ use crate::utilities::{
     get_peak::get_peak,
     math::median,
     mz_estimator::{MzEstimator, MzEstimatorKind, SampleMz, make_estimator, same_mass_gap},
-    structs::{DataXY, FromTo, Peak, Roi},
+    structs::{DataXY, FromTo, Peak, Roi, ser_finite_f64},
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 const ION_CACHE_BYTES: usize = 128 * 1024 * 1024;
 
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use ionic::{mzml::structs::MzML, parse_mzml};
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use memmap2::Mmap;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use std::{
     fs,
@@ -50,6 +37,11 @@ use std::{
     path::{Path, PathBuf},
     time::Instant,
 };
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use ionic::{mzml::structs::MzML, parse_mzml};
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use memmap2::Mmap;
 
 #[derive(Debug)]
 pub enum AlignmentError {
@@ -120,6 +112,7 @@ pub struct AlignmentOptions {
     pub mz_tolerance: MzTolerance,
     pub rt_tolerance: f64,
     pub min_samples: usize,
+    pub min_real_support: usize,
     pub eic_options: EicOptions,
     pub peak_options: Option<FindPeaksOptions>,
     pub mz_estimator: MzEstimatorKind,
@@ -130,11 +123,12 @@ impl Default for AlignmentOptions {
     fn default() -> Self {
         Self {
             mz_tolerance: MzTolerance {
-                mz_absolute: 0.005,
-                ppm: 20.0,
+                mz_absolute: 0.0025,
+                ppm: 5.0,
             },
             rt_tolerance: 0.05,
             min_samples: 1,
+            min_real_support: 1,
             eic_options: EicOptions {
                 ppm_tolerance: 20.0,
                 mz_tolerance: 0.005,
@@ -326,11 +320,6 @@ pub fn get_features(
 ) -> Result<Vec<ConsensusFeature>, AlignmentError> {
     let datasets = load_sample_files(directory_path)?;
 
-    let mut feature_config = feature_config;
-    if feature_config.use_gpu && feature_config.gpu_context.is_none() {
-        feature_config.gpu_context = GpuContext::try_init().map(Arc::new);
-    }
-
     let mut datasets = detect_features_per_sample(datasets, time_window, &feature_config, cores)?;
 
     let clusterer = FeatureClusterer {
@@ -340,7 +329,12 @@ pub fn get_features(
 
     let tagged = collect_tagged(&mut datasets);
     let clusters = run_with_cores(cores, || clusterer.cluster(tagged));
-    let mut slots = prepare_slots(clusters, datasets.len(), alignment_config.rt_tolerance);
+    let mut slots = prepare_slots(
+        clusters,
+        datasets.len(),
+        alignment_config.rt_tolerance,
+        alignment_config.min_real_support,
+    );
 
     let estimator = make_estimator(&alignment_config.mz_estimator);
 
@@ -389,11 +383,20 @@ fn collect_tagged(datasets: &mut [SampleDataset]) -> Vec<TaggedFeature> {
         .collect()
 }
 
-fn prepare_slots(clusters: Vec<Cluster>, n_samples: usize, rt_tol: f64) -> Vec<ClusterSlot> {
+fn prepare_slots(
+    clusters: Vec<Cluster>,
+    n_samples: usize,
+    rt_tol: f64,
+    min_real_support: usize,
+) -> Vec<ClusterSlot> {
     clusters
         .into_iter()
         .filter_map(|cluster| {
             let features = assign_best_per_sample(cluster, n_samples);
+            let real_support = features.iter().filter(|feature| feature.is_some()).count();
+            if real_support < min_real_support {
+                return None;
+            }
             let bounds = compute_search_bounds(&features, rt_tol)?;
             Some(ClusterSlot {
                 apex_values: vec![None; features.len()],
@@ -527,7 +530,8 @@ fn build_tiles(slots: &[ClusterSlot], eic_options: EicOptions) -> Vec<Vec<usize>
         let mut tile = vec![jobs[job_idx]];
         job_idx += 1;
         while job_idx < jobs.len()
-            && (slots[jobs[job_idx]].bounds.target_mz - tile_center_mz).abs() <= tile_tolerance * 2.0
+            && (slots[jobs[job_idx]].bounds.target_mz - tile_center_mz).abs()
+                <= tile_tolerance * 2.0
         {
             tile.push(jobs[job_idx]);
             job_idx += 1;
@@ -701,10 +705,11 @@ pub(crate) fn resolve_cluster(
 
     let window = crop_scans(tile_scans, from, to);
     let mass_points = find_apex_masses(window, mz_lo, mz_hi, kind);
-    let apex = mass_points
-        .iter()
-        .copied()
-        .max_by(|a, b| a.intensity.partial_cmp(&b.intensity).unwrap_or(Ordering::Equal));
+    let apex = mass_points.iter().copied().max_by(|a, b| {
+        a.intensity
+            .partial_cmp(&b.intensity)
+            .unwrap_or(Ordering::Equal)
+    });
     let peak_feature = existing.or(filled.as_ref());
 
     let masses: Vec<MassPeak> = if mass_points.len() <= 1 {
@@ -764,18 +769,15 @@ fn measure_mass(
         intensities.push(summed_intensity_in_window(mz, intensity, mz_lo, mz_hi));
     }
     anchor_edges(&mut intensities);
-    get_peak(
+    let peak = get_peak(
         &DataXY {
             x: times,
             y: intensities,
         },
-        &Roi {
-            rt: bounds.center_rt,
-            half_width: bounds.rt_to - bounds.rt_from,
-        },
+        &Roi::peak(bounds.center_rt, bounds.rt_to - bounds.rt_from),
         peak_options,
-    )
-    .filter(|p| p.intensity > 0.0)
+    );
+    (peak.intensity > 0.0).then_some(peak)
 }
 
 fn find_apex_masses(
@@ -812,19 +814,15 @@ fn detect_peak(
 
     anchor_edges(&mut intensities);
 
-    get_peak(
+    let p = get_peak(
         &DataXY {
             x: times,
             y: intensities,
         },
-        &Roi {
-            rt: bounds.center_rt,
-            half_width: bounds.rt_to - bounds.rt_from,
-        },
+        &Roi::peak(bounds.center_rt, bounds.rt_to - bounds.rt_from),
         peak_options,
-    )
-    .filter(|p| p.intensity > 0.0)
-    .map(|p| Feature {
+    );
+    (p.intensity > 0.0).then_some(Feature {
         mz: bounds.target_mz,
         rt: p.rt,
         intensity: p.intensity,
@@ -989,7 +987,10 @@ fn merge_lone_masses(
         return vec![groups.into_iter().flatten().collect()];
     }
     let mut kept_apart: Vec<Vec<(usize, MassPeak)>> = Vec::new();
-    for lone in groups.into_iter().filter(|group| distinct_samples(group) <= 1) {
+    for lone in groups
+        .into_iter()
+        .filter(|group| distinct_samples(group) <= 1)
+    {
         for item in lone {
             let detection = detection_mz.get(item.0).copied().flatten();
             match detection.and_then(|mz| nearest_group_within(&supported, mz, cutoff)) {
@@ -1111,8 +1112,9 @@ pub(crate) fn dedup(
     }
 
     let mut by_mz = results;
-    let by_mz_cmp =
-        |a: &ConsensusFeature, b: &ConsensusFeature| a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal);
+    let by_mz_cmp = |a: &ConsensusFeature, b: &ConsensusFeature| {
+        a.mz.partial_cmp(&b.mz).unwrap_or(Ordering::Equal)
+    };
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     by_mz.par_sort_unstable_by(by_mz_cmp);
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]

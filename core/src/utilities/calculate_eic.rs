@@ -1,11 +1,13 @@
 use std::{cmp::Ordering, sync::Arc};
 
-use ionic::ion::{ByteRange, IonError, IonReader, Range};
-use ionic::mzml::structs::{CvParam, MzML};
-use ionic::{ScanSource, ScanSummary};
+use ionic::{
+    ScanSource, ScanSummary,
+    ion::{ByteRange, IonError, IonReader, Range},
+    mzml::structs::{CvParam, MzML},
+};
 use serde::Serialize;
 
-use crate::utilities::structs::{FromTo, Peak, ser_finite_f64};
+use crate::utilities::structs::{DataXY, FromTo, Peak, ser_finite_f64};
 
 pub(crate) const MS1_LEVEL: u8 = 1;
 
@@ -57,20 +59,6 @@ impl TimeUnit {
     }
 }
 
-pub struct Eic {
-    pub x: Vec<f64>,
-    pub y: Vec<f64>,
-}
-
-impl Eic {
-    fn empty() -> Self {
-        Self {
-            x: Vec::new(),
-            y: Vec::new(),
-        }
-    }
-}
-
 pub enum EicReader<'a> {
     Ion(&'a mut IonReader),
     Mzml(&'a mut MzML),
@@ -111,7 +99,9 @@ fn kind_from_params(params: &[CvParam]) -> SpectrumKind {
 
 fn first_spectrum_params(mzml: &MzML) -> Option<&[CvParam]> {
     let list = mzml.run.spectrum_list.as_ref()?;
-    list.spectra.first().map(|spectrum| spectrum.cv_params.as_slice())
+    list.spectra
+        .first()
+        .map(|spectrum| spectrum.cv_params.as_slice())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -274,7 +264,13 @@ pub fn read_mz_window(
     match reader {
         EicReader::Ion(ion) => {
             let window = ion
-                .read_window(scan_index, Range { from: mz_from, to: mz_to })
+                .read_window(
+                    scan_index,
+                    Range {
+                        from: mz_from,
+                        to: mz_to,
+                    },
+                )
                 .map_err(FastError::from)?;
             *mz_out = window.x.to_f64();
             *intensity_out = window.y.to_f64();
@@ -326,7 +322,13 @@ pub fn plan_window_ranges(
     let mut ranges = Vec::new();
     for scan_index in scan_indices {
         let scan_ranges = ion
-            .byte_ranges(scan_index, Range { from: mz_from, to: mz_to })
+            .byte_ranges(
+                scan_index,
+                Range {
+                    from: mz_from,
+                    to: mz_to,
+                },
+            )
             .map_err(FastError::from)?;
         ranges.extend(scan_ranges);
     }
@@ -371,7 +373,7 @@ pub fn calculate_eic(
     target_mz: f64,
     time_range: FromTo,
     options: EicOptions,
-) -> Result<Eic, FastError> {
+) -> Result<DataXY, FastError> {
     if !target_mz.is_finite() || target_mz <= 0.0 {
         return Err(FastError::InvalidRequest);
     }
@@ -394,7 +396,7 @@ pub fn calculate_eic(
     let scan_times = get_scan_times(reader, rt_min, rt_max, MS1_LEVEL);
 
     if scan_times.is_empty() {
-        return Ok(Eic::empty());
+        return Ok(DataXY::empty());
     }
 
     let mut x = Vec::new();
@@ -417,7 +419,7 @@ pub fn calculate_eic(
         y.push(intensity_sum);
     }
 
-    Ok(Eic { x, y })
+    Ok(DataXY { x, y })
 }
 
 pub fn get_eic_for_mz(
@@ -682,8 +684,9 @@ fn max_in_range(retention_times: &[f64], intensities: &[f64], from_rt: f64, to_r
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use ionic::ScanSummary;
+
+    use super::*;
 
     struct MockSource {
         scans: Vec<(ScanSummary, Vec<f64>, Vec<f64>)>,

@@ -1,8 +1,9 @@
-use std::borrow::Cow;
-use std::f64;
+use std::{borrow::Cow, f64};
 
-use crate::utilities::cheminfo::kmeans;
-use crate::utilities::cheminfo::noise_san_plot::{NoiseSanPlotOptions, noise_san_plot};
+use crate::utilities::cheminfo::{
+    kmeans,
+    noise_san_plot::{NoiseSanPlotOptions, noise_san_plot},
+};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Noise {

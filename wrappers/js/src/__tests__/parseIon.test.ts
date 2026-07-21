@@ -75,14 +75,27 @@ describe('parseIon URL support', () => {
     expect(typeof parseIon).toBe('function');
   });
 
-  it('rejects URL string (must use new URL)', async () => {
+  it('accepts an http URL string', async () => {
     const { parseIon } = await import('../utilities/api');
 
     try {
       await parseIon('http://localhost/file.ion');
       throw new Error('Should reject');
     } catch (error) {
-      expect((error as Error).message).toContain('URL strings are not accepted');
+      expect((error as Error).message).not.toContain('http and https');
+      expect((error as Error).message).toContain('Backend not initialized');
+    }
+  });
+
+  it('accepts an https URL string', async () => {
+    const { parseIon } = await import('../utilities/api');
+
+    try {
+      await parseIon('https://example.com/file.ion');
+      throw new Error('Should reject');
+    } catch (error) {
+      expect((error as Error).message).not.toContain('http and https');
+      expect((error as Error).message).toContain('Backend not initialized');
     }
   });
 
@@ -93,7 +106,10 @@ describe('parseIon URL support', () => {
       await parseIon('file:///tmp/test.ion');
       throw new Error('Should reject');
     } catch (error) {
-      expect((error as Error).message).toContain('URL strings are not accepted');
+      expect(error).toBeInstanceOf(TypeError);
+      expect((error as Error).message).toContain(
+        'only http and https URLs can be read remotely',
+      );
     }
   });
 
@@ -173,12 +189,12 @@ describe('parseIon URL support', () => {
     await drain(result);
   });
 
-  it('file URL input returns Promise', async () => {
+  it('file URL input rejects with the scheme error', async () => {
     const { parseIon } = await import('../utilities/api');
     const file_url = new URL(`file://${test_ion_path}`);
-    const result = parseIon(file_url);
-    expect(result).toBeInstanceOf(Promise);
-    await drain(result);
+    await expect(parseIon(file_url)).rejects.toThrow(
+      'only http and https URLs can be read remotely',
+    );
   });
 
   it('http URL input returns Promise', async () => {
@@ -232,35 +248,35 @@ describe('parseIon URL support', () => {
     await drain(uint8_result);
   });
 
-  it('file URL and path string both return Promise', async () => {
+  it('path string returns Promise while a file URL rejects', async () => {
     const { parseIon } = await import('../utilities/api');
-    const file_url_result = parseIon(new URL(`file://${test_ion_path}`));
     const path_result = parseIon(test_ion_path);
-    expect(file_url_result).toBeInstanceOf(Promise);
     expect(path_result).toBeInstanceOf(Promise);
-    await drain(file_url_result);
     await drain(path_result);
+    await expect(parseIon(new URL(`file://${test_ion_path}`))).rejects.toThrow(
+      'only http and https URLs can be read remotely',
+    );
   });
 
-  it('all input types return Promise', async () => {
+  it('every accepted input type returns Promise', async () => {
     const { parseIon } = await import('../utilities/api');
     const buffer = parseIon(test_ion_buffer);
     const uint8 = parseIon(new Uint8Array(test_ion_buffer));
     const file_path = parseIon(test_ion_path);
-    const file_url = parseIon(new URL(`file://${test_ion_path}`));
     const http_url = parseIon(new URL(`${test_server_url}/test.ion`));
+    const http_string = parseIon(`${test_server_url}/test.ion`);
 
     expect(buffer).toBeInstanceOf(Promise);
     expect(uint8).toBeInstanceOf(Promise);
     expect(file_path).toBeInstanceOf(Promise);
-    expect(file_url).toBeInstanceOf(Promise);
     expect(http_url).toBeInstanceOf(Promise);
+    expect(http_string).toBeInstanceOf(Promise);
 
     await drain(buffer);
     await drain(uint8);
     await drain(file_path);
-    await drain(file_url);
     await drain(http_url);
+    await drain(http_string);
   });
 
   it('rejects on HTTP 404', async () => {
@@ -276,7 +292,7 @@ describe('parseIon URL support', () => {
     }
   });
 
-  it('rejects on missing file URL', async () => {
+  it('rejects a file URL before it reaches the network', async () => {
     const { parseIon } = await import('../utilities/api');
     const file_url = new URL('file:///tmp/does-not-exist-9999.ion');
 
@@ -284,8 +300,10 @@ describe('parseIon URL support', () => {
       await parseIon(file_url);
       throw new Error('Should fail');
     } catch (error) {
-      const msg = (error as Error).message;
-      expect(msg).toMatch(/parse|file|error|not found|Backend/i);
+      expect(error).toBeInstanceOf(TypeError);
+      expect((error as Error).message).toContain(
+        'only http and https URLs can be read remotely',
+      );
     }
   });
 });
