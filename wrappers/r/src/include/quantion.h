@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define QUANTION_ABI_VERSION 2
+#define QUANTION_ABI_VERSION 1
 
 typedef struct ImageSession ImageSession;
 

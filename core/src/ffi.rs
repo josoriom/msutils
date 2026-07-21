@@ -114,7 +114,7 @@ struct FoundFeatureOut<'a> {
     noise: f64,
 }
 
-pub const QUANTION_ABI_VERSION: u32 = 2;
+pub const QUANTION_ABI_VERSION: u32 = 1;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn quantion_abi_version() -> u32 {

@@ -48,7 +48,7 @@ assert ctypes.sizeof(PeakOptions) == 80, (
     f"PeakOptions is {ctypes.sizeof(PeakOptions)} bytes — expected 80"
 )
 
-QUANTION_ABI_VERSION = 2
+QUANTION_ABI_VERSION = 1
 
 _CODE_MSG = {
     1: "invalid arguments",

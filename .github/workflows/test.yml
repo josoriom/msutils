@@ -47,7 +47,7 @@ jobs:
       - name: Build the JS addon
         working-directory: wrappers/js
         run: |
-          npm ci --ignore-scripts
+          npm install --ignore-scripts
           npx node-gyp rebuild
           npx tsc --project tsconfig.cjs.json
 
@@ -92,7 +92,7 @@ jobs:
       - name: The JS wrapper builds and its tests pass
         working-directory: wrappers/js
         run: |
-          npm ci --ignore-scripts
+          npm install --ignore-scripts
           npx node-gyp rebuild
           npx tsc --project tsconfig.cjs.json
           npm run build

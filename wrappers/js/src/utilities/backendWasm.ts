@@ -19,7 +19,7 @@ const OUTPUT_BUFFER_PAIR_BYTES = 8;
 const NOISE_LEVEL_SLOT_BYTES = 16;
 const NOISE_LEVEL_INTENSITY_OFFSET = 8;
 const PEAK_OPTIONS_STRUCT_BYTES = 80;
-const QUANTION_ABI_VERSION = 2;
+const QUANTION_ABI_VERSION = 1;
 const ERR_FAST_PATH = 6;
 
 function rcError(name: string, rc: number): Error {
