@@ -44,12 +44,12 @@ run() {
 
 server_log="$(mktemp)"
 python3 - "$fixture" > "$server_log" <<'PY' &
-import sys, signal
+import sys, threading
 sys.path.insert(0, "scripts/check-remote")
 from server import RangeServer
 server = RangeServer(sys.argv[1])
 print(server.url, flush=True)
-signal.pause()
+threading.Event().wait()
 PY
 server_pid=$!
 
@@ -66,16 +66,29 @@ for _ in $(seq 1 50); do
 done
 export QUANTION_REMOTE_URL="$(head -1 "$server_log")"
 [ -n "$QUANTION_REMOTE_URL" ] || { echo "the range server did not start"; exit 1; }
+python3 - "$QUANTION_REMOTE_URL" <<'PY' || { echo "the range server never answered"; exit 1; }
+import socket, sys, time, urllib.parse
+address = urllib.parse.urlparse(sys.argv[1])
+for _ in range(50):
+    try:
+        socket.create_connection((address.hostname, address.port), timeout=1).close()
+        sys.exit(0)
+    except OSError:
+        time.sleep(0.1)
+sys.exit(1)
+PY
 
 run python run_python.py python3
 
 if command -v Rscript >/dev/null 2>&1 && [ -f "$here/run_r.R" ]; then
   r_work="$(mktemp -d)"
   cp -R "$root/wrappers/r" "$r_work/rpkg"
-  if R CMD INSTALL --no-docs --no-byte-compile -l "$r_work" "$r_work/rpkg" > "$r_work/install.log" 2>&1; then
-    r_user_lib="$(Rscript -e 'cat(Sys.getenv("R_LIBS_USER"))')"
-    r_path_sep="$(Rscript -e 'cat(.Platform$path.sep)')"
-    export R_LIBS_USER="$r_work${r_user_lib:+$r_path_sep$r_user_lib}"
+  r_lib="$r_work"
+  if command -v cygpath >/dev/null 2>&1; then
+    r_lib="$(cygpath -m "$r_work")"
+  fi
+  if R CMD INSTALL --no-docs --no-byte-compile -l "$r_lib" "$r_work/rpkg" > "$r_work/install.log" 2>&1; then
+    export R_LIBS="$r_lib"
     run r run_r.R Rscript
   else
     echo "the R package failed to install:"

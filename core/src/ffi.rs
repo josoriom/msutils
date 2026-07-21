@@ -1,14 +1,13 @@
-#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-use core::ffi::{c_int, c_void};
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use core::ffi::{CStr, c_char, c_int, c_void};
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+use core::ffi::{c_int, c_void};
 use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     ptr, slice,
     sync::Arc,
 };
 
-use crate::utilities::structs::ser_finite_f64;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use ionic::{
     DEFAULT_MZ_WINDOW, IonWriter,
@@ -21,10 +20,16 @@ use ionic::{
     mzml::structs::MzML,
     parse_mzml as parse_mzml_rs, write_mzml_to_ion,
 };
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use rayon::prelude::*;
 use serde::Serialize;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use crate::utilities::find_features::MzTolerance;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::get_features::{AlignmentOptions, get_features as get_features_rs};
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+use crate::utilities::parallel::run_with_cores;
 use crate::utilities::{
     calculate_baseline::{BaselineOptions, calculate_baseline as calculate_baseline_rs},
     calculate_eic::{
@@ -42,15 +47,8 @@ use crate::utilities::{
     get_peaks_from_chrom::get_peaks_from_chrom as get_peaks_from_chrom_rs,
     get_peaks_from_eic::get_peaks_from_eic as get_peaks_from_eic_rs,
     mz_estimator::MzEstimatorKind,
-    structs::{DataXY, FromTo, Roi},
+    structs::{DataXY, FromTo, Roi, ser_finite_f64},
 };
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use rayon::prelude::*;
-
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::find_features::MzTolerance;
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::parallel::run_with_cores;
 
 #[derive(Serialize)]
 struct EicPeakOut<'a> {

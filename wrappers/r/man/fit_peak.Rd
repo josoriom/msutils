@@ -6,7 +6,13 @@ Fits a Gaussian or an exponentially modified Gaussian to XY data around one
 retention time, and returns the shape parameters of the best fit.
 }
 \usage{
-fit_peak(x, y, rt, intensity, shape = "emg")
+fit_peak(
+  x,
+  y,
+  rt,
+  intensity,
+  shape = "emg"
+)
 }
 \arguments{
   \item{x}{A numeric vector of retention times. At least 5 points.}

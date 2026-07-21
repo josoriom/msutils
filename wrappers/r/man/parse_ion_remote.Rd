@@ -10,7 +10,10 @@ whole body instead, this stops with an error.
 \code{http://} or \code{https://}.
 }
 \usage{
-parse_ion_remote(url, max_cache_size = 0)
+parse_ion_remote(
+  url,
+  max_cache_size = 0
+)
 }
 \arguments{
   \item{url}{A single non-empty URL starting with \code{http://} or \code{https://}.}

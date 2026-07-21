@@ -5,7 +5,9 @@
 Reads raw mzML bytes and returns a file handle.
 }
 \usage{
-parse_mzml(data)
+parse_mzml(
+  data
+)
 }
 \arguments{
   \item{data}{Raw vector — bytes from one mzML file.}

@@ -5,10 +5,12 @@
 Returns the full file content as nested R lists and data frames.
 }
 \usage{
-ion_to_df(file)
+ion_to_df(
+  bin
+)
 }
 \arguments{
-  \item{file}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
+  \item{bin}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
 }
 \value{
 A nested R object. The top-level list contains \code{run}, which holds

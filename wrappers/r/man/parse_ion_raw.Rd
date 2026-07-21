@@ -7,7 +7,10 @@ is already in memory and there is nothing to read from disk.
 \code{\link{parse_ion}()} calls this for you when its input is a raw vector.
 }
 \usage{
-parse_ion_raw(input, max_cache_size = 0)
+parse_ion_raw(
+  input,
+  max_cache_size = 0
+)
 }
 \arguments{
   \item{input}{A raw vector of ion bytes.}

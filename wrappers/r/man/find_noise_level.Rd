@@ -7,7 +7,9 @@ below which a point is treated as noise, and it is what \code{auto_noise = TRUE}
 computes for you in the peak finders.
 }
 \usage{
-find_noise_level(y)
+find_noise_level(
+  y
+)
 }
 \arguments{
   \item{y}{A numeric vector of intensities.}

@@ -16,3 +16,7 @@
 debug/*
 *workplan*
 wrappers/js/native/*/
+wrappers/r/src/*.o
+wrappers/r/src/*.so
+*.Rcheck/
+wrappers/r/src/symbols.rds

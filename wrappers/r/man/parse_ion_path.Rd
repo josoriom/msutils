@@ -7,7 +7,10 @@ read lazily, so only the parts a call needs are touched.
 \code{\link{parse_ion}()} calls this for you when its input is a path.
 }
 \usage{
-parse_ion_path(path, max_cache_size = 0)
+parse_ion_path(
+  path,
+  max_cache_size = 0
+)
 }
 \arguments{
   \item{path}{A single non-empty path to an existing ion file. \code{~} is expanded.}

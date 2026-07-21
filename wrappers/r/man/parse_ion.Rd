@@ -8,7 +8,10 @@ A string starting with \code{http://} or \code{https://} is read over the networ
 with \code{parse_ion_remote()}.
 }
 \usage{
-parse_ion(input, max_cache_size = 0)
+parse_ion(
+  input,
+  max_cache_size = 0
+)
 }
 \arguments{
   \item{input}{A file path to an ion file, or a raw vector of ion bytes.}

@@ -5,10 +5,17 @@
 Extracts an EIC for one target m/z over a given retention-time range.
 }
 \usage{
-calculate_eic(file, targets, from, to, ppm_tolerance = 20, mz_tolerance = 0.005)
+calculate_eic(
+  bin,
+  targets,
+  from,
+  to,
+  ppm_tolerance = 20,
+  mz_tolerance = 0.005
+)
 }
 \arguments{
-  \item{file}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
+  \item{bin}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
   \item{targets}{Single numeric m/z target.}
   \item{from}{Start retention time (minutes).}
   \item{to}{End retention time (minutes).}

@@ -7,22 +7,28 @@ Use this for batch targeted peak extraction from one file.
 }
 \usage{
 get_peaks_from_eic(
-  file, df, from = 0.5, to = 5, cores = 1L,
+  bin,
+  df,
+  from = 0.5,
+  to = 5,
+  cores = 1L,
   min_integral = NaN,
-  min_intensity = 1000,
-  min_peak_width_points = 5L,
+  min_intensity = .DEFAULTS$min_intensity,
+  min_peak_width_points = .DEFAULTS$min_peak_width_points,
   noise = NaN,
-  auto_noise = TRUE,
-  auto_baseline = TRUE,
+  auto_noise = .DEFAULTS$auto_noise,
+  auto_baseline = .DEFAULTS$auto_baseline,
   lambda = 0L,
   max_iterations = 0L,
   allow_overlap = FALSE,
-  min_snr = 1,
-  min_r2 = 0.3
+  min_snr = .DEFAULTS$min_snr,
+  min_r2 = .DEFAULTS$min_r2,
+  shape = .DEFAULTS$shape,
+  kernel_size = .DEFAULTS$kernel_size
 )
 }
 \arguments{
-  \item{file}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
+  \item{bin}{Sample file from \code{\link{parse_mzml}()} or \code{\link{parse_ion}()}.}
   \item{df}{Data frame with columns \code{id} (character), \code{rt} (numeric),
     \code{mz} (numeric), \code{ranges} (numeric RT half-window).}
   \item{from}{EIC extraction start time (minutes). Default 0.5.}
@@ -39,6 +45,10 @@ get_peaks_from_eic(
   \item{allow_overlap}{Allow overlapping peak boundaries. Default \code{FALSE}.}
   \item{min_snr}{Minimum signal-to-noise ratio. Default 1.}
   \item{min_r2}{Minimum fit R-squared (Gaussian or EMG) for the artifact filter; \code{0} disables it (keep peaks regardless of shape). Default 0.3.}
+  \item{shape}{Peak shape used when fitting.}
+
+  \item{kernel_size}{Smoothing kernel size used before peak detection.}
+
 }
 \value{
 A data frame with one row per target. Columns include \code{id}, \code{mz},

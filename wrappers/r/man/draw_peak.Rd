@@ -6,7 +6,10 @@ Evaluates a fitted peak shape at the given retention times, so the model curve
 can be plotted next to the measured signal.
 }
 \usage{
-draw_peak(x, params)
+draw_peak(
+  x,
+  params
+)
 }
 \arguments{
   \item{x}{A numeric vector of retention times to evaluate the shape at.}

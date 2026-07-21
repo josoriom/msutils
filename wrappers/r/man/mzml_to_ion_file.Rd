@@ -6,8 +6,13 @@ Reads an mzML file on disk one scan at a time and writes an ion file directly,
 so the whole file is never held in memory. Use this for large files.
 }
 \usage{
-mzml_to_ion_file(input_path, output_path, level = 12L, f32_compress = FALSE,
-                 section_on_disk = FALSE)
+mzml_to_ion_file(
+  input_path,
+  output_path,
+  level = 12L,
+  f32_compress = FALSE,
+  section_on_disk = FALSE
+)
 }
 \arguments{
   \item{input_path}{Path to the source mzML file.}

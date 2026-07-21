@@ -11,15 +11,13 @@ pub mod eic {
 }
 
 pub mod peaks {
-    pub use crate::utilities::find_peaks::{
-        ArtifactFilter, FindPeaksOptions, PeakFilter, find_peaks,
+    pub use crate::utilities::{
+        find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter, find_peaks},
+        fit_peak::{PeakParameters, PeakSeed, PeakShape, draw_peak, fit_peak},
+        get_peak::get_peak,
+        get_peaks_from_chrom::{ChromPeakRow, get_peaks_from_chrom},
+        get_peaks_from_eic::{get_peaks_from_eic, plan_peaks_ranges},
     };
-    pub use crate::utilities::fit_peak::{
-        PeakParameters, PeakSeed, PeakShape, draw_peak, fit_peak,
-    };
-    pub use crate::utilities::get_peak::get_peak;
-    pub use crate::utilities::get_peaks_from_chrom::{ChromPeakRow, get_peaks_from_chrom};
-    pub use crate::utilities::get_peaks_from_eic::{get_peaks_from_eic, plan_peaks_ranges};
 }
 
 pub mod boundaries {
@@ -37,9 +35,11 @@ pub mod baseline {
 }
 
 pub mod features {
-    pub use crate::utilities::find_feature::{FindFeatureOptions, find_feature};
-    pub use crate::utilities::find_features::{FindFeaturesOptions, find_features};
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
     pub use crate::utilities::get_features::{AlignmentOptions, get_features};
-    pub use crate::utilities::mz_estimator::MzEstimatorKind;
+    pub use crate::utilities::{
+        find_feature::{FindFeatureOptions, find_feature},
+        find_features::{FindFeaturesOptions, find_features},
+        mz_estimator::MzEstimatorKind,
+    };
 }

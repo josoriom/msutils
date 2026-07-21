@@ -1,14 +1,17 @@
-use ionic::ion::{IonReader, ReadOptions};
-use quantion::utilities::calculate_eic::{EicOptions, EicReader, calculate_eic, get_scan_times};
-use quantion::utilities::find_features::{FindFeaturesOptions, find_features};
-use quantion::utilities::find_noise_level::find_noise_level;
-use quantion::utilities::find_peaks::{FindPeaksOptions, PeakFilter, find_peaks};
-use quantion::utilities::get_features::{AlignmentOptions, get_features};
-use quantion::utilities::get_peak::get_peak;
-use quantion::utilities::get_peaks_from_chrom::get_peaks_from_chrom;
-use quantion::utilities::get_peaks_from_eic::get_peaks_from_eic;
-use quantion::utilities::structs::{DataXY, FromTo, Peak, Roi};
 use std::path::Path;
+
+use ionic::ion::{IonReader, ReadOptions};
+use quantion::utilities::{
+    calculate_eic::{EicOptions, EicReader, calculate_eic, get_scan_times},
+    find_features::{FindFeaturesOptions, find_features},
+    find_noise_level::find_noise_level,
+    find_peaks::{FindPeaksOptions, PeakFilter, find_peaks},
+    get_features::{AlignmentOptions, get_features},
+    get_peak::get_peak,
+    get_peaks_from_chrom::get_peaks_from_chrom,
+    get_peaks_from_eic::get_peaks_from_eic,
+    structs::{DataXY, FromTo, Peak, Roi},
+};
 
 const FROM_RT: f64 = 0.0;
 const TO_RT: f64 = 5.0;

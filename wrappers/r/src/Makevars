@@ -1,2 +1,1 @@
-PKG_CFLAGS = -std=gnu11
-PKG_LIBS = $(shell test "$$(uname -s)" = Linux && echo -ldl)
+PKG_LIBS = -ldl

@@ -61,11 +61,12 @@ run_language python run_python.py python3
 if command -v Rscript >/dev/null 2>&1 && [ -f "$here/run_r.R" ]; then
   r_lib="$work/rlib"
   mkdir -p "$r_lib"
+  if command -v cygpath >/dev/null 2>&1; then
+    r_lib="$(cygpath -m "$r_lib")"
+  fi
   cp -R "$root/wrappers/r" "$work/rpkg"
   if R CMD INSTALL --no-docs --no-byte-compile -l "$r_lib" "$work/rpkg" > "$work/r_install.log" 2>&1; then
-    r_user_lib="$(Rscript -e 'cat(Sys.getenv("R_LIBS_USER"))')"
-    r_path_sep="$(Rscript -e 'cat(.Platform$path.sep)')"
-    export R_LIBS_USER="$r_lib${r_user_lib:+$r_path_sep$r_user_lib}"
+    export R_LIBS="$r_lib"
     run_language r run_r.R Rscript
   else
     echo "the R package failed to install:"
