@@ -160,8 +160,7 @@ int mzml_to_bin(struct ParsedFile *h,
 int convert_mzml_file_to_ion_file(const char *input_path,
                                   const char *output_path,
                                   uint8_t compression_level,
-                                  uint8_t force_f32,
-                                  uint8_t section_on_disk);
+                                  uint8_t force_f32);
 #endif
 
 /**

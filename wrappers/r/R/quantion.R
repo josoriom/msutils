@@ -43,7 +43,7 @@ mzml_to_ion <- function(bin, level = 12L, f32_compress = FALSE) {
   .Call("C_mzml_to_ion", bin, lvl, f32_compress, PACKAGE = "quantion")
 }
 
-mzml_to_ion_file <- function(input_path, output_path, level = 12L, f32_compress = FALSE, section_on_disk = FALSE) {
+mzml_to_ion_file <- function(input_path, output_path, level = 12L, f32_compress = FALSE) {
   if (!is.character(input_path) || length(input_path) != 1 || is.na(input_path))
     stop("`input_path` must be a single string")
   if (!is.character(output_path) || length(output_path) != 1 || is.na(output_path))
@@ -57,10 +57,8 @@ mzml_to_ion_file <- function(input_path, output_path, level = 12L, f32_compress 
 
   if (!is.logical(f32_compress) || length(f32_compress) != 1 || is.na(f32_compress))
     stop("`f32_compress` must be TRUE/FALSE")
-  if (!is.logical(section_on_disk) || length(section_on_disk) != 1 || is.na(section_on_disk))
-    stop("`section_on_disk` must be TRUE/FALSE")
 
-  .Call("C_mzml_to_ion_file", input_path, output_path, lvl, f32_compress, section_on_disk, PACKAGE = "quantion")
+  .Call("C_mzml_to_ion_file", input_path, output_path, lvl, f32_compress, PACKAGE = "quantion")
   invisible(output_path)
 }
 

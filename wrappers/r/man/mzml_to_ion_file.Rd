@@ -10,8 +10,7 @@ mzml_to_ion_file(
   input_path,
   output_path,
   level = 12L,
-  f32_compress = FALSE,
-  section_on_disk = FALSE
+  f32_compress = FALSE
 )
 }
 \arguments{
@@ -19,7 +18,6 @@ mzml_to_ion_file(
   \item{output_path}{Path where the ion file is written.}
   \item{level}{Compression level, integer 0 (none) to 22 (max). Default 12.}
   \item{f32_compress}{If \code{TRUE}, store intensity values as 32-bit float. Default \code{FALSE}.}
-  \item{section_on_disk}{If \code{TRUE}, keep intermediate tables on disk to cap memory. Default \code{FALSE}.}
 }
 \value{
 Invisibly returns \code{output_path}.

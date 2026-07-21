@@ -88,7 +88,7 @@ class _ABI:
         "bin_to_mzml": ([c_void_p, POINTER(_Buf)], c_int32),
         "mzml_to_bin": ([c_void_p, POINTER(_Buf), c_uint8, c_uint8], c_int32),
         "convert_mzml_file_to_ion_file": (
-            [ctypes.c_char_p, ctypes.c_char_p, c_uint8, c_uint8, c_uint8], c_int32),
+            [ctypes.c_char_p, ctypes.c_char_p, c_uint8, c_uint8], c_int32),
         "get_peak": ([POINTER(c_double), POINTER(c_double), c_size_t,
              c_double, c_double, POINTER(PeakOptions), POINTER(_Buf)], c_int32),
         "calculate_eic": ([c_void_p, c_double, c_double, c_double,

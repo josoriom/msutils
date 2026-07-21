@@ -415,7 +415,6 @@ def mzml_to_ion_file(
     output_path: str,
     level: int = 12,
     f32_compress: bool = False,
-    section_on_disk: bool = False,
 ) -> None:
     """Stream-convert an mzML file on disk into an ion file on disk.
 
@@ -427,7 +426,6 @@ def mzml_to_ion_file(
         output_path: Path where the ion file is written.
         level: Compression level, integer 0 (none) to 22 (max). Default 12.
         f32_compress: If True, store intensity values as 32-bit float.
-        section_on_disk: If True, keep intermediate tables on disk to cap memory.
     """
     abi = _get_abi()
     if not input_path:
@@ -438,8 +436,6 @@ def mzml_to_ion_file(
         raise ValueError("mzml_to_ion_file: level must be an integer in [0, 22]")
     if not isinstance(f32_compress, bool):
         raise TypeError("mzml_to_ion_file: f32_compress must be a bool")
-    if not isinstance(section_on_disk, bool):
-        raise TypeError("mzml_to_ion_file: section_on_disk must be a bool")
     _check(
         "convert_mzml_file_to_ion_file",
         abi.convert_mzml_file_to_ion_file(
@@ -447,7 +443,6 @@ def mzml_to_ion_file(
             output_path.encode("utf-8"),
             c_uint8(level),
             c_uint8(1 if f32_compress else 0),
-            c_uint8(1 if section_on_disk else 0),
         ),
     )
 

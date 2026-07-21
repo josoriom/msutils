@@ -662,7 +662,6 @@ pub unsafe extern "C" fn convert_mzml_file_to_ion_file(
     output_path: *const c_char,
     compression_level: u8,
     force_f32: u8,
-    section_on_disk: u8,
 ) -> c_int {
     if input_path.is_null() || output_path.is_null() {
         return ERR_INVALID_ARGS;
@@ -684,11 +683,7 @@ pub unsafe extern "C" fn convert_mzml_file_to_ion_file(
             force_f32: force_f32 != 0,
             block_size: ION_BLOCK_SIZE_BYTES,
             parallel: true,
-            section_storage: if section_on_disk != 0 {
-                SectionStorage::Disk
-            } else {
-                SectionStorage::Memory
-            },
+            section_storage: SectionStorage::Disk,
             mz_window: DEFAULT_MZ_WINDOW,
         };
 
