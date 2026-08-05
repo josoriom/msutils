@@ -5,6 +5,9 @@ use crate::utilities::cheminfo::{
     noise_san_plot::{NoiseSanPlotOptions, noise_san_plot},
 };
 
+const SPREAD_TO_DEVIATION: f64 = 1.4826;
+const DEVIATIONS_ALLOWED: f64 = 12.0;
+
 #[derive(Clone, Copy, Debug)]
 pub struct Noise {
     pub width: usize,
@@ -42,26 +45,45 @@ where
 
     let noise_label = 0usize;
 
-    let mut max_in_noise = f64::NEG_INFINITY;
-    let mut max_noise_width = 0usize;
+    let mut noise_levels = Vec::with_capacity(segments.len());
+    let mut noise_width = 0usize;
     for (i, &Segment { width, intensity }) in segments.iter().enumerate() {
-        if labels[i] == noise_label {
-            if intensity.is_finite() && intensity > max_in_noise {
-                max_in_noise = intensity;
-            }
-            if width > max_noise_width {
-                max_noise_width = width;
+        if labels[i] == noise_label && intensity.is_finite() {
+            noise_levels.push(intensity);
+            if width > noise_width {
+                noise_width = width;
             }
         }
     }
 
-    if max_in_noise.is_finite() {
-        Noise {
-            width: max_noise_width,
-            intensity: max_in_noise,
-        }
+    match noise_ceiling(&mut noise_levels) {
+        Some(intensity) => Noise {
+            width: noise_width,
+            intensity,
+        },
+        None => Noise::default(),
+    }
+}
+
+fn noise_ceiling(levels: &mut [f64]) -> Option<f64> {
+    let middle = median(levels)?;
+    let mut spreads: Vec<f64> = levels.iter().map(|level| (level - middle).abs()).collect();
+    let spread = median(&mut spreads).unwrap_or(0.0);
+    let ceiling = middle + spread * SPREAD_TO_DEVIATION * DEVIATIONS_ALLOWED;
+    let highest = levels.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    Some(ceiling.min(highest))
+}
+
+fn median(values: &mut [f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_unstable_by(f64::total_cmp);
+    let middle = values.len() / 2;
+    if values.len() % 2 == 1 {
+        Some(values[middle])
     } else {
-        Noise::default()
+        Some((values[middle - 1] + values[middle]) / 2.0)
     }
 }
 
