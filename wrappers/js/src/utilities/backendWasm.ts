@@ -353,6 +353,16 @@ class WasmExports {
         outBuf: number,
       ) => number)
     | null;
+  readonly planScans:
+    | ((
+        handle: number,
+        queryType: number,
+        from: number,
+        to: number,
+        level: number,
+        outBuf: number,
+      ) => number)
+    | null;
   readonly imageBegin:
     | ((
         handle: number,
@@ -430,6 +440,17 @@ class WasmExports {
             to: number,
             ppm: number,
             mzTol: number,
+            outBuf: number,
+          ) => number)
+        : null;
+    this.planScans =
+      typeof ex["plan_scans"] === "function"
+        ? (ex["plan_scans"] as unknown as (
+            handle: number,
+            queryType: number,
+            from: number,
+            to: number,
+            level: number,
             outBuf: number,
           ) => number)
         : null;
@@ -644,6 +665,29 @@ class WasmApi {
       this.blobScratchSlot,
     );
     if (rc !== 0) throw new Error(`plan_eic failed with code ${rc}`);
+    return this.readRangesFromSlot(this.blobScratchSlot);
+  }
+
+  planScans(
+    handle: number,
+    queryType: number,
+    a: number,
+    b: number,
+    level: number,
+  ): ByteRangeResult[] {
+    if (!this.fn.planScans) {
+      throw new Error("planScans not in WASM exports");
+    }
+
+    const rc = this.fn.planScans(
+      handle,
+      queryType,
+      a,
+      b,
+      level,
+      this.blobScratchSlot,
+    );
+    if (rc !== 0) throw new Error(`plan_scans failed with code ${rc}`);
     return this.readRangesFromSlot(this.blobScratchSlot);
   }
 
@@ -895,14 +939,25 @@ class WasmApi {
     );
   }
 
-  getScans(
+  async getScans(
     handle: number,
     queryType: number,
     a: number,
     b: number,
     level: number,
-  ): any {
-    this.assertLocalHandle(handle, "getScans");
+  ): Promise<any> {
+    const sourceId = this.source_id_by_handle.get(handle);
+
+    if (sourceId !== undefined) {
+      const source = range_sources.get(sourceId);
+      if (!source) {
+        throw new Error("getScans: remote source is missing");
+      }
+
+      const ranges = this.planScans(handle, queryType, a, b, level);
+      await prefetchRangesForSource(source, ranges);
+    }
+
     const rc = this.fn.getScans(
       handle,
       queryType,
@@ -1352,13 +1407,13 @@ export class WasmBackend implements Backend {
     );
   }
 
-  getScans(
+  async getScans(
     handle: FileHandle,
     queryType: number,
     a: number,
     b: number,
     level: number,
-  ): any {
+  ): Promise<any> {
     return this.getApi().getScans(handle as number, queryType, a, b, level);
   }
 

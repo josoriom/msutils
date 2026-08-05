@@ -44,7 +44,7 @@ export async function fetchRange(
 
   const contentRange = response.headers.get("Content-Range");
   const expectedPrefix = `bytes ${start}-${end}/`;
-  if (!contentRange?.startsWith(expectedPrefix)) {
+  if (contentRange !== null && !contentRange.startsWith(expectedPrefix)) {
     throw new Error(
       `range response has wrong Content-Range: got ${contentRange}, expected to start with ${expectedPrefix}`,
     );
@@ -104,6 +104,33 @@ export async function prefetchRanges(
   );
 }
 
+function readTotalFromContentRange(response: Response): bigint | null {
+  const total =
+    (response.headers.get("Content-Range") ?? "").split("/")[1] ?? "";
+  return /^\d+$/.test(total) ? BigInt(total) : null;
+}
+
+async function fetchTotalByHead(url: string): Promise<bigint> {
+  const response = await fetch(url, { method: "HEAD" });
+  if (!response.ok) {
+    throw new Error(`size request failed for ${url}: got ${response.status}`);
+  }
+
+  const encoding = response.headers.get("Content-Encoding");
+  if (encoding !== null && encoding !== "identity") {
+    throw new Error(
+      `size request for ${url} was ${encoding}-encoded, so Content-Length is not the file size`,
+    );
+  }
+
+  const length = response.headers.get("Content-Length") ?? "";
+  if (!/^\d+$/.test(length)) {
+    throw new Error(`size request for ${url} returned no usable Content-Length`);
+  }
+
+  return BigInt(length);
+}
+
 export async function fetchHeader(source: RemoteSource): Promise<Uint8Array> {
   const response = await fetch(source.url, {
     headers: {
@@ -117,14 +144,8 @@ export async function fetchHeader(source: RemoteSource): Promise<Uint8Array> {
     );
   }
 
-  const contentRange = response.headers.get("Content-Range") ?? "";
-  const total = contentRange.split("/")[1] ?? "";
-  if (!/^\d+$/.test(total)) {
-    throw new Error(
-      `range response for ${source.url} has no total size: Content-Range is ${contentRange}`,
-    );
-  }
-  source.total = BigInt(total);
+  source.total =
+    readTotalFromContentRange(response) ?? (await fetchTotalByHead(source.url));
 
   const bytes = new Uint8Array(await response.arrayBuffer());
   const range: ByteRangeResult = { offset: 0n, length: BigInt(bytes.length) };

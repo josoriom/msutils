@@ -8,7 +8,11 @@ jest.mock(
     parseIonSource: jest.fn(),
     planOpen: jest.fn(),
     planEic: jest.fn(),
+    planScans: jest.fn(),
+    planImage: jest.fn(),
     calculateEic: jest.fn(),
+    getScans: jest.fn(),
+    getIonImage: jest.fn(),
     dispose: jest.fn(),
   }),
   { virtual: true },
@@ -57,7 +61,11 @@ describe.each(modulePaths)("remote handle lifetime (%s)", (_name, modulePath) =>
       parseIonSource: jest.fn(() => ({ handle: "native file" })),
       planOpen: jest.fn(() => []),
       planEic: jest.fn(() => []),
+      planScans: jest.fn(() => []),
+      planImage: jest.fn(() => []),
       calculateEic: jest.fn(() => EMPTY_EIC),
+      getScans: jest.fn(() => "[]"),
+      getIonImage: jest.fn(() => "{}"),
       dispose: jest.fn((handle: object) => {
         disposedWhileStillTracked = backend.remote_by_handle.has(handle);
       }),
@@ -86,6 +94,36 @@ describe.each(modulePaths)("remote handle lifetime (%s)", (_name, modulePath) =>
 
     await backend.calculateEic(handle, 100, 0, 1, 5, 0.01);
     expect(native.planEic).toHaveBeenCalledTimes(1);
+  });
+
+  test("an open remote file prefetches on scans", async () => {
+    const handle = await openRemote();
+
+    await backend.getScans(handle, 0, 0, 10, 1);
+
+    expect(native.planScans).toHaveBeenCalledTimes(1);
+    expect(native.getScans).toHaveBeenCalledTimes(1);
+  });
+
+  test("an open remote file prefetches on ion image", async () => {
+    const handle = await openRemote();
+
+    await backend.getIonImage(handle, 100, 0.1, 1);
+
+    expect(native.planImage).toHaveBeenCalledTimes(1);
+    expect(native.getIonImage).toHaveBeenCalledTimes(1);
+  });
+
+  test("a local file asks for no scan plan at all", async () => {
+    const handle = { handle: "local file" };
+
+    await backend.getScans(handle, 0, 0, 10, 1);
+    await backend.getIonImage(handle, 100, 0.1, 1);
+
+    expect(native.planScans).not.toHaveBeenCalled();
+    expect(native.planImage).not.toHaveBeenCalled();
+    expect(native.getScans).toHaveBeenCalledTimes(1);
+    expect(native.getIonImage).toHaveBeenCalledTimes(1);
   });
 
   test("freeFile drops the entry before it disposes the handle", async () => {

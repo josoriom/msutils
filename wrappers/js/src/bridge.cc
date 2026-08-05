@@ -88,6 +88,8 @@ typedef int32_t (*fn_read_range)(void *, uint64_t, uint64_t, uint8_t *);
 typedef int32_t (*fn_parse_ion_source)(fn_read_range, void *, size_t, MzML **);
 typedef int32_t (*fn_plan_open)(const uint8_t *, size_t, Buf *);
 typedef int32_t (*fn_plan_eic)(MzML *, double, double, double, double, double, Buf *);
+typedef int32_t (*fn_plan_scans)(MzML *, uint8_t, double, double, uint8_t, Buf *);
+typedef int32_t (*fn_plan_image)(MzML *, double, double, uint8_t, Buf *);
 typedef int32_t (*fn_parse_ion_path)(const char *, size_t, MzML **);
 typedef void (*fn_free_mzml)(MzML *);
 typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *);
@@ -128,6 +130,8 @@ typedef struct
   fn_parse_ion_source parse_ion_source;
   fn_plan_open plan_open;
   fn_plan_eic plan_eic;
+  fn_plan_scans plan_scans;
+  fn_plan_image plan_image;
   fn_parse_ion_path parse_ion_path;
   fn_free_ free_;
   fn_free_mzml free_mzml;
@@ -325,6 +329,8 @@ static int abi_load(const char *path, const char **err)
   ABI.parse_ion_source = (fn_parse_ion_source)DLSYM(LIB_HANDLE, "parse_ion_source");
   ABI.plan_open = (fn_plan_open)DLSYM(LIB_HANDLE, "plan_open");
   ABI.plan_eic = (fn_plan_eic)DLSYM(LIB_HANDLE, "plan_eic");
+  ABI.plan_scans = (fn_plan_scans)DLSYM(LIB_HANDLE, "plan_scans");
+  ABI.plan_image = (fn_plan_image)DLSYM(LIB_HANDLE, "plan_image");
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
     goto fail;
   ABI.parse_ion_path = (fn_parse_ion_path)DLSYM(LIB_HANDLE, "parse_ion_path");
@@ -1090,6 +1096,57 @@ static Napi::Value PlanEic(const Napi::CallbackInfo &info)
   return ranges;
 }
 
+static Napi::Value PlanScans(const Napi::CallbackInfo &info)
+{
+  Napi::Env env = info.Env();
+  if (!ThrowIfMissing(env, (void *)ABI.plan_scans, "plan_scans"))
+    return env.Undefined();
+  if (info.Length() < 5 || !info[0].IsExternal())
+    return env.Undefined();
+
+  MzMLWrapper *wrapper = info[0].As<Napi::External<MzMLWrapper>>().Data();
+  Buf out{};
+  int32_t rc = ABI.plan_scans(
+      wrapper->ptr,
+      (uint8_t)info[1].As<Napi::Number>().Uint32Value(),
+      info[2].As<Napi::Number>().DoubleValue(),
+      info[3].As<Napi::Number>().DoubleValue(),
+      (uint8_t)info[4].As<Napi::Number>().Uint32Value(),
+      &out);
+  if (rc != 0)
+    return ThrowRc(env, "plan_scans", rc);
+
+  Napi::Array ranges = RangesToArray(env, out);
+  if (ABI.free_ && out.ptr)
+    ABI.free_(out.ptr, out.len);
+  return ranges;
+}
+
+static Napi::Value PlanImage(const Napi::CallbackInfo &info)
+{
+  Napi::Env env = info.Env();
+  if (!ThrowIfMissing(env, (void *)ABI.plan_image, "plan_image"))
+    return env.Undefined();
+  if (info.Length() < 4 || !info[0].IsExternal())
+    return env.Undefined();
+
+  MzMLWrapper *wrapper = info[0].As<Napi::External<MzMLWrapper>>().Data();
+  Buf out{};
+  int32_t rc = ABI.plan_image(
+      wrapper->ptr,
+      info[1].As<Napi::Number>().DoubleValue(),
+      info[2].As<Napi::Number>().DoubleValue(),
+      (uint8_t)info[3].As<Napi::Number>().Uint32Value(),
+      &out);
+  if (rc != 0)
+    return ThrowRc(env, "plan_image", rc);
+
+  Napi::Array ranges = RangesToArray(env, out);
+  if (ABI.free_ && out.ptr)
+    ABI.free_(out.ptr, out.len);
+  return ranges;
+}
+
 static Napi::Value ParseIonSource(const Napi::CallbackInfo &info)
 {
   Napi::Env env = info.Env();
@@ -1250,6 +1307,8 @@ static Napi::Object Init(Napi::Env env, Napi::Object exports)
   exports.Set("parseMzML", Napi::Function::New(env, ParseMzML));
   exports.Set("planOpen", Napi::Function::New(env, PlanOpen));
   exports.Set("planEic", Napi::Function::New(env, PlanEic));
+  exports.Set("planScans", Napi::Function::New(env, PlanScans));
+  exports.Set("planImage", Napi::Function::New(env, PlanImage));
   exports.Set("parseIonSource", Napi::Function::New(env, ParseIonSource));
   exports.Set("binToJson", Napi::Function::New(env, BinToJson));
   exports.Set("binToMzML", Napi::Function::New(env, BinToMzML));

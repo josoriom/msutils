@@ -205,7 +205,7 @@ async function main() {
   const out = [];
   out.push(`fnv1a.self_check = ${digest(SELF_CHECK_VALUES)}`);
 
-  const scans = quantion.getScans(file, {
+  const scans = await quantion.getScans(file, {
     rt: { from: FROM_RT, to: TO_RT },
   });
   out.push(`parse_ion.scans = ${scans.length}`);

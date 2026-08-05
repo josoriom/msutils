@@ -355,11 +355,11 @@ function assertLevel(level: number, caller: string): void {
  * @param level - MS level (1 = MS1, 2 = MS2, etc.). Default 1.
  * @returns Array of scans for range queries, single scan (or null) for closest queries.
  */
-export function getScans(
+export async function getScans(
   file: SampleFile,
   query: ScanQuery,
   level = 1,
-): CentroidScan[] | CentroidScan | null {
+): Promise<CentroidScan[] | CentroidScan | null> {
   assertFile(file, "getScans");
   assertLevel(level, "getScans");
 
@@ -402,7 +402,13 @@ export function getScans(
     }
   }
 
-  const raw = backend().getScans(file._handle!, queryType, a, b, level);
+  const raw = await file._backend.getScans(
+    file._handle!,
+    queryType,
+    a,
+    b,
+    level,
+  );
   if (queryType === QUERY_CLOSEST_RT || queryType === QUERY_CLOSEST_MZ) {
     return raw?.length ? raw[0] : null;
   }

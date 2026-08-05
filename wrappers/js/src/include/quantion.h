@@ -309,6 +309,19 @@ int plan_eic(struct ParsedFile *h,
              double mz_tol,
              struct Buf *out);
 
+int plan_scans(struct ParsedFile *h,
+               uint8_t query_type,
+               double from_value,
+               double to_value,
+               uint8_t level,
+               struct Buf *out);
+
+int plan_image(struct ParsedFile *h,
+               double target,
+               double tolerance,
+               uint8_t level,
+               struct Buf *out);
+
 /**
  * Get scans by query and write the result to `out`.
  *

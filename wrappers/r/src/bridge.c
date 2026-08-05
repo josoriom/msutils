@@ -50,6 +50,7 @@ typedef int32_t (*fn_read_range)(void *, uint64_t, uint64_t, uint8_t *);
 typedef int32_t (*fn_parse_ion_source)(fn_read_range, void *, size_t, MzML **);
 typedef int32_t (*fn_plan_open)(const uint8_t *, size_t, Buf *);
 typedef int32_t (*fn_plan_eic)(MzML *, double, double, double, double, double, Buf *);
+typedef int32_t (*fn_plan_scans)(MzML *, uint8_t, double, double, uint8_t, Buf *);
 typedef int32_t (*fn_parse_ion_path)(const char *, size_t, MzML **);
 typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, Buf *);
 typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
@@ -81,6 +82,7 @@ typedef struct
   fn_parse_ion_source parse_ion_source;
   fn_plan_open plan_open;
   fn_plan_eic plan_eic;
+  fn_plan_scans plan_scans;
   fn_parse_ion_path parse_ion_path;
   fn_free_mzml free_mzml;
   fn_get_features get_features;
@@ -174,6 +176,7 @@ int abi_load(const char *path, const char **err)
   ABI.parse_ion_source = (fn_parse_ion_source)DLSYM(abi_handle, "parse_ion_source");
   ABI.plan_open = (fn_plan_open)DLSYM(abi_handle, "plan_open");
   ABI.plan_eic = (fn_plan_eic)DLSYM(abi_handle, "plan_eic");
+  ABI.plan_scans = (fn_plan_scans)DLSYM(abi_handle, "plan_scans");
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
     goto fail;
   if (resolve_required((void **)&ABI.parse_ion_path, "parse_ion_path"))
@@ -1012,6 +1015,22 @@ SEXP C_plan_eic(SEXP ptr, SEXP target, SEXP from, SEXP to, SEXP ppm, SEXP mz_tol
   int code = ABI.plan_eic(handle, asReal(target), asReal(from), asReal(to),
                           asReal(ppm), asReal(mz_tol), &out);
   die_code("plan_eic", code);
+  return ranges_to_matrix(&out);
+}
+
+SEXP C_plan_scans(SEXP ptr, SEXP query_type, SEXP from_value, SEXP to_value, SEXP level)
+{
+  REQUIRE_BOUND(ABI.plan_scans, "plan_scans");
+  MzML *handle = (MzML *)R_ExternalPtrAddr(ptr);
+  if (handle == NULL)
+    error("quantion: the file handle is not valid");
+
+  Buf out;
+  memset(&out, 0, sizeof(out));
+  int code = ABI.plan_scans(handle, (uint8_t)asInteger(query_type),
+                            asReal(from_value), asReal(to_value),
+                            (uint8_t)asInteger(level), &out);
+  die_code("plan_scans", code);
   return ranges_to_matrix(&out);
 }
 

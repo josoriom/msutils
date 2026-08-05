@@ -131,6 +131,11 @@ class _ABI:
              POINTER(c_size_t), POINTER(c_double)], c_int32),
     }
 
+    _OPTIONAL: dict[str, tuple[list, object]] = {
+        "plan_scans": ([c_void_p, c_uint8, c_double, c_double, c_uint8,
+             POINTER(_Buf)], c_int32),
+    }
+
     def __init__(self, lib: ctypes.CDLL) -> None:
         for name, (argtypes, restype) in self._REQUIRED.items():
             try:
@@ -142,6 +147,14 @@ class _ABI:
                 raise RuntimeError(
                     f"quantion: required symbol '{name}' not found in shared library"
                 )
+        for name, (argtypes, restype) in self._OPTIONAL.items():
+            try:
+                fn = getattr(lib, name)
+                fn.argtypes = argtypes
+                fn.restype  = restype
+                setattr(self, name, fn)
+            except AttributeError:
+                setattr(self, name, None)
 
 
 def _read_and_free(abi: _ABI, buf: _Buf) -> bytes:

@@ -15,6 +15,7 @@
 **/.vscode
 debug/*
 *workplan*
+artifacts/.build-state.json*
 wrappers/js/native/*/
 wrappers/r/src/*.o
 wrappers/r/src/*.so

@@ -588,6 +588,13 @@ get_scans <- function(bin, rt_from = NULL, rt_to = NULL, rt = NULL,
     query_type <- .QUERY_CLOSEST_MZ; b <- NaN
   }
 
+  source <- attr(bin, "quantion_source")
+  if (!is.null(source)) {
+    wanted <- .Call("C_plan_scans", bin, as.integer(query_type), a, b,
+                    as.integer(level), PACKAGE = "quantion")
+    .prefetch(source, wanted)
+  }
+
   out_json <- .Call("C_get_scans",
     bin, as.integer(query_type), a, b, as.integer(level),
     PACKAGE = "quantion"

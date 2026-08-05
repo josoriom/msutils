@@ -51,7 +51,7 @@ export interface Backend {
     a: number,
     b: number,
     level: number,
-  ): any;
+  ): MaybePromise<any>;
 
   getIonImage(
     handle: FileHandle,

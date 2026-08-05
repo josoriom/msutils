@@ -226,25 +226,46 @@ export class NodeBackend implements Backend {
     ) as { x: Float64Array; y: Float64Array };
   }
 
-  getScans(
+  async getScans(
     handle: FileHandle,
     queryType: number,
     a: number,
     b: number,
     level: number,
-  ): any {
+  ): Promise<any> {
+    const source = this.remote_by_handle.get(handle as object);
+    if (source) {
+      const ranges = this.native.planScans(
+        handle,
+        queryType,
+        a,
+        b,
+        level,
+      ) as ByteRangeResult[];
+      await prefetchRanges(source, ranges);
+    }
     return parseAndCamelize(
       this.native.getScans(handle, queryType, a, b, level) as string,
     );
   }
 
-  getIonImage(
+  async getIonImage(
     handle: FileHandle,
     mz: number,
     tolerance: number,
     level: number,
     _onProgress?: (fetched: number, total: number, heldBytes: number) => void,
-  ): any {
+  ): Promise<any> {
+    const source = this.remote_by_handle.get(handle as object);
+    if (source) {
+      const ranges = this.native.planImage(
+        handle,
+        mz,
+        tolerance,
+        level,
+      ) as ByteRangeResult[];
+      await prefetchRanges(source, ranges);
+    }
     return parseAndCamelize(
       this.native.getIonImage(handle, mz, tolerance, level) as string,
     );

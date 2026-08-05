@@ -35,6 +35,7 @@ use crate::utilities::{
     calculate_eic::{
         EicOptions, EicReader, FastError, ScanQuery, TimeUnit,
         calculate_eic as calculate_eic_dispatcher, get_scans as get_scans_rs, plan_eic_ranges,
+        plan_scan_ranges,
     },
     find_feature::{FindFeatureOptions, find_feature as find_feature_rs},
     find_features::{FindFeaturesOptions, find_features as find_features_rs},
@@ -1171,6 +1172,123 @@ pub unsafe extern "C" fn plan_eic(
     }
 }
 
+fn scan_query_from_parts(query_type: u8, from_value: f64, to_value: f64) -> Option<ScanQuery> {
+    match query_type {
+        0 => {
+            if !from_value.is_finite() || !to_value.is_finite() {
+                return None;
+            }
+            Some(ScanQuery::RtRange(FromTo {
+                from: from_value,
+                to: to_value,
+            }))
+        }
+        1 => {
+            if !from_value.is_finite() {
+                return None;
+            }
+            Some(ScanQuery::ClosestRt(from_value))
+        }
+        2 => {
+            if !from_value.is_finite() || !to_value.is_finite() {
+                return None;
+            }
+            Some(ScanQuery::MzRange(FromTo {
+                from: from_value,
+                to: to_value,
+            }))
+        }
+        3 => {
+            if !from_value.is_finite() || from_value <= 0.0 {
+                return None;
+            }
+            Some(ScanQuery::ClosestMz(from_value))
+        }
+        _ => None,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn plan_scans(
+    h: *mut ParsedFile,
+    query_type: u8,
+    from_value: f64,
+    to_value: f64,
+    level: u8,
+    out: *mut Buf,
+) -> c_int {
+    if h.is_null() || out.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+    let query = match scan_query_from_parts(query_type, from_value, to_value) {
+        Some(query) => query,
+        None => return ERR_INVALID_ARGS,
+    };
+
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let file = unsafe { &mut *h };
+        let ranges = match file {
+            ParsedFile::Lazy(ion) => {
+                plan_scan_ranges(ion.as_mut(), query, TimeUnit::Minutes, level)
+            }
+            ParsedFile::Remote(ion) => {
+                plan_scan_ranges(ion.as_mut(), query, TimeUnit::Minutes, level)
+            }
+            ParsedFile::Full(_) => Err(FastError::UnsupportedBackend),
+        }
+        .map_err(fast_error_to_code)?;
+
+        let bytes = pack_byte_ranges(&ranges);
+        write_buf(out, bytes);
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn plan_image(
+    h: *mut ParsedFile,
+    target: f64,
+    tolerance: f64,
+    level: u8,
+    out: *mut Buf,
+) -> c_int {
+    if h.is_null() || out.is_null() {
+        return ERR_INVALID_ARGS;
+    }
+
+    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
+        let file = unsafe { &mut *h };
+        let ranges = match file {
+            ParsedFile::Lazy(ion) => crate::utilities::ion_image::plan_ion_image_ranges(
+                ion.as_mut(),
+                target,
+                tolerance,
+                level,
+            ),
+            ParsedFile::Remote(ion) => crate::utilities::ion_image::plan_ion_image_ranges(
+                ion.as_mut(),
+                target,
+                tolerance,
+                level,
+            ),
+            ParsedFile::Full(_) => Err(FastError::UnsupportedBackend),
+        }
+        .map_err(fast_error_to_code)?;
+
+        let bytes = pack_byte_ranges(&ranges);
+        write_buf(out, bytes);
+        Ok(())
+    })) {
+        Ok(Ok(())) => OK,
+        Ok(Err(code)) => code,
+        Err(_) => ERR_PANIC,
+    }
+}
+
 /// Get scans by query and write the result to `out`.
 ///
 /// `query_type`: 0=RtRange, 1=ClosestRt, 2=MzRange, 3=ClosestMz.
@@ -1192,38 +1310,9 @@ pub unsafe extern "C" fn get_scans(
     if h.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
-    let query = match query_type {
-        0 => {
-            if !from_value.is_finite() || !to_value.is_finite() {
-                return ERR_INVALID_ARGS;
-            }
-            ScanQuery::RtRange(FromTo {
-                from: from_value,
-                to: to_value,
-            })
-        }
-        1 => {
-            if !from_value.is_finite() {
-                return ERR_INVALID_ARGS;
-            }
-            ScanQuery::ClosestRt(from_value)
-        }
-        2 => {
-            if !from_value.is_finite() || !to_value.is_finite() {
-                return ERR_INVALID_ARGS;
-            }
-            ScanQuery::MzRange(FromTo {
-                from: from_value,
-                to: to_value,
-            })
-        }
-        3 => {
-            if !from_value.is_finite() || from_value <= 0.0 {
-                return ERR_INVALID_ARGS;
-            }
-            ScanQuery::ClosestMz(from_value)
-        }
-        _ => return ERR_INVALID_ARGS,
+    let query = match scan_query_from_parts(query_type, from_value, to_value) {
+        Some(query) => query,
+        None => return ERR_INVALID_ARGS,
     };
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let (_, scans) = get_scans_rs(unsafe { &mut *h }, query, TimeUnit::Minutes, level);
@@ -2562,6 +2651,172 @@ mod tests {
             open_serving_only(planned, bytes),
             "plan_open did not list every range the open needs"
         );
+    }
+
+    fn scan_queries() -> Vec<(&'static str, ScanQuery)> {
+        vec![
+            (
+                "rt_range",
+                ScanQuery::RtRange(FromTo {
+                    from: 0.0,
+                    to: 10.0,
+                }),
+            ),
+            ("closest_rt", ScanQuery::ClosestRt(5.0)),
+            (
+                "mz_range",
+                ScanQuery::MzRange(FromTo {
+                    from: 0.0,
+                    to: 1000.0,
+                }),
+            ),
+            ("closest_mz", ScanQuery::ClosestMz(500.0)),
+        ]
+    }
+
+    fn open_recording_ion(
+        reader: &Arc<RecordingReader>,
+    ) -> ionic::ion::IonReader {
+        let read_source = reader.clone();
+        ionic::ion::IonReader::open_source(
+            Arc::new(ionic::ion::CallbackSource::new(move |range| {
+                read_range(&*read_source, range)
+            })) as Arc<dyn ionic::ion::ReadBytes>,
+            ReadOptions::default(),
+        )
+        .expect("open_source failed")
+    }
+
+    #[test]
+    fn scan_reads_are_within_plan() {
+        for (name, query) in scan_queries() {
+            let reader = Arc::new(RecordingReader::new(windowed_ion_bytes()));
+            let mut ion = open_recording_ion(&reader);
+
+            let plan = plan_scan_ranges(&mut ion, query, TimeUnit::Minutes, 0)
+                .expect("plan_scan_ranges failed");
+
+            reader.clear_reads();
+            let (_, scans) = get_scans_rs(&mut ion, query, TimeUnit::Minutes, 0);
+            if scans.is_empty() {
+                assert!(
+                    plan.is_empty(),
+                    "{name}: nothing was loaded but the plan asked for bytes"
+                );
+                continue;
+            }
+            assert!(!plan.is_empty(), "{name}: scans loaded but the plan is empty");
+
+            let compute_reads = reader.recorded();
+            assert!(
+                !compute_reads.is_empty(),
+                "{name}: compute recorded no reads, the check would be vacuous"
+            );
+
+            for (offset, len) in &compute_reads {
+                let contained = plan.iter().any(|range| {
+                    range.offset <= *offset
+                        && offset.saturating_add(*len) <= range.offset + range.length
+                });
+                assert!(
+                    contained,
+                    "{name}: read (offset={offset}, len={len}) is outside every planned range"
+                );
+            }
+        }
+    }
+
+    struct PlanGate {
+        data: Vec<u8>,
+        allowed: std::sync::Mutex<Vec<(u64, u64)>>,
+        gated: std::sync::atomic::AtomicBool,
+    }
+
+    impl PlanGate {
+        fn new(data: Vec<u8>) -> Self {
+            Self {
+                data,
+                allowed: std::sync::Mutex::new(Vec::new()),
+                gated: std::sync::atomic::AtomicBool::new(false),
+            }
+        }
+
+        fn allow_only(&self, ranges: Vec<(u64, u64)>) {
+            *self.allowed.lock().unwrap() = ranges;
+            self.gated
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    impl RangeReader for PlanGate {
+        fn read(&self, offset: u64, len: u64, dest: &mut [u8]) -> i32 {
+            if self.gated.load(std::sync::atomic::Ordering::SeqCst) {
+                let allowed = self.allowed.lock().unwrap();
+                let inside = allowed
+                    .iter()
+                    .any(|(start, size)| offset >= *start && offset + len <= start + size);
+                if !inside {
+                    return -1;
+                }
+            }
+            let start = offset as usize;
+            dest[..len as usize].copy_from_slice(&self.data[start..start + len as usize]);
+            0
+        }
+    }
+
+    #[test]
+    fn scans_load_using_only_the_planned_ranges() {
+        for (name, query) in scan_queries() {
+            let bytes = windowed_ion_bytes();
+            let reader = Arc::new(RecordingReader::new(bytes.clone()));
+            let mut ion = open_recording_ion(&reader);
+            let (_, expected) = get_scans_rs(&mut ion, query, TimeUnit::Minutes, 0);
+            if expected.is_empty() {
+                continue;
+            }
+
+            let gate = Arc::new(PlanGate::new(bytes));
+            let read_source = gate.clone();
+            let mut served = ionic::ion::IonReader::open_source(
+                Arc::new(ionic::ion::CallbackSource::new(move |range| {
+                    read_range(&*read_source, range)
+                })) as Arc<dyn ionic::ion::ReadBytes>,
+                ReadOptions::default(),
+            )
+            .expect("open_source failed");
+
+            let plan = plan_scan_ranges(&mut served, query, TimeUnit::Minutes, 0)
+                .expect("plan_scan_ranges failed");
+            gate.allow_only(plan.iter().map(|r| (r.offset, r.length)).collect());
+
+            let (_, got) = get_scans_rs(&mut served, query, TimeUnit::Minutes, 0);
+            assert_eq!(
+                got.len(),
+                expected.len(),
+                "{name}: serving only the planned ranges truncated the result"
+            );
+        }
+    }
+
+    #[test]
+    fn plan_scans_rejects_a_bad_query() {
+        let out = new_buf_out();
+        let handle = open_windowed_ion();
+        assert_eq!(
+            unsafe { plan_scans(handle, 9, 0.0, 10.0, 0, out) },
+            ERR_INVALID_ARGS
+        );
+        assert_eq!(
+            unsafe { plan_scans(std::ptr::null_mut(), 0, 0.0, 10.0, 0, out) },
+            ERR_INVALID_ARGS
+        );
+        assert_eq!(
+            unsafe { plan_scans(handle, 0, 0.0, 10.0, 0, std::ptr::null_mut()) },
+            ERR_INVALID_ARGS
+        );
+        unsafe { free_mzml(handle) };
+        drop_buf_out(out);
     }
 
     fn noisy_signal() -> Vec<f32> {

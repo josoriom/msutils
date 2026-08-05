@@ -321,6 +321,23 @@ def _plan_eic(file: SampleFile, target_mz: float, from_rt: float, to_rt: float,
     ]
 
 
+def _plan_scans(file: SampleFile, query_type: int, from_value: float,
+                to_value: float, level: int) -> list[tuple[int, int]]:
+    buffer = _Buf()
+    _check("plan_scans", file._abi.plan_scans(
+        file.handle,
+        c_uint8(query_type), c_double(from_value), c_double(to_value),
+        c_uint8(level),
+        ctypes.byref(buffer),
+    ))
+    packed = buf_to_bytes(file._abi, buffer)
+    return [
+        (int.from_bytes(packed[i:i + 8], "little"),
+         int.from_bytes(packed[i + 8:i + 16], "little"))
+        for i in range(0, len(packed), 16)
+    ]
+
+
 def parse_ion_remote(url: str, max_cache_size: int = 0) -> SampleFile:
     """Load an ion file over HTTP, reading only the bytes it needs.
 
@@ -744,6 +761,10 @@ def get_scans(
         if not math.isfinite(a) or a <= 0:
             raise ValueError("get_scans: mz must be a positive finite number")
         query_type, b = _QUERY_CLOSEST_MZ, math.nan
+
+    source = getattr(file, "_remote_source", None)
+    if source is not None and abi.plan_scans is not None:
+        source.prefetch(_plan_scans(file, query_type, a, b, level))
 
     buf = _Buf()
     _check("get_scans", abi.get_scans(
