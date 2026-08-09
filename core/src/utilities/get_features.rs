@@ -1,5 +1,6 @@
 use std::{
     cmp::Ordering,
+    collections::HashMap,
     fmt::{Display, Formatter},
     io::Error,
 };
@@ -169,130 +170,252 @@ pub(crate) struct SearchBounds {
     pub(crate) rt_to: f64,
 }
 
-#[derive(Debug)]
-pub(crate) struct MzRtCluster {
-    items: Vec<TaggedFeature>,
-    sorted_mzs: Vec<f64>,
-    sorted_rts: Vec<f64>,
-    pub(crate) cached_median_mz: f64,
-    pub(crate) cached_median_rt: f64,
-}
-
-impl MzRtCluster {
-    pub(crate) fn new(item: TaggedFeature) -> Self {
-        let mz = item.feature.mz;
-        let rt = item.feature.rt;
-        Self {
-            sorted_mzs: vec![mz],
-            sorted_rts: vec![rt],
-            items: vec![item],
-            cached_median_mz: mz,
-            cached_median_rt: rt,
-        }
-    }
-
-    pub(crate) fn push(&mut self, item: TaggedFeature) {
-        let mz = item.feature.mz;
-        let rt = item.feature.rt;
-        let mz_pos = self.sorted_mzs.partition_point(|&v| v < mz);
-        let rt_pos = self.sorted_rts.partition_point(|&v| v < rt);
-        self.sorted_mzs.insert(mz_pos, mz);
-        self.sorted_rts.insert(rt_pos, rt);
-        self.items.push(item);
-        self.cached_median_mz = self.sorted_mzs[self.sorted_mzs.len() / 2];
-        self.cached_median_rt = self.sorted_rts[self.sorted_rts.len() / 2];
-    }
-
-    fn into_items(self) -> Vec<TaggedFeature> {
-        self.items
-    }
-}
-
 impl FeatureClusterer {
     pub(crate) fn cluster(&self, mut tagged: Vec<TaggedFeature>) -> Vec<Cluster> {
-        let by_mz = |a: &TaggedFeature, b: &TaggedFeature| {
-            a.feature
-                .mz
-                .partial_cmp(&b.feature.mz)
-                .unwrap_or(Ordering::Equal)
-        };
+        if tagged.is_empty() {
+            return Vec::new();
+        }
 
         #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-        tagged.par_sort_unstable_by(by_mz);
+        tagged.par_sort_unstable_by(compare_all_fields);
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-        tagged.sort_unstable_by(by_mz);
+        tagged.sort_unstable_by(compare_all_fields);
 
-        let mz_groups = self.group_by_mz(tagged);
+        let channels = self.find_channels(&tagged);
 
         #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-        {
-            mz_groups
-                .into_par_iter()
-                .flat_map_iter(|group| self.subdivide_by_rt(group.into_items()))
-                .filter_map(|growing| self.keep_cluster(growing))
-                .collect()
-        }
-        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
-        {
-            mz_groups
-                .into_iter()
-                .flat_map(|group| self.subdivide_by_rt(group.into_items()))
-                .filter_map(|growing| self.keep_cluster(growing))
-                .collect()
-        }
-    }
-
-    fn keep_cluster(&self, growing: MzRtCluster) -> Option<Cluster> {
-        let med_mz = growing.cached_median_mz;
-        let med_rt = growing.cached_median_rt;
-        let kept: Vec<TaggedFeature> = growing
-            .into_items()
-            .into_iter()
-            .filter(|t| {
-                self.tolerance.are_close_to_ref(t.feature.mz, med_mz)
-                    && (t.feature.rt - med_rt).abs() <= self.rt_tolerance
-            })
+        let groups: Vec<Vec<usize>> = channels
+            .into_par_iter()
+            .flat_map_iter(|channel| self.build_clusters_in_channel(&tagged, channel))
             .collect();
-        if kept.is_empty() { None } else { Some(kept) }
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+        let groups: Vec<Vec<usize>> = channels
+            .into_iter()
+            .flat_map(|channel| self.build_clusters_in_channel(&tagged, channel))
+            .collect();
+
+        let mut slots: Vec<Option<TaggedFeature>> = tagged.into_iter().map(Some).collect();
+        groups
+            .into_iter()
+            .map(|group| {
+                group
+                    .into_iter()
+                    .map(|index| slots[index].take().unwrap())
+                    .collect()
+            })
+            .collect()
     }
 
-    fn group_by_mz(&self, items: Vec<TaggedFeature>) -> Vec<MzRtCluster> {
-        let mut groups: Vec<MzRtCluster> = Vec::new();
-        for item in items {
-            let belongs = groups.last().is_some_and(|g| {
-                self.tolerance
-                    .are_close_to_ref(item.feature.mz, g.cached_median_mz)
-            });
-            if belongs {
-                groups.last_mut().unwrap().push(item);
-            } else {
-                groups.push(MzRtCluster::new(item));
+    fn find_channels(&self, features: &[TaggedFeature]) -> Vec<Vec<usize>> {
+        let mut channels = Vec::new();
+        let mut start = 0;
+        for i in 1..features.len() {
+            let previous_mz = features[i - 1].feature.mz;
+            let current_mz = features[i].feature.mz;
+            if !self.tolerance.are_close_to_ref(current_mz, previous_mz) {
+                channels.append(&mut self.split_by_mass(features, (start..i).collect()));
+                start = i;
             }
         }
-        groups
+        channels.append(&mut self.split_by_mass(features, (start..features.len()).collect()));
+        channels
     }
 
-    fn subdivide_by_rt(&self, group: Vec<TaggedFeature>) -> Vec<MzRtCluster> {
-        let mut rt_sorted = group;
-        rt_sorted.sort_unstable_by(|a, b| {
-            a.feature
-                .rt
-                .partial_cmp(&b.feature.rt)
-                .unwrap_or(Ordering::Equal)
-        });
-        let mut clusters: Vec<MzRtCluster> = Vec::new();
-        for item in rt_sorted {
-            let belongs = clusters
-                .last()
-                .is_some_and(|g| (item.feature.rt - g.cached_median_rt).abs() <= self.rt_tolerance);
-            if belongs {
-                clusters.last_mut().unwrap().push(item);
-            } else {
-                clusters.push(MzRtCluster::new(item));
+    fn build_clusters_in_channel(
+        &self,
+        features: &[TaggedFeature],
+        channel: Vec<usize>,
+    ) -> Vec<Vec<usize>> {
+        let mut clusters = Vec::new();
+        for peak in self.group_by_peak(features, channel) {
+            for part in self.split_until_stable(features, peak) {
+                self.resolve_samples(features, part, &mut clusters);
             }
         }
         clusters
     }
+
+    fn split_by_mass(&self, features: &[TaggedFeature], indices: Vec<usize>) -> Vec<Vec<usize>> {
+        split_at_largest_gap(
+            features,
+            indices,
+            |feature| feature.mz,
+            |value, center| self.tolerance.are_close_to_ref(value, center),
+        )
+    }
+
+    fn split_by_time(&self, features: &[TaggedFeature], indices: Vec<usize>) -> Vec<Vec<usize>> {
+        split_at_largest_gap(
+            features,
+            indices,
+            |feature| feature.rt,
+            |value, center| (value - center).abs() <= self.rt_tolerance,
+        )
+    }
+
+    fn split_until_stable(&self, features: &[TaggedFeature], part: Vec<usize>) -> Vec<Vec<usize>> {
+        let mut parts = vec![part];
+        loop {
+            let count = parts.len();
+            let mut next = Vec::with_capacity(count);
+            for part in parts {
+                for narrowed in self.split_by_mass(features, part) {
+                    next.append(&mut self.split_by_time(features, narrowed));
+                }
+            }
+            if next.len() == count {
+                return next;
+            }
+            parts = next;
+        }
+    }
+
+    fn group_by_peak(&self, features: &[TaggedFeature], mut indices: Vec<usize>) -> Vec<Vec<usize>> {
+        indices.sort_by(|&a, &b| {
+            features[a]
+                .feature
+                .from
+                .total_cmp(&features[b].feature.from)
+                .then_with(|| compare_all_fields(&features[a], &features[b]))
+        });
+        let mut peaks = Vec::new();
+        let mut current: Vec<usize> = Vec::new();
+        let mut open_until = f64::NEG_INFINITY;
+        for index in indices {
+            let start = features[index].feature.from;
+            let end = features[index].feature.to;
+            if current.is_empty() || start < open_until {
+                current.push(index);
+                if end > open_until {
+                    open_until = end;
+                }
+            } else {
+                peaks.push(std::mem::take(&mut current));
+                current.push(index);
+                open_until = end;
+            }
+        }
+        if !current.is_empty() {
+            peaks.push(current);
+        }
+        peaks
+    }
+
+    fn resolve_samples(
+        &self,
+        features: &[TaggedFeature],
+        part: Vec<usize>,
+        clusters: &mut Vec<Vec<usize>>,
+    ) {
+        if part.len() <= 1 {
+            clusters.push(part);
+            return;
+        }
+        let mut by_sample: HashMap<usize, Vec<usize>> = HashMap::new();
+        for &index in &part {
+            by_sample
+                .entry(features[index].sample_index)
+                .or_default()
+                .push(index);
+        }
+        if by_sample.values().all(|group| group.len() == 1) {
+            clusters.push(part);
+            return;
+        }
+        let mut keep = Vec::new();
+        let mut evicted = Vec::new();
+        for (_, mut group) in by_sample {
+            if group.len() == 1 {
+                keep.push(group[0]);
+                continue;
+            }
+            group.sort_by(|&a, &b| {
+                features[b]
+                    .feature
+                    .intensity
+                    .total_cmp(&features[a].feature.intensity)
+                    .then_with(|| compare_all_fields(&features[a], &features[b]))
+            });
+            keep.push(group[0]);
+            evicted.extend_from_slice(&group[1..]);
+        }
+        for part in self.split_until_stable(features, keep) {
+            self.resolve_samples(features, part, clusters);
+        }
+        for peak in self.group_by_peak(features, evicted) {
+            for part in self.split_until_stable(features, peak) {
+                self.resolve_samples(features, part, clusters);
+            }
+        }
+    }
+}
+
+fn compare_all_fields(a: &TaggedFeature, b: &TaggedFeature) -> Ordering {
+    a.feature
+        .mz
+        .total_cmp(&b.feature.mz)
+        .then_with(|| a.feature.rt.total_cmp(&b.feature.rt))
+        .then_with(|| a.feature.from.total_cmp(&b.feature.from))
+        .then_with(|| a.feature.to.total_cmp(&b.feature.to))
+        .then_with(|| a.feature.intensity.total_cmp(&b.feature.intensity))
+        .then_with(|| a.sample_index.cmp(&b.sample_index))
+}
+
+fn split_at_largest_gap(
+    features: &[TaggedFeature],
+    mut indices: Vec<usize>,
+    value_of: impl Fn(&Feature) -> f64,
+    stays_together: impl Fn(f64, f64) -> bool,
+) -> Vec<Vec<usize>> {
+    indices.sort_by(|&a, &b| {
+        value_of(&features[a].feature)
+            .total_cmp(&value_of(&features[b].feature))
+            .then_with(|| compare_all_fields(&features[a], &features[b]))
+    });
+    let mut output = Vec::new();
+    let mut stack = vec![indices];
+    while let Some(mut block) = stack.pop() {
+        if block.len() <= 1 {
+            output.push(block);
+            continue;
+        }
+        let values: Vec<f64> = block
+            .iter()
+            .map(|&index| value_of(&features[index].feature))
+            .collect();
+        let center = median_of_sorted(&values);
+        if values.iter().all(|&value| stays_together(value, center)) {
+            output.push(block);
+            continue;
+        }
+        let cut = largest_gap(&values);
+        let right = block.split_off(cut);
+        stack.push(right);
+        stack.push(block);
+    }
+    output
+}
+
+fn median_of_sorted(values: &[f64]) -> f64 {
+    let middle = values.len() / 2;
+    if values.len() % 2 == 1 {
+        values[middle]
+    } else {
+        0.5 * (values[middle - 1] + values[middle])
+    }
+}
+
+fn largest_gap(values: &[f64]) -> usize {
+    let mut cut = 1;
+    let mut widest = values[1] - values[0];
+    for i in 2..values.len() {
+        let gap = values[i] - values[i - 1];
+        if gap > widest {
+            widest = gap;
+            cut = i;
+        }
+    }
+    cut
 }
 
 #[derive(Clone, Copy)]
@@ -319,9 +442,41 @@ pub fn get_features(
     cores: usize,
 ) -> Result<Vec<ConsensusFeature>, AlignmentError> {
     let datasets = load_sample_files(directory_path)?;
+    let datasets = detect_features_per_sample(datasets, time_window, &feature_config, cores)?;
+    align_samples(datasets, alignment_config, cores)
+}
 
-    let mut datasets = detect_features_per_sample(datasets, time_window, &feature_config, cores)?;
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+pub fn get_features_from_detected(
+    directory_path: &str,
+    mut detected: Vec<(String, Vec<Feature>)>,
+    alignment_config: AlignmentOptions,
+    cores: usize,
+) -> Result<Vec<ConsensusFeature>, AlignmentError> {
+    let sources = load_sample_files(directory_path)?;
+    let mut datasets = Vec::with_capacity(sources.len());
+    for (name, source) in sources {
+        let position = match detected.iter().position(|(given, _)| *given == name) {
+            Some(position) => position,
+            None => {
+                return Err(AlignmentError::Parse {
+                    path: name,
+                    source: "no detected features were given for this sample".to_string(),
+                });
+            }
+        };
+        let (_, features) = detected.swap_remove(position);
+        datasets.push((name, source, features));
+    }
+    align_samples(datasets, alignment_config, cores)
+}
 
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+fn align_samples(
+    mut datasets: Vec<SampleDataset>,
+    alignment_config: AlignmentOptions,
+    cores: usize,
+) -> Result<Vec<ConsensusFeature>, AlignmentError> {
     let clusterer = FeatureClusterer {
         tolerance: alignment_config.mz_tolerance.clone(),
         rt_tolerance: alignment_config.rt_tolerance,
