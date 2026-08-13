@@ -206,6 +206,7 @@ pub fn find_peaks(data: &DataXY, options: Option<FindPeaksOptions>) -> Vec<Peak>
             _ => {}
         }
     }
+    keep_peaks_above_floor(&mut candidates, &data.x, &data.y);
     if candidates.is_empty() {
         return Vec::new();
     }
@@ -644,4 +645,51 @@ fn reframe(data: &DataXY, peak: Peak, from: f64, to: f64) -> Peak {
         n_points: hi - lo + 1,
         ..peak
     }
+}
+
+const MIN_RISE_ABOVE_FLOOR: f64 = 2.0;
+const FLOOR_WINDOW_MINUTES: f64 = 1.5;
+const MIN_FLOOR_POINTS: usize = 8;
+
+fn get_values_around_peak(
+    times: &[f64],
+    values: &[f64],
+    apex: usize,
+    from: usize,
+    to: usize,
+) -> Vec<f64> {
+    let start = times.partition_point(|&time| time < times[apex] - FLOOR_WINDOW_MINUTES);
+    let end = times.partition_point(|&time| time <= times[apex] + FLOOR_WINDOW_MINUTES);
+    (start..end)
+        .filter(|index| *index < from || *index > to)
+        .map(|index| values[index])
+        .filter(|value| value.is_finite())
+        .collect()
+}
+
+fn find_floor(values: &mut [f64]) -> f64 {
+    let quarter = values.len() / 4;
+    values.select_nth_unstable_by(quarter, |left, right| {
+        left.partial_cmp(right).unwrap_or(Ordering::Equal)
+    });
+    values[quarter].max(1.0)
+}
+
+fn rises_above_floor(times: &[f64], values: &[f64], peak: &PeakCandidate) -> bool {
+    let apex = closest_index(times, peak.rt);
+    if apex >= values.len() || peak.from_idx >= values.len() || peak.to_idx >= values.len() {
+        return false;
+    }
+    if !values[apex].is_finite() {
+        return false;
+    }
+    let mut around = get_values_around_peak(times, values, apex, peak.from_idx, peak.to_idx);
+    if around.len() < MIN_FLOOR_POINTS {
+        return true;
+    }
+    values[apex] / find_floor(&mut around) >= MIN_RISE_ABOVE_FLOOR
+}
+
+fn keep_peaks_above_floor(peaks: &mut Vec<PeakCandidate>, times: &[f64], values: &[f64]) {
+    peaks.retain(|peak| rises_above_floor(times, values, peak));
 }
