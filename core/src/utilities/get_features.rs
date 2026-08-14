@@ -894,15 +894,8 @@ pub(crate) fn resolve_cluster(
             .collect()
     };
 
-    let feature = filled.map(|mut feature| {
-        if let Some(sample_mz) = apex {
-            feature.mz = sample_mz.mz;
-        }
-        feature
-    });
-
     Resolved {
-        feature,
+        feature: filled,
         apex,
         masses: (!masses.is_empty()).then_some(masses),
     }

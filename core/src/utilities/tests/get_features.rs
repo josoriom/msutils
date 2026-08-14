@@ -1061,7 +1061,7 @@ mod tests {
         );
         assert!(
             (feature.mz - peak_mz).abs() < 1e-9,
-            "filled feature mz should be set from the apex"
+            "filled feature mz should keep the slot target"
         );
         let apex = resolved.apex.expect("apex measured for the filled peak");
         assert!((apex.mz - peak_mz).abs() < 1e-9);
