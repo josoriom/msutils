@@ -6,16 +6,16 @@
     "max_supported": 1
   },
   "description": "feat: release v0.1.0",
-  "git": "f6017be2c4ef89085d4899895ae612485b913484",
+  "git": "df6f0341bd7a9e480683f3ced3682f1c49216e5f",
   "ionic": "d7253ebf63dac5a9b435f203dcd9f84ae9757019",
-  "source": "sha256:e11d995ff743553cbefca44ab3cafa367129f74047cd4beb4e830cbeae66676d",
+  "source": "sha256:179244aa382deb12030992d9eca8b231e48d72683e9a2ef98801ff0665416b4b",
   "files": {
     "include/quantion.h": "sha256:485ac51650bb6b9ffbcc3e559a859db8499b0af595f58cc9b588ec283602b6b3",
-    "linux-arm64/libquantion.so": "sha256:18612bca6824404d766d19cd234adb1c328bfd87b1a02528334794bf94d28e0f",
-    "linux-x86_64/libquantion.so": "sha256:25d14062cc2c4c90e997cd3fb75ef11ac2ccdf3647aecb47ae728b5b32a775c6",
-    "macos-arm64/libquantion.dylib": "sha256:3edf85fc49e7ac89b7356ec959183f58c844e036974f7f4e999f461585cef311",
-    "macos-x86_64/libquantion.dylib": "sha256:37c14f9b97c6761e346bf78c230df7ec4a3e72fe57e0b11e36071f5d3624d32a",
+    "linux-arm64/libquantion.so": "sha256:7c11fb1b003396ff5c9bbf2f776f7765907164b304d5d6766b54b077801d9744",
+    "linux-x86_64/libquantion.so": "sha256:faa8f88d35cb7b4a1db10cc531e3326eb6931e31e72d91e54961a836882df152",
+    "macos-arm64/libquantion.dylib": "sha256:0429ef6b3e67d2ebadff96ba313185cf30fca03a4f1c4f9f25c14657de069bc1",
+    "macos-x86_64/libquantion.dylib": "sha256:84d4ff619edf86f7ba086e0b8e54090ea201fd7e23a95ec4b4e34014496a76e0",
     "wasm/quantion.wasm": "sha256:9c70bcf026521a9cd955ff600a127ac83b8267bc5fa12179707919a4c5cddf84",
-    "windows-x86_64/libquantion.dll": "sha256:7f84e138c48f660e445693b9a741af7c85dd87995d69e9c9184f49b32d61eb26"
+    "windows-x86_64/libquantion.dll": "sha256:4c2ed2d945b61c0659588b33e0b8511c3c76cf8ffdc526c3d0bafdda8453fff5"
   }
 }
