@@ -215,7 +215,7 @@ LARGEST_GAP = 131072
 
 
 def gap_for(total: int) -> int:
-    return LARGEST_GAP
+    return min(LARGEST_GAP, total // 8)
 
 
 class _RemoteSource:

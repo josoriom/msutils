@@ -11,8 +11,10 @@ MZ_TOLERANCE = 0.005
 FILE_TOTAL = 34241
 HEADER_BYTES = 1024
 
-BYTES_TO_OPEN = FILE_TOTAL + HEADER_BYTES
-REQUESTS_TO_OPEN = 2
+BYTES_TO_OPEN = 28326
+BYTES_NEVER_FETCHED = FILE_TOTAL - BYTES_TO_OPEN
+REQUESTS_TO_OPEN = 3
+CACHE_AFTER_OPEN = [(0, HEADER_BYTES), (0, 2822), (9761, 24480)]
 BYTES_FOR_ONE_QUERY = 0
 REQUESTS_FOR_ONE_QUERY = 0
 
@@ -114,20 +116,19 @@ class RemoteReading(unittest.TestCase):
         self.open_remote()
         self.assertEqual(self.server.bytes_sent, BYTES_TO_OPEN)
 
-    def test_opening_takes_two_requests(self):
+    def test_opening_takes_three_requests(self):
         self.open_remote()
         self.assertEqual(self.server.requests, REQUESTS_TO_OPEN)
 
-    def test_opening_holds_the_whole_file(self):
-        remote = self.open_remote()
-        source = remote._remote_source
-        self.assertIsNotNone(source.read_from_cache(0, FILE_TOTAL))
+    def test_opening_leaves_part_of_the_file_unfetched(self):
+        self.open_remote()
+        self.assertLess(self.server.bytes_sent, FILE_TOTAL)
+        self.assertEqual(FILE_TOTAL - self.server.bytes_sent, BYTES_NEVER_FETCHED)
 
-    def test_opening_reads_the_header_twice(self):
+    def test_opening_caches_the_header_and_the_planned_spans(self):
         remote = self.open_remote()
         source = remote._remote_source
-        starts_at_zero = sorted(key for key in source.cache if key[0] == 0)
-        self.assertEqual(starts_at_zero, [(0, HEADER_BYTES), (0, FILE_TOTAL)])
+        self.assertEqual(sorted(source.cache), CACHE_AFTER_OPEN)
 
     def test_one_query_takes_no_request(self):
         remote = self.open_remote()

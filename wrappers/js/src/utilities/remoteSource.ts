@@ -11,9 +11,16 @@ export type RemoteSource = {
 
 export const HEADER_BYTES = 1024n;
 
-const GAP = 131072n;
+const LARGEST_GAP = 131072n;
+
+function gapFor(total: bigint): bigint {
+  const eighth = total / 8n;
+  return eighth < LARGEST_GAP ? eighth : LARGEST_GAP;
+}
 
 const MAX_RANGES_PER_REQUEST = 100;
+
+const MULTIPART_MIN_RANGES = 8;
 
 const PART_SIZE = 16n * 1024n * 1024n;
 
@@ -63,7 +70,7 @@ export async function fetchRange(
 
 export function coalesceRanges(
   ranges: ByteRangeResult[],
-  gap: bigint = GAP,
+  gap: bigint = LARGEST_GAP,
 ): ByteRangeResult[] {
   if (ranges.length === 0) return [];
 
@@ -251,7 +258,7 @@ async function fetchEachRange(
   source: RemoteSource,
   ranges: ByteRangeResult[],
 ): Promise<void> {
-  const wanted = coalesceRanges(ranges, GAP);
+  const wanted = coalesceRanges(ranges, gapFor(source.total));
   await Promise.all(
     wanted.map(async (range) => {
       const bytes =
@@ -270,9 +277,7 @@ export async function prefetchRanges(
   const missing = source.cache.missing(ranges);
   if (missing.length === 0) return;
 
-  // Gap 0 merges only ranges that touch or overlap, so nothing unwanted is
-  // requested; wider coalescing is left to the one-request-per-range fallback.
-  const coalesced = coalesceRanges(missing, 0n);
+  const coalesced = coalesceRanges(missing, gapFor(source.total));
 
   const large = coalesced.filter((range) => range.length > PART_SIZE);
   await Promise.all(
@@ -290,7 +295,7 @@ export async function prefetchRanges(
     return;
   }
 
-  if (source.multipart !== false) {
+  if (source.multipart !== false && exact.length >= MULTIPART_MIN_RANGES) {
     const batches = chunked(exact, MAX_RANGES_PER_REQUEST);
     const results = await Promise.all(
       batches.map((batch) => fetchRanges(source.url, batch)),

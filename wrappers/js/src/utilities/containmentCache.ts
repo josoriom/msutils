@@ -51,35 +51,7 @@ export class ContainmentCache {
   }
 
   missing(ranges: ByteRange[]): ByteRange[] {
-    const missing: ByteRange[] = [];
-
-    for (const range of ranges) {
-      const target_start = range.offset;
-      const target_end = range.offset + range.length;
-      let current = target_start;
-
-      for (const cached of this.cached) {
-        if (cached.start >= target_end) break;
-
-        if (current < cached.start) {
-          const gap_end = cached.start < target_end ? cached.start : target_end;
-          missing.push({
-            offset: current,
-            length: gap_end - current,
-          });
-        }
-        current = current > cached.end ? current : cached.end;
-      }
-
-      if (current < target_end) {
-        missing.push({
-          offset: current,
-          length: target_end - current,
-        });
-      }
-    }
-
-    return missing;
+    return ranges.filter((range) => !this.has(range));
   }
 
   clear(): void {

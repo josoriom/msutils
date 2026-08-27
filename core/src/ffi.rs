@@ -511,7 +511,16 @@ pub unsafe extern "C" fn parse_ion_path(
     }
 }
 
-const OPEN_GAP: u64 = 131072;
+const LARGEST_OPEN_GAP: u64 = 131072;
+
+fn open_gap_for(ranges: &[ByteRange]) -> u64 {
+    let total = ranges
+        .iter()
+        .map(|range| range.offset + range.length)
+        .max()
+        .unwrap_or(0);
+    LARGEST_OPEN_GAP.min(total / 8)
+}
 
 /// Plan the byte ranges an open needs.
 ///
@@ -531,7 +540,8 @@ pub unsafe extern "C" fn plan_open(
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let header = unsafe { slice::from_raw_parts(header_ptr, header_len) };
         let mut ranges = open_ranges(header).map_err(|_| ERR_FAST_PATH)?;
-        coalesce_byte_ranges(&mut ranges, OPEN_GAP);
+        let gap = open_gap_for(&ranges);
+        coalesce_byte_ranges(&mut ranges, gap);
         let bytes = pack_byte_ranges(&ranges);
         write_buf(out, bytes);
         Ok(())

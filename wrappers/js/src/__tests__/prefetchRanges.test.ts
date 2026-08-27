@@ -113,6 +113,13 @@ function sample(length: number): Uint8Array {
   return data;
 }
 
+function spread(count: number): { offset: bigint; length: bigint }[] {
+  return Array.from({ length: count }, (_, index) => ({
+    offset: BigInt(index * 1024),
+    length: 512n,
+  }));
+}
+
 describe("prefetchRanges", () => {
   const original = globalThis.fetch;
 
@@ -152,15 +159,12 @@ describe("prefetchRanges", () => {
     globalThis.fetch = fetcher as any;
 
     const source = newRemoteSource("http://x/f.ion");
-    await prefetchRanges(source, [
-      { offset: 0n, length: 512n },
-      { offset: 4096n, length: 512n },
-    ]);
+    await prefetchRanges(source, spread(8));
 
     expect(calls.length).toBe(1);
     expect(source.multipart).toBe(true);
     expect(source.cache.read(0n, 512n)).toEqual(data.subarray(0, 512));
-    expect(source.cache.read(4096n, 512n)).toEqual(data.subarray(4096, 4608));
+    expect(source.cache.read(7168n, 512n)).toEqual(data.subarray(7168, 7680));
   });
 
   test("a part genuinely missing a range falls back", async () => {
@@ -169,15 +173,12 @@ describe("prefetchRanges", () => {
     globalThis.fetch = fetcher as any;
 
     const source = newRemoteSource("http://x/f.ion");
-    await prefetchRanges(source, [
-      { offset: 0n, length: 512n },
-      { offset: 4096n, length: 512n },
-    ]);
+    await prefetchRanges(source, spread(8));
 
     expect(source.multipart).toBe(false);
     expect(calls.length).toBeGreaterThan(1);
     expect(source.cache.read(0n, 512n)).toEqual(data.subarray(0, 512));
-    expect(source.cache.read(4096n, 512n)).toEqual(data.subarray(4096, 4608));
+    expect(source.cache.read(7168n, 512n)).toEqual(data.subarray(7168, 7680));
   });
 
   test("a 200 whole-object answer cancels the body and falls back", async () => {
@@ -186,14 +187,11 @@ describe("prefetchRanges", () => {
     globalThis.fetch = fetcher as any;
 
     const source = newRemoteSource("http://x/f.ion");
-    await prefetchRanges(source, [
-      { offset: 0n, length: 512n },
-      { offset: 4096n, length: 512n },
-    ]);
+    await prefetchRanges(source, spread(8));
 
     expect(source.multipart).toBe(false);
     expect(source.cache.read(0n, 512n)).toEqual(data.subarray(0, 512));
-    expect(source.cache.read(4096n, 512n)).toEqual(data.subarray(4096, 4608));
+    expect(source.cache.read(7168n, 512n)).toEqual(data.subarray(7168, 7680));
   });
 
   test("splitByteRanges reads parts by their own Content-Range", () => {
