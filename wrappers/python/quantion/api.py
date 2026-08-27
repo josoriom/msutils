@@ -211,13 +211,11 @@ def parse_ion_path(path, max_cache_size: int = 0) -> SampleFile:
     return SampleFile(ptr, abi)
 
 
-LARGEST_GAP = 65536
+LARGEST_GAP = 131072
 
 
 def gap_for(total: int) -> int:
-    if total <= 0:
-        return LARGEST_GAP
-    return min(LARGEST_GAP, total // 8)
+    return LARGEST_GAP
 
 
 class _RemoteSource:

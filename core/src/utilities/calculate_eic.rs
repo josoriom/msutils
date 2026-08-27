@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, sync::Arc};
 
 use ionic::{
-    ScanSource, ScanSummary,
+    ScanSource, ScanSummary, coalesce_byte_ranges,
     ion::{ByteRange, IonError, IonReader, Range},
     mzml::structs::{CvParam, MzML},
 };
@@ -299,6 +299,28 @@ pub fn read_mz_window(
     }
 }
 
+fn rt_from_minutes(minutes: f64, unit: ionic::TimeUnit) -> f64 {
+    match unit {
+        ionic::TimeUnit::Second => minutes * 60.0,
+        ionic::TimeUnit::Millisecond => minutes * 60_000.0,
+        ionic::TimeUnit::Minute | ionic::TimeUnit::Other => minutes,
+    }
+}
+
+fn rt_bounds_in_file_units(ion: &mut IonReader, from: f64, to: f64) -> Option<Range> {
+    let mut unit = None;
+    ion.for_each_summary(&mut |_, summary| {
+        if unit.is_none() && summary.rt.is_finite() {
+            unit = Some(summary.rt_unit);
+        }
+    });
+    let unit = unit?;
+    Some(Range {
+        from: rt_from_minutes(from, unit),
+        to: rt_from_minutes(to, unit),
+    })
+}
+
 pub fn plan_window_ranges(
     ion: &mut IonReader,
     from: f64,
@@ -307,34 +329,16 @@ pub fn plan_window_ranges(
     mz_to: f64,
 ) -> Result<Vec<ByteRange>, FastError> {
     ion.require_bounds().map_err(FastError::from)?;
-
-    let rt_from = from.min(to);
-    let rt_to = from.max(to);
-
-    let mut scan_indices = Vec::new();
-    ion.for_each_summary(&mut |scan_index, summary| {
-        let summary = scan_in_minutes(summary);
-        if summary.rt >= rt_from && summary.rt <= rt_to && summary.ms_level == MS1_LEVEL {
-            scan_indices.push(scan_index);
-        }
-    });
-
-    let mut ranges = Vec::new();
-    for scan_index in scan_indices {
-        let scan_ranges = ion
-            .byte_ranges(
-                scan_index,
-                Range {
-                    from: mz_from,
-                    to: mz_to,
-                },
-            )
-            .map_err(FastError::from)?;
-        ranges.extend(scan_ranges);
-    }
-
-    sort_and_dedup_ranges(&mut ranges);
-    Ok(ranges)
+    let rt = rt_bounds_in_file_units(ion, from.min(to), from.max(to));
+    ion.eic_byte_ranges(
+        Range {
+            from: mz_from,
+            to: mz_to,
+        },
+        rt,
+        0,
+    )
+    .map_err(FastError::from)
 }
 
 pub fn plan_eic_ranges(
@@ -396,7 +400,7 @@ fn ranges_for_scans(
             .map_err(FastError::from)?;
         ranges.extend(scan_ranges);
     }
-    sort_and_dedup_ranges(&mut ranges);
+    coalesce_byte_ranges(&mut ranges, 0);
     Ok(ranges)
 }
 
@@ -409,16 +413,11 @@ fn ranges_for_first_scan_with_data(
             .byte_ranges(*index, whole_scan_mz_range())
             .map_err(FastError::from)?;
         if !ranges.is_empty() {
-            sort_and_dedup_ranges(&mut ranges);
+            coalesce_byte_ranges(&mut ranges, 0);
             return Ok(ranges);
         }
     }
     Ok(Vec::new())
-}
-
-pub fn sort_and_dedup_ranges(ranges: &mut Vec<ByteRange>) {
-    ranges.sort_unstable_by_key(|range| (range.offset, range.length));
-    ranges.dedup_by_key(|range| (range.offset, range.length));
 }
 
 pub fn calculate_eic(
@@ -564,11 +563,7 @@ fn find_by_rt_range(
     }
 }
 
-fn find_closest_by_rt(
-    source: &mut impl ScanSource,
-    target_rt: f64,
-    ms_level: u8,
-) -> WantedScans {
+fn find_closest_by_rt(source: &mut impl ScanSource, target_rt: f64, ms_level: u8) -> WantedScans {
     let mut by_distance: Vec<(f64, usize, ScanSummary)> = Vec::new();
     source.for_each_summary(&mut |index, summary| {
         let summary = scan_in_minutes(summary);
@@ -586,11 +581,7 @@ fn find_closest_by_rt(
     }
 }
 
-fn find_by_mz_range(
-    source: &mut impl ScanSource,
-    range: FromTo,
-    ms_level: u8,
-) -> WantedScans {
+fn find_by_mz_range(source: &mut impl ScanSource, range: FromTo, ms_level: u8) -> WantedScans {
     let mz_min = range.from.min(range.to);
     let mz_max = range.from.max(range.to);
     let mut scans: Vec<(usize, ScanSummary)> = Vec::new();
@@ -612,11 +603,7 @@ fn find_by_mz_range(
     }
 }
 
-fn find_closest_by_mz(
-    source: &mut impl ScanSource,
-    target_mz: f64,
-    ms_level: u8,
-) -> WantedScans {
+fn find_closest_by_mz(source: &mut impl ScanSource, target_mz: f64, ms_level: u8) -> WantedScans {
     let mut by_distance: Vec<(f64, usize, ScanSummary)> = Vec::new();
     source.for_each_summary(&mut |index, summary| {
         let summary = scan_in_minutes(summary);
@@ -643,9 +630,7 @@ fn sort_by_rt(scans: &mut [(usize, ScanSummary)]) {
     });
 }
 
-fn sort_by_distance(
-    mut by_distance: Vec<(f64, usize, ScanSummary)>,
-) -> Vec<(usize, ScanSummary)> {
+fn sort_by_distance(mut by_distance: Vec<(f64, usize, ScanSummary)>) -> Vec<(usize, ScanSummary)> {
     by_distance.sort_unstable_by(|a, b| {
         a.0.partial_cmp(&b.0)
             .unwrap_or(Ordering::Equal)

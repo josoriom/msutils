@@ -479,11 +479,10 @@ parse_ion_path <- function(path, max_cache_size = 0) {
   bytes
 }
 
-.LARGEST_GAP <- 65536
+.LARGEST_GAP <- 131072
 
 .gap_for <- function(total) {
-  if (total <= 0) return(.LARGEST_GAP)
-  min(.LARGEST_GAP, total / 8)
+  .LARGEST_GAP
 }
 
 .merge_ranges <- function(ranges, gap = .LARGEST_GAP) {

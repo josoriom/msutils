@@ -11,15 +11,13 @@ export type RemoteSource = {
 
 export const HEADER_BYTES = 1024n;
 
-const LARGEST_GAP = 65536n;
+const GAP = 131072n;
 
 const MAX_RANGES_PER_REQUEST = 100;
 
-function gapFor(total: bigint): bigint {
-  if (total <= 0n) return LARGEST_GAP;
-  const eighth = total / 8n;
-  return eighth < LARGEST_GAP ? eighth : LARGEST_GAP;
-}
+const PART_SIZE = 16n * 1024n * 1024n;
+
+const MAX_PARTS_IN_FLIGHT = 16;
 
 export function newRemoteSource(url: string): RemoteSource {
   return { url, cache: new ContainmentCache(), total: 0n, multipart: null };
@@ -65,7 +63,7 @@ export async function fetchRange(
 
 export function coalesceRanges(
   ranges: ByteRangeResult[],
-  gap: bigint = LARGEST_GAP,
+  gap: bigint = GAP,
 ): ByteRangeResult[] {
   if (ranges.length === 0) return [];
 
@@ -91,7 +89,6 @@ export function coalesceRanges(
   result.push(current);
   return result;
 }
-
 
 function indexOfBytes(
   haystack: Uint8Array,
@@ -193,16 +190,53 @@ export async function fetchRanges(
     new Uint8Array(await response.arrayBuffer()),
     boundary,
   );
-  if (parts === null || parts.length !== ranges.length) return null;
+  if (parts === null) return null;
 
-  const byOffset = new Map(parts.map((part) => [part.offset, part.bytes]));
   const ordered: Uint8Array[] = [];
   for (const range of ranges) {
-    const bytes = byOffset.get(range.offset);
-    if (!bytes || BigInt(bytes.length) !== range.length) return null;
-    ordered.push(bytes);
+    const end = range.offset + range.length;
+    const holder = parts.find(
+      (part) =>
+        part.offset <= range.offset &&
+        part.offset + BigInt(part.bytes.length) >= end,
+    );
+    if (!holder) return null;
+    const start = Number(range.offset - holder.offset);
+    ordered.push(holder.bytes.subarray(start, start + Number(range.length)));
   }
   return ordered;
+}
+
+export async function fetchRangeParts(
+  url: string,
+  range: ByteRangeResult,
+): Promise<Uint8Array> {
+  const count = Number((range.length + PART_SIZE - 1n) / PART_SIZE);
+  const bytes = new Uint8Array(Number(range.length));
+  let next = 0;
+
+  while (next < count) {
+    const batch = [];
+    for (
+      let index = next;
+      index < Math.min(next + MAX_PARTS_IN_FLIGHT, count);
+      index++
+    ) {
+      const offset = range.offset + BigInt(index) * PART_SIZE;
+      const length =
+        offset + PART_SIZE > range.offset + range.length
+          ? range.offset + range.length - offset
+          : PART_SIZE;
+      const at = Number(offset - range.offset);
+      batch.push(
+        fetchRange(url, { offset, length }).then((part) => bytes.set(part, at)),
+      );
+    }
+    await Promise.all(batch);
+    next += batch.length;
+  }
+
+  return bytes;
 }
 
 function chunked<T>(items: T[], size: number): T[][] {
@@ -217,10 +251,13 @@ async function fetchEachRange(
   source: RemoteSource,
   ranges: ByteRangeResult[],
 ): Promise<void> {
-  const wanted = coalesceRanges(ranges, gapFor(source.total));
+  const wanted = coalesceRanges(ranges, GAP);
   await Promise.all(
     wanted.map(async (range) => {
-      const bytes = await fetchRange(source.url, range);
+      const bytes =
+        range.length > PART_SIZE
+          ? await fetchRangeParts(source.url, range)
+          : await fetchRange(source.url, range);
       source.cache.add(range, bytes);
     }),
   );
@@ -235,7 +272,18 @@ export async function prefetchRanges(
 
   // Gap 0 merges only ranges that touch or overlap, so nothing unwanted is
   // requested; wider coalescing is left to the one-request-per-range fallback.
-  const exact = coalesceRanges(missing, 0n);
+  const coalesced = coalesceRanges(missing, 0n);
+
+  const large = coalesced.filter((range) => range.length > PART_SIZE);
+  await Promise.all(
+    large.map(async (range) => {
+      const bytes = await fetchRangeParts(source.url, range);
+      source.cache.add(range, bytes);
+    }),
+  );
+
+  const exact = coalesced.filter((range) => range.length <= PART_SIZE);
+  if (exact.length === 0) return;
   if (exact.length === 1) {
     const bytes = await fetchRange(source.url, exact[0]);
     source.cache.add(exact[0], bytes);
@@ -296,7 +344,9 @@ async function fetchTotalByHead(url: string): Promise<bigint> {
 
   const length = response.headers.get("Content-Length") ?? "";
   if (!/^\d+$/.test(length)) {
-    throw new Error(`size request for ${url} returned no usable Content-Length`);
+    throw new Error(
+      `size request for ${url} returned no usable Content-Length`,
+    );
   }
 
   return BigInt(length);
@@ -327,7 +377,11 @@ export async function fetchHeader(source: RemoteSource): Promise<Uint8Array> {
       if (bytes[index] !== SIGNATURE[index]) signed = false;
     }
     if (signed) {
-      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      const view = new DataView(
+        bytes.buffer,
+        bytes.byteOffset,
+        bytes.byteLength,
+      );
       const stored = view.getBigUint64(FILE_SIZE_OFFSET, true);
       if (stored > 0n) totalFromHeader = stored;
     }

@@ -326,7 +326,7 @@ dependencies = [
 [[package]]
 name = "ionic"
 version = "0.1.0"
-source = "git+https://github.com/josoriom/ionic?branch=main#9dd2665d81da347f43b0a6f1dba5f31b9ff637fd"
+source = "git+https://github.com/josoriom/ionic?branch=main#6933785b7394445077acfd91944e7c4be357e9c1"
 dependencies = [
  "base64",
  "bytemuck",

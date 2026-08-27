@@ -1,14 +1,12 @@
 use std::collections::HashMap;
 
 use ionic::{
-    ScanSource, ScanSummary,
+    ScanSource, ScanSummary, coalesce_byte_ranges,
     ion::{ByteRange, IonReader, Range},
 };
 use serde::Serialize;
 
-use super::calculate_eic::{
-    EicReader, FastError, read_mz_window, sort_and_dedup_ranges, summed_intensity_in_window,
-};
+use super::calculate_eic::{EicReader, FastError, read_mz_window, summed_intensity_in_window};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct IonImage {
@@ -129,7 +127,7 @@ fn ranges_for_candidates(
             .map_err(FastError::from)?;
         ranges.extend(scan_ranges);
     }
-    sort_and_dedup_ranges(&mut ranges);
+    coalesce_byte_ranges(&mut ranges, 0);
     Ok(ranges)
 }
 

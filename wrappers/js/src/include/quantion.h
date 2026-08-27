@@ -122,7 +122,7 @@ int parse_ion_path(const char *path_ptr, uintptr_t max_cache_size, struct Parsed
  *
  * # Safety
  * `header_ptr` must point to at least `header_len` readable bytes, and `header_len` must be at
- * least 408 so the total file size can be read.
+ * least 1024 so the header can be parsed.
  */
 int plan_open(const uint8_t *header_ptr, uintptr_t header_len, struct Buf *out);
 

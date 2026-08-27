@@ -15,7 +15,7 @@ use ionic::{
     mzml::MzmlReader,
 };
 use ionic::{
-    ScanSource, ScanSummary, WriteOptions, bin_to_mzml as bin_to_mzml_rs,
+    ScanSource, ScanSummary, WriteOptions, bin_to_mzml as bin_to_mzml_rs, coalesce_byte_ranges,
     ion::{ByteRange, BytesSource, CallbackSource, IonReader, ReadBytes, ReadOptions, open_ranges},
     mzml::structs::MzML,
     parse_mzml as parse_mzml_rs, write_mzml_to_ion,
@@ -511,19 +511,13 @@ pub unsafe extern "C" fn parse_ion_path(
     }
 }
 
-const HEADER_TOTAL_FILE_SIZE_AT: usize = 400;
-const FILE_TRAILER_BYTES: u64 = 8;
-
-fn read_total_file_size(header: &[u8]) -> Option<u64> {
-    let field = header.get(HEADER_TOTAL_FILE_SIZE_AT..HEADER_TOTAL_FILE_SIZE_AT + 8)?;
-    Some(u64::from_le_bytes(field.try_into().ok()?))
-}
+const OPEN_GAP: u64 = 131072;
 
 /// Plan the byte ranges an open needs.
 ///
 /// # Safety
 /// `header_ptr` must point to at least `header_len` readable bytes, and `header_len` must be at
-/// least 408 so the total file size can be read.
+/// least 1024 so the header can be parsed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn plan_open(
     header_ptr: *const u8,
@@ -537,13 +531,7 @@ pub unsafe extern "C" fn plan_open(
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let header = unsafe { slice::from_raw_parts(header_ptr, header_len) };
         let mut ranges = open_ranges(header).map_err(|_| ERR_FAST_PATH)?;
-        let total = read_total_file_size(header).ok_or(ERR_INVALID_ARGS)?;
-        if total > FILE_TRAILER_BYTES {
-            ranges.push(ByteRange {
-                offset: total - FILE_TRAILER_BYTES,
-                length: FILE_TRAILER_BYTES,
-            });
-        }
+        coalesce_byte_ranges(&mut ranges, OPEN_GAP);
         let bytes = pack_byte_ranges(&ranges);
         write_buf(out, bytes);
         Ok(())
@@ -2015,6 +2003,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::utilities::calculate_eic::plan_window_ranges;
 
     struct FakeReader {
         data: Vec<u8>,
@@ -2643,6 +2632,134 @@ mod tests {
         );
     }
 
+    fn spectrum_in_seconds(index: usize, rt: f64) -> Spectrum {
+        let mut spectrum = spectrum(index, rt);
+        spectrum.scan_list = Some(ScanList {
+            count: Some(1),
+            scans: vec![Scan {
+                cv_params: vec![cv_param_with_unit(
+                    "MS:1000016",
+                    &rt.to_string(),
+                    "UO:0000010",
+                )],
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        spectrum
+    }
+
+    fn ion_in_seconds() -> Vec<u8> {
+        let mzml = MzML {
+            run: Run {
+                id: "test".to_string(),
+                spectrum_list: Some(SpectrumList {
+                    count: Some(3),
+                    spectra: vec![
+                        spectrum_in_seconds(0, 60.0),
+                        spectrum_in_seconds(1, 120.0),
+                        spectrum_in_seconds(2, 180.0),
+                    ],
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let options = WriteOptions {
+            compression_level: 0,
+            force_f32: false,
+            block_size: ION_BLOCK_SIZE_BYTES,
+            parallel: true,
+            section_storage: SectionStorage::Memory,
+            mz_window: DEFAULT_MZ_WINDOW,
+        };
+        let mut bytes = Vec::new();
+        write_mzml_to_ion(&mzml, options, &mut bytes).expect("ion encode should succeed");
+        bytes
+    }
+
+    fn reader_for(bytes: Vec<u8>) -> IonReader {
+        let bytes_arc = Arc::from(bytes.into_boxed_slice());
+        IonReader::open_source(
+            Arc::new(ionic::ion::BytesSource::new(bytes_arc)) as Arc<dyn ionic::ion::ReadBytes>,
+            ReadOptions::default(),
+        )
+        .expect("open_source failed")
+    }
+
+    #[test]
+    fn plan_window_ranges_is_single_range_on_new_files() {
+        let mut ion = reader_for(windowed_ion_bytes());
+        let plan = plan_window_ranges(&mut ion, 0.0, 10.0, 499.0, 501.0)
+            .expect("plan_window_ranges failed");
+        assert_eq!(
+            plan.len(),
+            1,
+            "window-major plan should be one run: {plan:?}"
+        );
+    }
+
+    #[test]
+    fn plan_window_ranges_converts_rt_units() {
+        let mut ion = reader_for(ion_in_seconds());
+        let from_minutes =
+            plan_window_ranges(&mut ion, 1.0, 3.0, 499.0, 501.0).expect("minute plan failed");
+        let from_seconds = ion
+            .eic_byte_ranges(
+                ionic::ion::Range {
+                    from: 499.0,
+                    to: 501.0,
+                },
+                Some(ionic::ion::Range {
+                    from: 60.0,
+                    to: 180.0,
+                }),
+                0,
+            )
+            .expect("second plan failed");
+        assert!(!from_minutes.is_empty());
+        assert_eq!(
+            from_minutes
+                .iter()
+                .map(|r| (r.offset, r.length))
+                .collect::<Vec<_>>(),
+            from_seconds
+                .iter()
+                .map(|r| (r.offset, r.length))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    fn covers(planned: &[(u64, u64)], range: &ionic::ion::ByteRange) -> bool {
+        planned.iter().any(|(offset, length)| {
+            *offset <= range.offset && offset + length >= range.offset + range.length
+        })
+    }
+
+    #[test]
+    fn plan_open_coalesces() {
+        let small = windowed_ion_bytes();
+        let planned = planned_ranges_for(&small);
+        assert_eq!(
+            planned,
+            vec![(0, small.len() as u64)],
+            "a file under the open gap collapses to one range"
+        );
+        for range in open_ranges(&small[..1024]).expect("open_ranges") {
+            assert!(covers(&planned, &range), "{range:?} is not covered");
+        }
+
+        let large = std::fs::read("tests/fixtures/test.ion").expect("fixture");
+        let planned = planned_ranges_for(&large);
+        assert_eq!(planned.len(), 2, "expected header and tail: {planned:?}");
+        assert_eq!(planned[0], (0, 1024));
+        assert_eq!(planned[1].0 + planned[1].1, large.len() as u64);
+        for range in open_ranges(&large[..1024]).expect("open_ranges") {
+            assert!(covers(&planned, &range), "{range:?} is not covered");
+        }
+    }
+
     #[test]
     fn open_succeeds_using_only_the_ranges_plan_open_asked_for() {
         let bytes = windowed_ion_bytes();
@@ -2674,9 +2791,7 @@ mod tests {
         ]
     }
 
-    fn open_recording_ion(
-        reader: &Arc<RecordingReader>,
-    ) -> ionic::ion::IonReader {
+    fn open_recording_ion(reader: &Arc<RecordingReader>) -> ionic::ion::IonReader {
         let read_source = reader.clone();
         ionic::ion::IonReader::open_source(
             Arc::new(ionic::ion::CallbackSource::new(move |range| {
@@ -2705,7 +2820,10 @@ mod tests {
                 );
                 continue;
             }
-            assert!(!plan.is_empty(), "{name}: scans loaded but the plan is empty");
+            assert!(
+                !plan.is_empty(),
+                "{name}: scans loaded but the plan is empty"
+            );
 
             let compute_reads = reader.recorded();
             assert!(
@@ -2743,8 +2861,7 @@ mod tests {
 
         fn allow_only(&self, ranges: Vec<(u64, u64)>) {
             *self.allowed.lock().unwrap() = ranges;
-            self.gated
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.gated.store(true, std::sync::atomic::Ordering::SeqCst);
         }
     }
 

@@ -15,18 +15,13 @@ source_over_file <- function(path) {
   source
 }
 
-test_that("the gap stays at its largest while the total size is unknown", {
+test_that("the gap is the same constant whatever the total size is", {
   skip_if_not_installed("quantion")
 
-  expect_identical(quantion:::.gap_for(0), 65536)
-  expect_identical(quantion:::.gap_for(-1), 65536)
-})
-
-test_that("the gap follows the total size the plan reports", {
-  skip_if_not_installed("quantion")
-
-  expect_identical(quantion:::.gap_for(80000), 10000)
-  expect_identical(quantion:::.gap_for(8e9), 65536)
+  expect_identical(quantion:::.gap_for(0), 131072)
+  expect_identical(quantion:::.gap_for(-1), 131072)
+  expect_identical(quantion:::.gap_for(80000), 131072)
+  expect_identical(quantion:::.gap_for(8e9), 131072)
 })
 
 test_that("merging drops the ranges that ask for no bytes", {
