@@ -128,7 +128,7 @@ test_that("every block a remote sample holds sits inside the file", {
   })
 })
 
-test_that("an extracted ion chromatogram brings in the bytes it still needs", {
+test_that("an extracted ion chromatogram needs no bytes the open did not bring in", {
   skip_if_not_installed("quantion")
   skip_if_not_installed("callr")
   skip_if(!nzchar(sample_file), "no api.ion sample next to the package")
@@ -142,7 +142,7 @@ test_that("an extracted ion chromatogram brings in the bytes it still needs", {
 
     expect_named(eic, c("x", "y"))
     expect_gt(length(eic$x), 0)
-    expect_gt(length(source$held), held_before)
+    expect_length(source$held, held_before)
   })
 })
 
