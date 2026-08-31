@@ -16,5 +16,5 @@ ion_to_mzml(
 A character string with valid mzML content.
 }
 \seealso{
-\code{\link{ion_to_df}()}, \code{\link{ion_to_json}()}, \code{\link{parse_ion}()}
+\code{\link{parse_ion}()}, \code{\link{parse_mzml}()}
 }
