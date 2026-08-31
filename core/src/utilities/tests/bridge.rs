@@ -179,6 +179,43 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn test_free_contract_requires_align_one_bytes() {
+        assert_eq!(
+            std::mem::align_of::<u8>(),
+            1,
+            "free_ rebuilds a Vec<u8>, so the payload element must stay align one"
+        );
+        let bytes = build_two_scans();
+        assert_eq!(
+            bytes.len() % 8,
+            0,
+            "the total is padded to eight so trailing sections stay legal"
+        );
+    }
+
+    #[test]
+    fn test_readers_never_need_an_aligned_machine_address() {
+        let bytes = build_two_scans();
+        let mut shifted = vec![0u8; bytes.len() + 1];
+        shifted[1..].copy_from_slice(&bytes);
+        let odd = &shifted[1..];
+
+        assert_ne!(
+            odd.as_ptr() as usize % 8,
+            0,
+            "this copy must sit on an odd address to be worth testing"
+        );
+        assert_eq!(read_u32(odd, 0), QUANTION_BRIDGE_MAGIC);
+        assert_eq!(read_u64(odd, 16), odd.len() as u64);
+        assert_eq!(
+            read_f64_section(odd, QUANTION_SECTION_RT),
+            vec![0.5, 1.5],
+            "every reader copies bytes, so the machine address never matters"
+        );
+    }
+
     #[test]
     fn test_section_ids_never_collide_across_kinds() {
         let scans = [

@@ -101,8 +101,8 @@ get_peak <- function(
     allow_overlap=allow_overlap, min_snr=min_snr, min_r2=min_r2, shape=shape,
     kernel_size=kernel_size
   ) else NULL
-  out_json <- .Call("C_get_peak", as.numeric(x), as.numeric(y), as.numeric(rt), as.numeric(range), opt, PACKAGE="quantion")
-  out_json
+  rows <- .Call("C_get_peak", as.numeric(x), as.numeric(y), as.numeric(rt), as.numeric(range), opt, PACKAGE="quantion")
+  if (nrow(rows) == 0) NULL else as.list(rows[1, ])
 }
 
 get_peaks_from_eic <- function(
@@ -289,11 +289,11 @@ find_noise_level <- function(y) .Call("C_find_noise_level", as.numeric(y), PACKA
 
 fit_peak <- function(x, y, rt, intensity, shape = "emg") {
   stopifnot(is.numeric(x), is.numeric(y), length(x) == length(y), length(x) >= 5)
-  out_json <- .Call("C_fit_peak",
+  rows <- .Call("C_fit_peak",
         as.numeric(x), as.numeric(y),
         as.numeric(rt), as.numeric(intensity), .shape_code(shape),
         PACKAGE="quantion")
-  out_json
+  if (nrow(rows) == 0) NULL else as.list(rows[1, ])
 }
 
 draw_peak <- function(x, params) {

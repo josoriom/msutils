@@ -199,7 +199,6 @@ class WasmHeap {
     return data;
   }
 
-
   readBridgeFromSlot(slotPtr: number): ArrayBuffer {
     const { ptr, len } = this.readOutputSlot(slotPtr);
     const bytes = this.copyOutAndFree(ptr, len);
@@ -213,6 +212,34 @@ class WasmHeap {
 
   allocPermanent(size: number): number {
     return this.alloc(size);
+  }
+}
+
+class TrapGuard {
+  private trapped = false;
+
+  get isTrapped(): boolean {
+    return this.trapped;
+  }
+
+  watch<T extends Function>(call: T): T {
+    const guard = this;
+    return function (this: unknown, ...args: unknown[]) {
+      if (guard.trapped) {
+        throw new Error(
+          "quantion: this WASM instance trapped earlier and cannot be used; load it again",
+        );
+      }
+      try {
+        return (call as unknown as (...rest: unknown[]) => unknown).apply(
+          this,
+          args,
+        );
+      } catch (reason) {
+        if (reason instanceof WebAssembly.RuntimeError) guard.trapped = true;
+        throw reason;
+      }
+    } as unknown as T;
   }
 }
 
@@ -391,6 +418,8 @@ class WasmExports {
   readonly imageFinish: ((session: number, outBuf: number) => number) | null;
   readonly imageFree: ((session: number) => void) | null;
 
+  readonly guard = new TrapGuard();
+
   constructor(instance: WebAssembly.Instance) {
     const ex = instance.exports;
     this.memory = ex.memory as WebAssembly.Memory;
@@ -417,89 +446,109 @@ class WasmExports {
     this.getIonImage = this.resolve(ex, ["get_ion_image"]);
     this.parseIonUrl =
       typeof ex["parse_ion_url"] === "function"
-        ? (ex["parse_ion_url"] as unknown as (
-            sourceId: number,
-            cacheBytes: number,
-            outHandle: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["parse_ion_url"] as unknown as (
+              sourceId: number,
+              cacheBytes: number,
+              outHandle: number,
+            ) => number,
+          )
         : null;
     this.planOpen =
       typeof ex["plan_open"] === "function"
-        ? (ex["plan_open"] as unknown as (
-            headerPtr: number,
-            headerLen: number,
-            outBuf: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["plan_open"] as unknown as (
+              headerPtr: number,
+              headerLen: number,
+              outBuf: number,
+            ) => number,
+          )
         : null;
     this.planEic =
       typeof ex["plan_eic"] === "function"
-        ? (ex["plan_eic"] as unknown as (
-            handle: number,
-            target: number,
-            from: number,
-            to: number,
-            ppm: number,
-            mzTol: number,
-            outBuf: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["plan_eic"] as unknown as (
+              handle: number,
+              target: number,
+              from: number,
+              to: number,
+              ppm: number,
+              mzTol: number,
+              outBuf: number,
+            ) => number,
+          )
         : null;
     this.planScans =
       typeof ex["plan_scans"] === "function"
-        ? (ex["plan_scans"] as unknown as (
-            handle: number,
-            queryType: number,
-            from: number,
-            to: number,
-            level: number,
-            outBuf: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["plan_scans"] as unknown as (
+              handle: number,
+              queryType: number,
+              from: number,
+              to: number,
+              level: number,
+              outBuf: number,
+            ) => number,
+          )
         : null;
     this.imageBegin =
       typeof ex["image_begin"] === "function"
-        ? (ex["image_begin"] as unknown as (
-            handle: number,
-            mz: number,
-            tolerance: number,
-            level: number,
-            outSession: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["image_begin"] as unknown as (
+              handle: number,
+              mz: number,
+              tolerance: number,
+              level: number,
+              outSession: number,
+            ) => number,
+          )
         : null;
     this.imageScanCount =
       typeof ex["image_scan_count"] === "function"
-        ? (ex["image_scan_count"] as unknown as (
-            session: number,
-            outCount: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["image_scan_count"] as unknown as (
+              session: number,
+              outCount: number,
+            ) => number,
+          )
         : null;
     this.imageRanges =
       typeof ex["image_ranges"] === "function"
-        ? (ex["image_ranges"] as unknown as (
-            handle: number,
-            session: number,
-            from: number,
-            count: number,
-            outBuf: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["image_ranges"] as unknown as (
+              handle: number,
+              session: number,
+              from: number,
+              count: number,
+              outBuf: number,
+            ) => number,
+          )
         : null;
     this.imageFold =
       typeof ex["image_fold"] === "function"
-        ? (ex["image_fold"] as unknown as (
-            handle: number,
-            session: number,
-            from: number,
-            count: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["image_fold"] as unknown as (
+              handle: number,
+              session: number,
+              from: number,
+              count: number,
+            ) => number,
+          )
         : null;
     this.imageFinish =
       typeof ex["image_finish"] === "function"
-        ? (ex["image_finish"] as unknown as (
-            session: number,
-            outBuf: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["image_finish"] as unknown as (
+              session: number,
+              outBuf: number,
+            ) => number,
+          )
         : null;
     this.imageFree =
       typeof ex["image_free"] === "function"
-        ? (ex["image_free"] as unknown as (session: number) => void)
+        ? this.guard.watch(
+            ex["image_free"] as unknown as (session: number) => void,
+          )
         : null;
   }
 
@@ -509,7 +558,7 @@ class WasmExports {
   ): T {
     for (const name of names)
       if (typeof exports[name] === "function")
-        return exports[name] as unknown as T;
+        return this.guard.watch(exports[name] as unknown as T);
     throw new Error(
       `WasmExports: none of [${names.join(", ")}] found in WASM exports`,
     );
@@ -844,7 +893,6 @@ class WasmApi {
       }
     }
   }
-
 
   fileToMzml(handle: number): string {
     const rc = this.fn.binToMzml(handle, this.textOutputSlot);
@@ -1393,7 +1441,6 @@ export class WasmBackend implements Backend {
   freeFile(handle: FileHandle): void {
     this.getApi().freeRaw(handle as number);
   }
-
 
   fileToMzml(handle: FileHandle): string {
     return this.getApi().fileToMzml(handle as number);

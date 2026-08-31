@@ -559,7 +559,8 @@ def get_peak(
         _as_opts_ptr(peak_options),
         ctypes.byref(buf),
     ))
-    return buf_to_records(abi, buf)
+    rows = buf_to_records(abi, buf)
+    return rows[0] if rows else {}
 
 
 def _shape_code(shape: str) -> int:
@@ -608,7 +609,8 @@ def fit_peak(
         c_int32(_shape_code(shape)),
         ctypes.byref(buf),
     ))
-    return buf_to_records(abi, buf)
+    rows = buf_to_records(abi, buf)
+    return rows[0] if rows else None
 
 
 def draw_peak(x: Sequence, params: Dict) -> np.ndarray:

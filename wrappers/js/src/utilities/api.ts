@@ -285,7 +285,8 @@ export function getPeak(
   if (!Number.isFinite(range) || range <= 0) {
     throw new RangeError("getPeak: range must be a positive finite number");
   }
-  return backend().getPeak(x, y, rt, range, opts);
+  const rows = backend().getPeak(x, y, rt, range, opts);
+  return rows.length ? rows[0] : null;
 }
 
 /**
