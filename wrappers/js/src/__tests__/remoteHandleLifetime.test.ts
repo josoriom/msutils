@@ -75,6 +75,9 @@ const EMPTY_IMAGE = emptyBridge(2, [
 ]);
 
 
+const SAVED_LIB = process.env.QUANTION_LIB;
+process.env.QUANTION_LIB = SAVED_LIB ?? "/quantion/mocked/native/library";
+
 describe.each(modulePaths)("remote handle lifetime (%s)", (_name, modulePath) => {
   const { NodeBackend } = require(modulePath);
 
