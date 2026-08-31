@@ -1,7 +1,5 @@
 useDynLib(quantion, .registration = TRUE)
 
-export(ion_to_df)
-export(ion_to_json)
 export(ion_to_mzml)
 export(mzml_to_ion)
 export(mzml_to_ion_file)

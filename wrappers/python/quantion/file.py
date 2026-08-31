@@ -30,10 +30,6 @@ class SampleFile:
     def __exit__(self, *_: Any) -> None:
         self.dispose()
 
-    def to_json(self) -> Any:
-        from quantion import api as _api
-        return _api._ion_to_json_raw(self)
-
     def to_mzml(self) -> str:
         from quantion import api as _api
         return _api._ion_to_mzml_raw(self)

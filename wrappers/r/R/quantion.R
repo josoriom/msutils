@@ -62,11 +62,6 @@ mzml_to_ion_file <- function(input_path, output_path, level = 12L, f32_compress 
   invisible(output_path)
 }
 
-ion_to_json <- function(bin) {
-  if (typeof(bin) != "externalptr") stop("quantion: expected an external pointer (MzML sample)")
-  .Call("C_ion_to_json", bin, PACKAGE="quantion")
-}
-
 ion_to_mzml <- function(bin) {
   if (typeof(bin) != "externalptr") stop("quantion: expected an external pointer (MzML sample)")
   .Call("C_ion_to_mzml", bin, PACKAGE = "quantion")
@@ -107,7 +102,7 @@ get_peak <- function(
     kernel_size=kernel_size
   ) else NULL
   out_json <- .Call("C_get_peak", as.numeric(x), as.numeric(y), as.numeric(rt), as.numeric(range), opt, PACKAGE="quantion")
-  jsonlite::fromJSON(out_json, simplifyVector=TRUE)
+  out_json
 }
 
 get_peaks_from_eic <- function(
@@ -159,7 +154,7 @@ get_peaks_from_eic <- function(
     as.numeric(from), as.numeric(to), opt, as.integer(cores),
     PACKAGE="quantion"
   )
-  res <- jsonlite::fromJSON(out_json, simplifyVector=TRUE)
+  res <- out_json
   if (!is.data.frame(res)) res <- as.data.frame(res)
   want <- c("id","mz","ort","rt","from","to","intensity","integral")
   present <- intersect(want, names(res)); extras <- setdiff(names(res), present)
@@ -208,7 +203,7 @@ get_peaks_from_chrom <- function(
   out_json <- .Call("C_get_peaks_from_chrom",
     bin, idxs, rts, wins, opt, as.integer(cores), PACKAGE="quantion"
   )
-  df <- jsonlite::fromJSON(out_json, simplifyVector=TRUE)
+  df <- out_json
   if (!is.data.frame(df)) df <- as.data.frame(df)
   if (!"ort" %in% names(df)) stop("internal error: 'ort' missing from result")
   want <- c("index","id","ort","rt","from","to","intensity","integral","total_area")
@@ -271,7 +266,7 @@ find_peaks <- function(
     kernel_size=kernel_size
   ) else NULL
   out_json <- .Call("C_find_peaks", as.numeric(x), as.numeric(y), opt, PACKAGE="quantion")
-  jsonlite::fromJSON(out_json, simplifyVector=TRUE)
+  out_json
 }
 
 calculate_baseline <- function(y, lambda=0L, max_iterations=0L) {
@@ -298,7 +293,7 @@ fit_peak <- function(x, y, rt, intensity, shape = "emg") {
         as.numeric(x), as.numeric(y),
         as.numeric(rt), as.numeric(intensity), .shape_code(shape),
         PACKAGE="quantion")
-  jsonlite::fromJSON(out_json, simplifyVector = TRUE)
+  out_json
 }
 
 draw_peak <- function(x, params) {
@@ -378,7 +373,7 @@ find_feature <- function(
     PACKAGE = "quantion"
   )
 
-  res <- jsonlite::fromJSON(out_json, simplifyVector = TRUE)
+  res <- out_json
   if (!is.data.frame(res)) res <- as.data.frame(res)
   want <- c("id","mz","ort","rt","from","to","intensity","integral")
   present <- intersect(want, names(res)); extras <- setdiff(names(res), present)
@@ -428,7 +423,7 @@ find_features <- function(
     PACKAGE = "quantion"
   )
 
-  df <- jsonlite::fromJSON(out_json, simplifyVector = TRUE)
+  df <- out_json
   if (!is.data.frame(df)) df <- as.data.frame(df)
   want <- c("mz","rt","from","to","intensity","integral","n_points")
   present <- intersect(want, names(df))
@@ -594,15 +589,23 @@ get_scans <- function(bin, rt_from = NULL, rt_to = NULL, rt = NULL,
     .prefetch(source, wanted)
   }
 
-  out_json <- .Call("C_get_scans",
+  scans <- .Call("C_get_scans",
     bin, as.integer(query_type), a, b, as.integer(level),
     PACKAGE = "quantion"
   )
   if (query_type %in% c(.QUERY_CLOSEST_RT, .QUERY_CLOSEST_MZ)) {
-    scans <- jsonlite::fromJSON(out_json, simplifyVector = FALSE)
-    if (length(scans) == 0) NULL else scans[[1]]
+    if (nrow(scans) == 0) {
+      NULL
+    } else {
+      list(
+        rt = scans$rt[[1]],
+        mz = as.list(scans$mz[[1]]),
+        intensity = as.list(scans$intensity[[1]]),
+        metadata = as.list(scans$metadata[1, ])
+      )
+    }
   } else {
-    jsonlite::fromJSON(out_json, simplifyVector = TRUE)
+    scans
   }
 }
 
@@ -653,7 +656,7 @@ get_features <- function(
     PACKAGE = "quantion"
   )
 
-  df <- jsonlite::fromJSON(out_json, simplifyVector = TRUE)
+  df <- out_json
   if (!is.data.frame(df)) df <- as.data.frame(df)
   rownames(df) <- NULL
   df
@@ -681,31 +684,3 @@ get_features <- function(
   cores
 }
 
-ion_to_df <- function(bin) {
-  if (typeof(bin) != "externalptr") stop("quantion: expected an external pointer")
-  x <- jsonlite::fromJSON(ion_to_json(bin), simplifyVector = TRUE)
-  if (!is.null(x$Err)) stop(x$Err)
-
-  root <- if (!is.null(x$Ok)) x$Ok else x
-  run <- root$run
-  if (is.null(run)) return(root)
-
-  process_node <- function(meta_list, data_node) {
-    if (is.null(meta_list$spectra) && is.null(meta_list$chromatograms)) return(data_node)
-    meta <- if (!is.null(meta_list$spectra)) meta_list$spectra else meta_list$chromatograms
-    df <- as.data.frame(meta, stringsAsFactors = FALSE)
-
-    for (col in names(data_node)) {
-      if (is.list(data_node[[col]])) df[[col]] <- I(data_node[[col]])
-      else df[[col]] <- data_node[[col]]
-    }
-    df
-  }
-
-  run$spectra <- process_node(run$spectrum_list, run$spectra)
-  run$chromatograms <- process_node(run$chromatogram_list, run$chromatograms)
-
-  run$spectrum_list <- run$chromatogram_list <- root$spectra <- root$chromatograms <- NULL
-  root$run <- run
-  root
-}

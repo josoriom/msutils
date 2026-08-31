@@ -20,16 +20,11 @@ use ionic::{
     mzml::structs::MzML,
     parse_mzml as parse_mzml_rs, write_mzml_to_ion,
 };
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use rayon::prelude::*;
-use serde::Serialize;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::find_features::MzTolerance;
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::get_features::{AlignmentOptions, get_features as get_features_rs};
-#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-use crate::utilities::parallel::run_with_cores;
 use crate::utilities::{
     calculate_baseline::{BaselineOptions, calculate_baseline as calculate_baseline_rs},
     calculate_eic::{
@@ -41,6 +36,7 @@ use crate::utilities::{
     find_features::{FindFeaturesOptions, find_features as find_features_rs},
     find_noise_level::find_noise_level as find_noise_level_rs,
     find_peaks::{ArtifactFilter, FindPeaksOptions, PeakFilter, find_peaks as find_peaks_rs},
+    bridge::*,
     fit_peak::{
         PeakParameters, PeakSeed, PeakShape, draw_peak as draw_peak_rs, fit_peak as fit_peak_rs,
     },
@@ -48,68 +44,31 @@ use crate::utilities::{
     get_peaks_from_chrom::get_peaks_from_chrom as get_peaks_from_chrom_rs,
     get_peaks_from_eic::get_peaks_from_eic as get_peaks_from_eic_rs,
     mz_estimator::MzEstimatorKind,
-    structs::{DataXY, FromTo, Roi, ser_finite_f64},
+    structs::{DataXY, FromTo, Roi},
 };
 
-#[derive(Serialize)]
-struct EicPeakOut<'a> {
-    id: &'a str,
-    #[serde(serialize_with = "ser_finite_f64")]
-    mz: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
-    ort: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
-    rt: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
-    from: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
-    to: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
-    intensity: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
-    integral: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
-    noise: f64,
-}
-
-#[derive(Serialize)]
 struct ChromPeakRowOut<'a> {
     index: usize,
     id: &'a str,
-    #[serde(serialize_with = "ser_finite_f64")]
     ort: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     rt: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     from: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     to: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     intensity: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     integral: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     total_area: f64,
     timestamp: &'a str,
 }
 
-#[derive(Serialize)]
 struct FoundFeatureOut<'a> {
     id: &'a str,
-    #[serde(serialize_with = "ser_finite_f64")]
     mz: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     rt: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     from: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     to: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     intensity: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     integral: f64,
     n_points: usize,
-    #[serde(serialize_with = "ser_finite_f64")]
     noise: f64,
 }
 
@@ -256,7 +215,7 @@ pub unsafe extern "C" fn parse_ion_source(
         )
         .map_err(|_| ERR_PARSE)?;
 
-        unsafe { *out = Box::into_raw(Box::new(ParsedFile::Remote(Box::new(ion)))) };
+        unsafe { *out = Box::into_raw(Box::new(ParsedFile::new(FileSource::Remote(Box::new(ion))))) };
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -330,21 +289,37 @@ pub unsafe extern "C" fn free_(ptr_raw: *mut u8, size: usize) {
     }
 }
 
-pub enum ParsedFile {
+pub enum FileSource {
     Full(Box<MzML>),
     Lazy(Box<IonReader>),
     Remote(Box<IonReader>),
 }
 
+pub struct ParsedFile {
+    source: FileSource,
+    broken: bool,
+}
+
 impl ParsedFile {
+    pub(crate) fn new(source: FileSource) -> Self {
+        Self {
+            source,
+            broken: false,
+        }
+    }
+
+    fn source_mut(&mut self) -> &mut FileSource {
+        &mut self.source
+    }
+
     fn with_mzml<T>(&mut self, f: impl FnOnce(&MzML) -> Result<T, c_int>) -> Result<T, c_int> {
-        match self {
-            ParsedFile::Full(mzml) => f(mzml.as_ref()),
-            ParsedFile::Lazy(file) => {
+        match &mut self.source {
+            FileSource::Full(mzml) => f(mzml.as_ref()),
+            FileSource::Lazy(file) => {
                 let mzml = file.to_mzml().map_err(|_| ERR_PARSE)?;
                 f(&mzml)
             }
-            ParsedFile::Remote(ion) => {
+            FileSource::Remote(ion) => {
                 let mzml = ion.to_mzml().map_err(|_| ERR_PARSE)?;
                 f(&mzml)
             }
@@ -352,20 +327,30 @@ impl ParsedFile {
     }
 }
 
+fn file_is_broken(h: *const ParsedFile) -> bool {
+    !h.is_null() && unsafe { (*h).broken }
+}
+
+fn mark_file_broken(h: *const ParsedFile) {
+    if !h.is_null() {
+        unsafe { (*(h as *mut ParsedFile)).broken = true };
+    }
+}
+
 impl ScanSource for ParsedFile {
     fn for_each_summary(&mut self, cb: &mut dyn FnMut(usize, ScanSummary)) {
-        match self {
-            ParsedFile::Full(mzml) => mzml.for_each_summary(cb),
-            ParsedFile::Lazy(file) => file.for_each_summary(cb),
-            ParsedFile::Remote(ion) => ion.for_each_summary(cb),
+        match &mut self.source {
+            FileSource::Full(mzml) => mzml.for_each_summary(cb),
+            FileSource::Lazy(file) => file.for_each_summary(cb),
+            FileSource::Remote(ion) => ion.for_each_summary(cb),
         }
     }
 
     fn load_scan(&mut self, index: usize, mz: &mut Vec<f64>, intensity: &mut Vec<f64>) -> bool {
-        match self {
-            ParsedFile::Full(mzml) => mzml.load_scan(index, mz, intensity),
-            ParsedFile::Lazy(file) => file.load_scan(index, mz, intensity),
-            ParsedFile::Remote(ion) => ion.load_scan(index, mz, intensity),
+        match &mut self.source {
+            FileSource::Full(mzml) => mzml.load_scan(index, mz, intensity),
+            FileSource::Lazy(file) => file.load_scan(index, mz, intensity),
+            FileSource::Remote(ion) => ion.load_scan(index, mz, intensity),
         }
     }
 }
@@ -403,7 +388,7 @@ pub unsafe extern "C" fn parse_mzml(
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let parsed = parse_mzml_rs(unsafe { slice::from_raw_parts(data_ptr, data_len) })
             .map_err(|_| ERR_PARSE)?;
-        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Full(Box::new(parsed)))) };
+        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::new(FileSource::Full(Box::new(parsed))))) };
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -434,7 +419,7 @@ pub unsafe extern "C" fn parse_ion_url(
         )
         .map_err(|_| ERR_PARSE)?;
 
-        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Remote(Box::new(ion)))) };
+        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::new(FileSource::Remote(Box::new(ion))))) };
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -470,7 +455,7 @@ pub unsafe extern "C" fn parse_bin(
         )
         .map_err(|_| ERR_PARSE)?;
 
-        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(owned)))) };
+        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::new(FileSource::Lazy(Box::new(owned))))) };
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -502,7 +487,7 @@ pub unsafe extern "C" fn parse_ion_path(
             },
         )
         .map_err(|_| ERR_PARSE)?;
-        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(opened_file)))) };
+        unsafe { *dest = Box::into_raw(Box::new(ParsedFile::new(FileSource::Lazy(Box::new(opened_file))))) };
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -536,6 +521,7 @@ pub unsafe extern "C" fn plan_open(
     if header_ptr.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    clear_buf(out);
 
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let header = unsafe { slice::from_raw_parts(header_ptr, header_len) };
@@ -552,36 +538,6 @@ pub unsafe extern "C" fn plan_open(
     }
 }
 
-/// Serialize a parsed file to JSON and write it to `out`.
-///
-/// # Safety
-/// `h` must be a valid `ParsedFile` pointer from this library.
-/// `out` must be a valid writable `Buf` pointer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn bin_to_json(h: *mut ParsedFile, out: *mut Buf) -> c_int {
-    if h.is_null() || out.is_null() {
-        return ERR_INVALID_ARGS;
-    }
-    match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
-        let file = unsafe { &mut *h };
-        file.with_mzml(|mzml| {
-            write_buf(
-                out,
-                serde_json::to_string(mzml)
-                    .map_err(|_| ERR_PARSE)?
-                    .into_bytes()
-                    .into_boxed_slice(),
-            );
-            Ok(())
-        })?;
-        Ok(())
-    })) {
-        Ok(Ok(())) => OK,
-        Ok(Err(c)) => c,
-        Err(_) => ERR_PANIC,
-    }
-}
-
 /// Convert a parsed file to mzML and write the result to `out`.
 ///
 /// # Safety
@@ -592,6 +548,10 @@ pub unsafe extern "C" fn bin_to_mzml(h: *mut ParsedFile, out: *mut Buf) -> c_int
     if h.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
+    clear_buf(out);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
         file.with_mzml(|mzml| {
@@ -607,7 +567,10 @@ pub unsafe extern "C" fn bin_to_mzml(h: *mut ParsedFile, out: *mut Buf) -> c_int
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -626,6 +589,10 @@ pub unsafe extern "C" fn mzml_to_bin(
     if h.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
+    clear_buf(out);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
         file.with_mzml(|mzml| {
@@ -647,7 +614,10 @@ pub unsafe extern "C" fn mzml_to_bin(
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -718,6 +688,7 @@ pub unsafe extern "C" fn get_peak(
     if x_ptr.is_null() || y_ptr.is_null() || out.is_null() || len < 3 {
         return ERR_INVALID_ARGS;
     }
+    clear_buf(out);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let data = DataXY {
             x: unsafe { slice::from_raw_parts(x_ptr, len) }.to_vec(),
@@ -728,8 +699,8 @@ pub unsafe extern "C" fn get_peak(
             &Roi::peak(rt, range),
             Some(build_peak_options(options)),
         );
-        let s = serde_json::to_string(&peak).map_err(|_| ERR_ENCODE)?;
-        write_buf(out, s.into_bytes().into_boxed_slice());
+        let bytes = build_peaks_bridge(&[peak]).ok_or(ERR_ENCODE)?;
+        write_buf(out, bytes);
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -766,6 +737,7 @@ pub unsafe extern "C" fn fit_peak(
     if x_ptr.is_null() || y_ptr.is_null() || out.is_null() || len < 5 {
         return ERR_INVALID_ARGS;
     }
+    clear_buf(out);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let data = DataXY {
             x: unsafe { slice::from_raw_parts(x_ptr, len) }.to_vec(),
@@ -776,8 +748,8 @@ pub unsafe extern "C" fn fit_peak(
             &PeakSeed { rt, intensity },
             peak_shape_from_code(shape),
         );
-        let json = serde_json::to_string(&params).map_err(|_| ERR_ENCODE)?;
-        write_buf(out, json.into_bytes().into_boxed_slice());
+        let bytes = build_fit_bridge(&params).ok_or(ERR_ENCODE)?;
+        write_buf(out, bytes);
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -807,6 +779,7 @@ pub unsafe extern "C" fn draw_peak(
     if x_ptr.is_null() || out_y.is_null() || len == 0 {
         return ERR_INVALID_ARGS;
     }
+    clear_buf(out_y);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let x = unsafe { slice::from_raw_parts(x_ptr, len) }.to_vec();
         let params = PeakParameters {
@@ -866,6 +839,10 @@ pub unsafe extern "C" fn get_peaks_from_eic(
     {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
+    clear_buf(out);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), i32> {
         let file = unsafe { &mut *(h as *mut ParsedFile) };
         let items = build_eic_rois(
@@ -877,10 +854,10 @@ pub unsafe extern "C" fn get_peaks_from_eic(
             ids_buf,
             ids_buf_len,
         );
-        let mut reader = match file {
-            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
-            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
-            ParsedFile::Remote(ion) => EicReader::Ion(ion.as_mut()),
+        let mut reader = match file.source_mut() {
+            FileSource::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            FileSource::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            FileSource::Remote(ion) => EicReader::Ion(ion.as_mut()),
         };
 
         let peaks = get_peaks_from_eic_rs(
@@ -891,32 +868,16 @@ pub unsafe extern "C" fn get_peaks_from_eic(
             cores,
         )
         .map_err(fast_error_to_code)?;
-        let arr: Vec<EicPeakOut> = peaks
-            .iter()
-            .map(|(id, ort, mz, p)| EicPeakOut {
-                id,
-                mz: *mz,
-                ort: *ort,
-                rt: p.rt,
-                from: p.from,
-                to: p.to,
-                intensity: p.intensity,
-                integral: p.integral,
-                noise: p.noise,
-            })
-            .collect();
-        write_buf(
-            out,
-            serde_json::to_string(&arr)
-                .map_err(|_| ERR_PARSE)?
-                .into_bytes()
-                .into_boxed_slice(),
-        );
+        let bytes = build_eic_peaks_bridge(&peaks).ok_or(ERR_ENCODE)?;
+        write_buf(out, bytes);
         Ok(())
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -948,6 +909,10 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
     {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
+    clear_buf(out);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), i32> {
         let file = unsafe { &mut *h };
         file.with_mzml(|mzml| {
@@ -995,20 +960,18 @@ pub unsafe extern "C" fn get_peaks_from_chrom(
                     timestamp: &row.timestamp,
                 })
                 .collect();
-            write_buf(
-                out,
-                serde_json::to_string(&out_arr)
-                    .map_err(|_| ERR_PARSE)?
-                    .into_bytes()
-                    .into_boxed_slice(),
-            );
+            let bytes = build_chrom_peaks_bridge(&out_arr).ok_or(ERR_ENCODE)?;
+            write_buf(out, bytes);
             Ok(())
         })?;
         Ok(())
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -1029,6 +992,7 @@ pub unsafe extern "C" fn find_peaks(
     if x_ptr.is_null() || y_ptr.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    clear_buf(out);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let xs = unsafe { slice::from_raw_parts(x_ptr, len) };
         let ys = unsafe { slice::from_raw_parts(y_ptr, len) };
@@ -1042,13 +1006,8 @@ pub unsafe extern "C" fn find_peaks(
             },
             Some(build_peak_options(opts)),
         );
-        write_buf(
-            out,
-            serde_json::to_string(&peaks)
-                .map_err(|_| ERR_PARSE)?
-                .into_bytes()
-                .into_boxed_slice(),
-        );
+        let bytes = build_peaks_bridge(&peaks).ok_or(ERR_ENCODE)?;
+        write_buf(out, bytes);
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -1105,13 +1064,18 @@ pub unsafe extern "C" fn calculate_eic(
     if h.is_null() || out_x.is_null() || out_y.is_null() {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
+    clear_buf(out_x);
+    clear_buf(out_y);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
 
-        let mut reader = match file {
-            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
-            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
-            ParsedFile::Remote(ion) => EicReader::Ion(ion.as_mut()),
+        let mut reader = match file.source_mut() {
+            FileSource::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            FileSource::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            FileSource::Remote(ion) => EicReader::Ion(ion.as_mut()),
         };
 
         let eic = calculate_eic_dispatcher(
@@ -1126,13 +1090,18 @@ pub unsafe extern "C" fn calculate_eic(
         )
         .map_err(fast_error_to_code)?;
 
-        write_buf(out_x, f64_to_u8(&eic.x));
-        write_buf(out_y, f64_to_u8(&eic.y));
+        let x_bytes = f64_to_u8(&eic.x);
+        let y_bytes = f64_to_u8(&eic.y);
+        write_buf(out_x, x_bytes);
+        write_buf(out_y, y_bytes);
         Ok(())
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -1149,14 +1118,18 @@ pub unsafe extern "C" fn plan_eic(
     if h.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
+    clear_buf(out);
 
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
 
-        let ranges = match file {
-            ParsedFile::Lazy(ion) => plan_eic_ranges(ion.as_mut(), target, from, to, ppm, mz_tol),
-            ParsedFile::Remote(ion) => plan_eic_ranges(ion.as_mut(), target, from, to, ppm, mz_tol),
-            ParsedFile::Full(_) => Err(FastError::UnsupportedBackend),
+        let ranges = match file.source_mut() {
+            FileSource::Lazy(ion) => plan_eic_ranges(ion.as_mut(), target, from, to, ppm, mz_tol),
+            FileSource::Remote(ion) => plan_eic_ranges(ion.as_mut(), target, from, to, ppm, mz_tol),
+            FileSource::Full(_) => Err(FastError::UnsupportedBackend),
         }
         .map_err(fast_error_to_code)?;
 
@@ -1166,7 +1139,10 @@ pub unsafe extern "C" fn plan_eic(
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(code)) => code,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -1218,6 +1194,10 @@ pub unsafe extern "C" fn plan_scans(
     if h.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
+    clear_buf(out);
     let query = match scan_query_from_parts(query_type, from_value, to_value) {
         Some(query) => query,
         None => return ERR_INVALID_ARGS,
@@ -1225,14 +1205,14 @@ pub unsafe extern "C" fn plan_scans(
 
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
-        let ranges = match file {
-            ParsedFile::Lazy(ion) => {
+        let ranges = match file.source_mut() {
+            FileSource::Lazy(ion) => {
                 plan_scan_ranges(ion.as_mut(), query, TimeUnit::Minutes, level)
             }
-            ParsedFile::Remote(ion) => {
+            FileSource::Remote(ion) => {
                 plan_scan_ranges(ion.as_mut(), query, TimeUnit::Minutes, level)
             }
-            ParsedFile::Full(_) => Err(FastError::UnsupportedBackend),
+            FileSource::Full(_) => Err(FastError::UnsupportedBackend),
         }
         .map_err(fast_error_to_code)?;
 
@@ -1242,7 +1222,10 @@ pub unsafe extern "C" fn plan_scans(
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(code)) => code,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -1257,23 +1240,27 @@ pub unsafe extern "C" fn plan_image(
     if h.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
+    clear_buf(out);
 
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
-        let ranges = match file {
-            ParsedFile::Lazy(ion) => crate::utilities::ion_image::plan_ion_image_ranges(
+        let ranges = match file.source_mut() {
+            FileSource::Lazy(ion) => crate::utilities::ion_image::plan_ion_image_ranges(
                 ion.as_mut(),
                 target,
                 tolerance,
                 level,
             ),
-            ParsedFile::Remote(ion) => crate::utilities::ion_image::plan_ion_image_ranges(
+            FileSource::Remote(ion) => crate::utilities::ion_image::plan_ion_image_ranges(
                 ion.as_mut(),
                 target,
                 tolerance,
                 level,
             ),
-            ParsedFile::Full(_) => Err(FastError::UnsupportedBackend),
+            FileSource::Full(_) => Err(FastError::UnsupportedBackend),
         }
         .map_err(fast_error_to_code)?;
 
@@ -1283,7 +1270,10 @@ pub unsafe extern "C" fn plan_image(
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(code)) => code,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -1308,22 +1298,31 @@ pub unsafe extern "C" fn get_scans(
     if h.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
     let query = match scan_query_from_parts(query_type, from_value, to_value) {
         Some(query) => query,
         None => return ERR_INVALID_ARGS,
     };
+    clear_buf(out);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let (_, scans) = get_scans_rs(unsafe { &mut *h }, query, TimeUnit::Minutes, level);
-        write_scans_json(out, &scans).map_err(|_| ERR_PARSE)
+        let bytes = build_scans_bridge(scans).ok_or(ERR_ENCODE)?;
+        write_buf(out, bytes);
+        Ok(())
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
 /// Build a 2D ion image for a target m/z by summing intensity in `[target - tolerance, target + tolerance]`
-/// per spectrum and scattering the mean into a position_x/position_y grid. Writes a JSON object to `out`.
+/// per spectrum and scattering the mean into a position_x/position_y grid. Writes an ion image bridge to `out`.
 ///
 /// # Safety
 /// `h` must be a valid `ParsedFile` pointer from this library.
@@ -1339,27 +1338,34 @@ pub unsafe extern "C" fn get_ion_image(
     if h.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
+    clear_buf(out);
     if !target.is_finite() || !tolerance.is_finite() || tolerance < 0.0 {
         return ERR_INVALID_ARGS;
     }
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
 
-        let mut reader = match file {
-            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
-            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
-            ParsedFile::Remote(ion) => EicReader::Ion(ion.as_mut()),
+        let mut reader = match file.source_mut() {
+            FileSource::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            FileSource::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            FileSource::Remote(ion) => EicReader::Ion(ion.as_mut()),
         };
 
         let image =
             crate::utilities::ion_image::compute_ion_image(&mut reader, target, tolerance, level);
-        let json = serde_json::to_string(&image).map_err(|_| ERR_ENCODE)?;
-        write_buf(out, json.into_bytes().into_boxed_slice());
+        let bytes = build_image_bridge(&image).ok_or(ERR_ENCODE)?;
+        write_buf(out, bytes);
         Ok(())
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -1374,16 +1380,19 @@ pub unsafe extern "C" fn image_begin(
     if h.is_null() || out_session.is_null() {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
     if !target.is_finite() || !tolerance.is_finite() || tolerance < 0.0 {
         return ERR_INVALID_ARGS;
     }
 
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
-        let mut reader = match file {
-            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
-            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
-            ParsedFile::Remote(ion) => EicReader::Ion(ion.as_mut()),
+        let mut reader = match file.source_mut() {
+            FileSource::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            FileSource::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            FileSource::Remote(ion) => EicReader::Ion(ion.as_mut()),
         };
         let session =
             crate::utilities::ion_image::image_session_begin(&mut reader, target, tolerance, level);
@@ -1393,7 +1402,10 @@ pub unsafe extern "C" fn image_begin(
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(code)) => code,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -1425,14 +1437,21 @@ pub unsafe extern "C" fn image_ranges(
     if h.is_null() || session.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    if session_is_broken(session) {
+        return ERR_PANIC;
+    }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
+    clear_buf(out);
 
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
         let session = unsafe { &*session };
-        let ranges = match file {
-            ParsedFile::Lazy(ion) => session.ranges(ion.as_mut(), from, count),
-            ParsedFile::Remote(ion) => session.ranges(ion.as_mut(), from, count),
-            ParsedFile::Full(_) => Err(FastError::UnsupportedBackend),
+        let ranges = match file.source_mut() {
+            FileSource::Lazy(ion) => session.ranges(ion.as_mut(), from, count),
+            FileSource::Remote(ion) => session.ranges(ion.as_mut(), from, count),
+            FileSource::Full(_) => Err(FastError::UnsupportedBackend),
         }
         .map_err(fast_error_to_code)?;
 
@@ -1442,7 +1461,10 @@ pub unsafe extern "C" fn image_ranges(
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(code)) => code,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -1456,21 +1478,30 @@ pub unsafe extern "C" fn image_fold(
     if h.is_null() || session.is_null() {
         return ERR_INVALID_ARGS;
     }
+    if session_is_broken(session) {
+        return ERR_PANIC;
+    }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
 
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
         let session = unsafe { &mut *session };
-        let mut reader = match file {
-            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
-            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
-            ParsedFile::Remote(ion) => EicReader::Ion(ion.as_mut()),
+        let mut reader = match file.source_mut() {
+            FileSource::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            FileSource::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            FileSource::Remote(ion) => EicReader::Ion(ion.as_mut()),
         };
         session.fold(&mut reader, from, count);
         Ok(())
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(code)) => code,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -1482,17 +1513,24 @@ pub unsafe extern "C" fn image_finish(
     if session.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    if session_is_broken(session) {
+        return ERR_PANIC;
+    }
+    clear_buf(out);
 
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let session = unsafe { &*session };
         let image = session.finish();
-        let json = serde_json::to_string(&image).map_err(|_| ERR_ENCODE)?;
-        write_buf(out, json.into_bytes().into_boxed_slice());
+        let bytes = build_image_bridge(&image).ok_or(ERR_ENCODE)?;
+        write_buf(out, bytes);
         Ok(())
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(code)) => code,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_session_broken(session);
+            ERR_PANIC
+        }
     }
 }
 
@@ -1533,6 +1571,7 @@ pub unsafe extern "C" fn get_features(
     if dir.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    clear_buf(out);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let path = unsafe { CStr::from_ptr(dir) }
             .to_str()
@@ -1591,16 +1630,8 @@ pub unsafe extern "C" fn get_features(
         )
         .map_err(|_| ERR_FAST_PATH)?;
 
-        let core_count = if cores > 0 { cores as usize } else { 1 };
-        let json = run_with_cores(core_count, || {
-            feats
-                .par_iter()
-                .map(serde_json::to_string)
-                .collect::<Result<Vec<_>, _>>()
-                .map(|parts| format!("[{}]", parts.join(",")))
-        })
-        .map_err(|_| ERR_PARSE)?;
-        write_buf(out, json.into_bytes().into_boxed_slice());
+        let bytes = build_consensus_bridge(&feats).ok_or(ERR_ENCODE)?;
+        write_buf(out, bytes);
         Ok(())
     })) {
         Ok(Ok(())) => OK,
@@ -1632,6 +1663,10 @@ pub unsafe extern "C" fn find_features(
     if h.is_null() || out.is_null() || !from.is_finite() || !to.is_finite() || to <= from {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
+    clear_buf(out);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *h };
 
@@ -1653,10 +1688,10 @@ pub unsafe extern "C" fn find_features(
         }
         opts.peak_options = build_peak_options(peak_opts);
 
-        let mut reader = match file {
-            ParsedFile::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
-            ParsedFile::Lazy(ion) => EicReader::Ion(ion.as_mut()),
-            ParsedFile::Remote(ion) => EicReader::Ion(ion.as_mut()),
+        let mut reader = match file.source_mut() {
+            FileSource::Full(mzml) => EicReader::Mzml(mzml.as_mut()),
+            FileSource::Lazy(ion) => EicReader::Ion(ion.as_mut()),
+            FileSource::Remote(ion) => EicReader::Ion(ion.as_mut()),
         };
 
         let feats = find_features_rs(
@@ -1667,18 +1702,16 @@ pub unsafe extern "C" fn find_features(
         )
         .map_err(|_| ERR_FAST_PATH)?;
 
-        write_buf(
-            out,
-            serde_json::to_string(&feats)
-                .map_err(|_| ERR_PARSE)?
-                .into_bytes()
-                .into_boxed_slice(),
-        );
+        let bytes = build_features_bridge(&feats).ok_or(ERR_ENCODE)?;
+        write_buf(out, bytes);
         Ok(())
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
@@ -1698,6 +1731,7 @@ pub unsafe extern "C" fn calculate_baseline(
     if y.is_null() || out.is_null() {
         return ERR_INVALID_ARGS;
     }
+    clear_buf(out);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let def = BaselineOptions::default();
         let base = calculate_baseline_rs(
@@ -1762,6 +1796,10 @@ pub unsafe extern "C" fn find_feature(
     {
         return ERR_INVALID_ARGS;
     }
+    if file_is_broken(h) {
+        return ERR_PANIC;
+    }
+    clear_buf(out);
     match catch_unwind(AssertUnwindSafe(|| -> Result<(), c_int> {
         let file = unsafe { &mut *(h as *mut ParsedFile) };
         let target_rts = unsafe { slice::from_raw_parts(target_rts, n) };
@@ -1837,32 +1875,131 @@ pub unsafe extern "C" fn find_feature(
                 },
             })
             .collect();
-        write_buf(
-            out,
-            serde_json::to_string(&arr)
-                .map_err(|_| ERR_ENCODE)?
-                .into_bytes()
-                .into_boxed_slice(),
-        );
+        let bytes = build_found_features_bridge(&arr).ok_or(ERR_ENCODE)?;
+        write_buf(out, bytes);
         Ok(())
     })) {
         Ok(Ok(())) => OK,
         Ok(Err(c)) => c,
-        Err(_) => ERR_PANIC,
+        Err(_) => {
+            mark_file_broken(h);
+            ERR_PANIC
+        }
     }
 }
 
-fn write_scans_json(
-    out: *mut Buf,
-    scans: &[crate::utilities::calculate_eic::CentroidScan],
-) -> Result<(), serde_json::Error> {
-    write_buf(
-        out,
-        serde_json::to_string(scans)?
-            .into_bytes()
-            .into_boxed_slice(),
+fn build_scans_bridge(
+    scans: Vec<crate::utilities::calculate_eic::CentroidScan>,
+) -> Option<Box<[u8]>> {
+    let scan_count = scans.len() as u64;
+    let mut total_points: u64 = 0;
+    for scan in scans.iter() {
+        total_points = total_points.checked_add(scan.mz.len() as u64)?;
+    }
+
+    let mut builder = BridgeBuilder::new(QUANTION_PAYLOAD_SCANS, scan_count);
+    builder.add_section(
+        QUANTION_SECTION_POINT_STARTS,
+        QUANTION_ELEMENT_U64,
+        scan_count + 1,
     );
-    Ok(())
+    builder.add_section(QUANTION_SECTION_MZ, QUANTION_ELEMENT_F64, total_points);
+    builder.add_section(QUANTION_SECTION_INTENSITY, QUANTION_ELEMENT_F64, total_points);
+    for id in SCAN_METADATA_SECTIONS {
+        builder.add_section(id, QUANTION_ELEMENT_F64, scan_count);
+    }
+    let mut bridge = builder.build()?;
+
+    let mut point_starts = Vec::with_capacity(scans.len() + 1);
+    point_starts.push(0u64);
+    let mut next_point: u64 = 0;
+
+    for (index, scan) in scans.into_iter().enumerate() {
+        let position = index as u64;
+        bridge.write_f64_at(QUANTION_SECTION_MZ, next_point, &scan.mz);
+        bridge.write_f64_at(QUANTION_SECTION_INTENSITY, next_point, &scan.intensity);
+
+        let summary = &scan.metadata;
+        bridge.write_f64_at(QUANTION_SECTION_RT, position, &[scan.rt]);
+        bridge.write_f64_at(QUANTION_SECTION_RT_SECONDS, position, &[summary.rt_seconds]);
+        bridge.write_f64_at(
+            QUANTION_SECTION_BASE_PEAK_MZ,
+            position,
+            &[summary.base_peak_mz],
+        );
+        bridge.write_f64_at(
+            QUANTION_SECTION_SELECTED_ION_MZ,
+            position,
+            &[summary.selected_ion_mz],
+        );
+        bridge.write_f64_at(
+            QUANTION_SECTION_BASE_PEAK_INT,
+            position,
+            &[summary.base_peak_int],
+        );
+        bridge.write_f64_at(
+            QUANTION_SECTION_TOTAL_ION_CURRENT,
+            position,
+            &[summary.total_ion_current],
+        );
+        bridge.write_f64_at(
+            QUANTION_SECTION_MS_LEVEL,
+            position,
+            &[f64::from(summary.ms_level)],
+        );
+        bridge.write_f64_at(
+            QUANTION_SECTION_POLARITY,
+            position,
+            &[f64::from(summary.polarity)],
+        );
+        bridge.write_f64_at(
+            QUANTION_SECTION_POSITION_X,
+            position,
+            &[f64::from(summary.position_x)],
+        );
+        bridge.write_f64_at(
+            QUANTION_SECTION_POSITION_Y,
+            position,
+            &[f64::from(summary.position_y)],
+        );
+        bridge.write_f64_at(
+            QUANTION_SECTION_POSITION_Z,
+            position,
+            &[f64::from(summary.position_z)],
+        );
+
+        next_point += scan.mz.len() as u64;
+        point_starts.push(next_point);
+    }
+
+    bridge.write_u64_section(QUANTION_SECTION_POINT_STARTS, &point_starts);
+    Some(bridge.into_bytes())
+}
+
+fn build_image_bridge(image: &crate::utilities::ion_image::IonImage) -> Option<Box<[u8]>> {
+    let cell_count = image.data.len() as u64;
+    let mut builder = BridgeBuilder::new(QUANTION_PAYLOAD_ION_IMAGE, cell_count);
+    builder.add_section(QUANTION_SECTION_IMAGE_SHAPE, QUANTION_ELEMENT_U32, 6);
+    builder.add_section(QUANTION_SECTION_IMAGE_DATA, QUANTION_ELEMENT_F64, cell_count);
+    builder.add_section(
+        QUANTION_SECTION_IMAGE_COUNTS,
+        QUANTION_ELEMENT_U32,
+        image.counts.len() as u64,
+    );
+    let mut bridge = builder.build()?;
+
+    let shape = [
+        image.width,
+        image.height,
+        image.min_x,
+        image.min_y,
+        image.min_z,
+        image.max_z,
+    ];
+    bridge.write_u32_section(QUANTION_SECTION_IMAGE_SHAPE, &shape);
+    bridge.write_f64_section(QUANTION_SECTION_IMAGE_DATA, &image.data);
+    bridge.write_u32_section(QUANTION_SECTION_IMAGE_COUNTS, &image.counts);
+    Some(bridge.into_bytes())
 }
 
 const DEFAULT_EIC_HALF_WIDTH: f64 = 0.5;
@@ -1926,6 +2063,259 @@ fn f64_to_u8(v: &[f64]) -> Box<[u8]> {
         ptr::copy_nonoverlapping(v.as_ptr() as *const u8, out.as_mut_ptr(), n);
     }
     out.into_boxed_slice()
+}
+
+
+fn count_as_u32(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+fn build_peaks_bridge(peaks: &[crate::utilities::structs::Peak]) -> Option<Box<[u8]>> {
+    let from: Vec<f64> = peaks.iter().map(|peak| peak.from).collect();
+    let to: Vec<f64> = peaks.iter().map(|peak| peak.to).collect();
+    let rt: Vec<f64> = peaks.iter().map(|peak| peak.rt).collect();
+    let integral: Vec<f64> = peaks.iter().map(|peak| peak.integral).collect();
+    let intensity: Vec<f64> = peaks.iter().map(|peak| peak.intensity).collect();
+    let point_count: Vec<u32> = peaks.iter().map(|peak| count_as_u32(peak.n_points)).collect();
+    let noise: Vec<f64> = peaks.iter().map(|peak| peak.noise).collect();
+    let r2: Vec<f64> = peaks.iter().map(|peak| peak.r2.unwrap_or(f64::NAN)).collect();
+
+    build_record_bridge(
+        QUANTION_PAYLOAD_PEAKS,
+        peaks.len() as u64,
+        &[
+            Column::Numbers { id: QUANTION_SECTION_PEAK_FROM, values: &from },
+            Column::Numbers { id: QUANTION_SECTION_PEAK_TO, values: &to },
+            Column::Numbers { id: QUANTION_SECTION_PEAK_RT, values: &rt },
+            Column::Numbers { id: QUANTION_SECTION_PEAK_INTEGRAL, values: &integral },
+            Column::Numbers { id: QUANTION_SECTION_PEAK_INTENSITY, values: &intensity },
+            Column::Counts { id: QUANTION_SECTION_PEAK_POINT_COUNT, values: &point_count },
+            Column::Numbers { id: QUANTION_SECTION_PEAK_NOISE, values: &noise },
+            Column::Numbers { id: QUANTION_SECTION_PEAK_R2, values: &r2 },
+        ],
+    )
+}
+
+fn build_fit_bridge(params: &Option<PeakParameters>) -> Option<Box<[u8]>> {
+    let (shape, height, center, fwhm, tail, r2) = match params {
+        Some(found) => (
+            vec![match found.shape {
+                PeakShape::Gaussian => 0.0,
+                PeakShape::EMG => 1.0,
+            }],
+            vec![found.height],
+            vec![found.center],
+            vec![found.fwhm],
+            vec![found.tail],
+            vec![found.r2],
+        ),
+        None => (vec![], vec![], vec![], vec![], vec![], vec![]),
+    };
+
+    build_record_bridge(
+        QUANTION_PAYLOAD_FIT_RESULT,
+        shape.len() as u64,
+        &[
+            Column::Numbers { id: QUANTION_SECTION_FIT_SHAPE, values: &shape },
+            Column::Numbers { id: QUANTION_SECTION_FIT_HEIGHT, values: &height },
+            Column::Numbers { id: QUANTION_SECTION_FIT_CENTER, values: &center },
+            Column::Numbers { id: QUANTION_SECTION_FIT_FWHM, values: &fwhm },
+            Column::Numbers { id: QUANTION_SECTION_FIT_TAIL, values: &tail },
+            Column::Numbers { id: QUANTION_SECTION_FIT_R2, values: &r2 },
+        ],
+    )
+}
+
+fn build_eic_peaks_bridge(rows: &[(&str, f64, f64, crate::utilities::structs::Peak)]) -> Option<Box<[u8]>> {
+    let ids: Vec<&str> = rows.iter().map(|row| row.0).collect();
+    let ort: Vec<f64> = rows.iter().map(|row| row.1).collect();
+    let mz: Vec<f64> = rows.iter().map(|row| row.2).collect();
+    let rt: Vec<f64> = rows.iter().map(|row| row.3.rt).collect();
+    let from: Vec<f64> = rows.iter().map(|row| row.3.from).collect();
+    let to: Vec<f64> = rows.iter().map(|row| row.3.to).collect();
+    let intensity: Vec<f64> = rows.iter().map(|row| row.3.intensity).collect();
+    let integral: Vec<f64> = rows.iter().map(|row| row.3.integral).collect();
+    let noise: Vec<f64> = rows.iter().map(|row| row.3.noise).collect();
+
+    build_record_bridge(
+        QUANTION_PAYLOAD_EIC_PEAKS,
+        rows.len() as u64,
+        &[
+            Column::Text {
+                starts_id: QUANTION_SECTION_EIC_PEAK_ID_STARTS,
+                bytes_id: QUANTION_SECTION_EIC_PEAK_ID_BYTES,
+                values: &ids,
+            },
+            Column::Numbers { id: QUANTION_SECTION_EIC_PEAK_MZ, values: &mz },
+            Column::Numbers { id: QUANTION_SECTION_EIC_PEAK_ORT, values: &ort },
+            Column::Numbers { id: QUANTION_SECTION_EIC_PEAK_RT, values: &rt },
+            Column::Numbers { id: QUANTION_SECTION_EIC_PEAK_FROM, values: &from },
+            Column::Numbers { id: QUANTION_SECTION_EIC_PEAK_TO, values: &to },
+            Column::Numbers { id: QUANTION_SECTION_EIC_PEAK_INTENSITY, values: &intensity },
+            Column::Numbers { id: QUANTION_SECTION_EIC_PEAK_INTEGRAL, values: &integral },
+            Column::Numbers { id: QUANTION_SECTION_EIC_PEAK_NOISE, values: &noise },
+        ],
+    )
+}
+
+fn build_features_bridge(features: &[crate::utilities::find_features::Feature]) -> Option<Box<[u8]>> {
+    let mz: Vec<f64> = features.iter().map(|item| item.mz).collect();
+    let rt: Vec<f64> = features.iter().map(|item| item.rt).collect();
+    let from: Vec<f64> = features.iter().map(|item| item.from).collect();
+    let to: Vec<f64> = features.iter().map(|item| item.to).collect();
+    let intensity: Vec<f64> = features.iter().map(|item| item.intensity).collect();
+    let integral: Vec<f64> = features.iter().map(|item| item.integral).collect();
+    let point_count: Vec<u32> = features.iter().map(|item| count_as_u32(item.n_points)).collect();
+    let noise: Vec<f64> = features.iter().map(|item| item.noise).collect();
+
+    build_record_bridge(
+        QUANTION_PAYLOAD_FEATURES,
+        features.len() as u64,
+        &[
+            Column::Numbers { id: QUANTION_SECTION_FEATURE_MZ, values: &mz },
+            Column::Numbers { id: QUANTION_SECTION_FEATURE_RT, values: &rt },
+            Column::Numbers { id: QUANTION_SECTION_FEATURE_FROM, values: &from },
+            Column::Numbers { id: QUANTION_SECTION_FEATURE_TO, values: &to },
+            Column::Numbers { id: QUANTION_SECTION_FEATURE_INTENSITY, values: &intensity },
+            Column::Numbers { id: QUANTION_SECTION_FEATURE_INTEGRAL, values: &integral },
+            Column::Counts { id: QUANTION_SECTION_FEATURE_POINT_COUNT, values: &point_count },
+            Column::Numbers { id: QUANTION_SECTION_FEATURE_NOISE, values: &noise },
+        ],
+    )
+}
+
+
+#[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+fn build_consensus_bridge(
+    features: &[crate::utilities::get_features::ConsensusFeature],
+) -> Option<Box<[u8]>> {
+    let mz: Vec<f64> = features.iter().map(|item| item.mz).collect();
+    let rt: Vec<f64> = features.iter().map(|item| item.rt).collect();
+    let from: Vec<f64> = features.iter().map(|item| item.from).collect();
+    let to: Vec<f64> = features.iter().map(|item| item.to).collect();
+    let intensity: Vec<f64> = features.iter().map(|item| item.intensity).collect();
+    let integral: Vec<f64> = features.iter().map(|item| item.integral).collect();
+    let frequency: Vec<f64> = features.iter().map(|item| item.frequency).collect();
+
+    build_record_bridge(
+        QUANTION_PAYLOAD_CONSENSUS_FEATURES,
+        features.len() as u64,
+        &[
+            Column::Numbers { id: QUANTION_SECTION_CONSENSUS_MZ, values: &mz },
+            Column::Numbers { id: QUANTION_SECTION_CONSENSUS_RT, values: &rt },
+            Column::Numbers { id: QUANTION_SECTION_CONSENSUS_FROM, values: &from },
+            Column::Numbers { id: QUANTION_SECTION_CONSENSUS_TO, values: &to },
+            Column::Numbers { id: QUANTION_SECTION_CONSENSUS_INTENSITY, values: &intensity },
+            Column::Numbers { id: QUANTION_SECTION_CONSENSUS_INTEGRAL, values: &integral },
+            Column::Numbers { id: QUANTION_SECTION_CONSENSUS_FREQUENCY, values: &frequency },
+        ],
+    )
+}
+
+fn build_found_features_bridge(rows: &[FoundFeatureOut]) -> Option<Box<[u8]>> {
+    let ids: Vec<&str> = rows.iter().map(|row| row.id).collect();
+    let mz: Vec<f64> = rows.iter().map(|row| row.mz).collect();
+    let rt: Vec<f64> = rows.iter().map(|row| row.rt).collect();
+    let from: Vec<f64> = rows.iter().map(|row| row.from).collect();
+    let to: Vec<f64> = rows.iter().map(|row| row.to).collect();
+    let intensity: Vec<f64> = rows.iter().map(|row| row.intensity).collect();
+    let integral: Vec<f64> = rows.iter().map(|row| row.integral).collect();
+    let point_count: Vec<u32> = rows.iter().map(|row| count_as_u32(row.n_points)).collect();
+    let noise: Vec<f64> = rows.iter().map(|row| row.noise).collect();
+
+    build_record_bridge(
+        QUANTION_PAYLOAD_FOUND_FEATURES,
+        rows.len() as u64,
+        &[
+            Column::Text {
+                starts_id: QUANTION_SECTION_FOUND_ID_STARTS,
+                bytes_id: QUANTION_SECTION_FOUND_ID_BYTES,
+                values: &ids,
+            },
+            Column::Numbers { id: QUANTION_SECTION_FOUND_MZ, values: &mz },
+            Column::Numbers { id: QUANTION_SECTION_FOUND_RT, values: &rt },
+            Column::Numbers { id: QUANTION_SECTION_FOUND_FROM, values: &from },
+            Column::Numbers { id: QUANTION_SECTION_FOUND_TO, values: &to },
+            Column::Numbers { id: QUANTION_SECTION_FOUND_INTENSITY, values: &intensity },
+            Column::Numbers { id: QUANTION_SECTION_FOUND_INTEGRAL, values: &integral },
+            Column::Counts { id: QUANTION_SECTION_FOUND_POINT_COUNT, values: &point_count },
+            Column::Numbers { id: QUANTION_SECTION_FOUND_NOISE, values: &noise },
+        ],
+    )
+}
+
+fn build_chrom_peaks_bridge(rows: &[ChromPeakRowOut]) -> Option<Box<[u8]>> {
+    let index: Vec<u32> = rows.iter().map(|row| count_as_u32(row.index)).collect();
+    let ids: Vec<&str> = rows.iter().map(|row| row.id).collect();
+    let timestamps: Vec<&str> = rows.iter().map(|row| row.timestamp).collect();
+    let target_rt: Vec<f64> = rows.iter().map(|row| row.ort).collect();
+    let rt: Vec<f64> = rows.iter().map(|row| row.rt).collect();
+    let from: Vec<f64> = rows.iter().map(|row| row.from).collect();
+    let to: Vec<f64> = rows.iter().map(|row| row.to).collect();
+    let intensity: Vec<f64> = rows.iter().map(|row| row.intensity).collect();
+    let integral: Vec<f64> = rows.iter().map(|row| row.integral).collect();
+    let total_area: Vec<f64> = rows.iter().map(|row| row.total_area).collect();
+
+    build_record_bridge(
+        QUANTION_PAYLOAD_CHROM_PEAKS,
+        rows.len() as u64,
+        &[
+            Column::Counts { id: QUANTION_SECTION_CHROM_INDEX, values: &index },
+            Column::Numbers { id: QUANTION_SECTION_CHROM_TARGET_RT, values: &target_rt },
+            Column::Numbers { id: QUANTION_SECTION_CHROM_RT, values: &rt },
+            Column::Numbers { id: QUANTION_SECTION_CHROM_FROM, values: &from },
+            Column::Numbers { id: QUANTION_SECTION_CHROM_TO, values: &to },
+            Column::Numbers { id: QUANTION_SECTION_CHROM_INTENSITY, values: &intensity },
+            Column::Numbers { id: QUANTION_SECTION_CHROM_INTEGRAL, values: &integral },
+            Column::Numbers { id: QUANTION_SECTION_CHROM_TOTAL_AREA, values: &total_area },
+            Column::Text {
+                starts_id: QUANTION_SECTION_CHROM_ID_STARTS,
+                bytes_id: QUANTION_SECTION_CHROM_ID_BYTES,
+                values: &ids,
+            },
+            Column::Text {
+                starts_id: QUANTION_SECTION_CHROM_TIMESTAMP_STARTS,
+                bytes_id: QUANTION_SECTION_CHROM_TIMESTAMP_BYTES,
+                values: &timestamps,
+            },
+        ],
+    )
+}
+
+const SCAN_METADATA_SECTIONS: [u32; 11] = [
+    QUANTION_SECTION_RT,
+    QUANTION_SECTION_RT_SECONDS,
+    QUANTION_SECTION_BASE_PEAK_MZ,
+    QUANTION_SECTION_SELECTED_ION_MZ,
+    QUANTION_SECTION_BASE_PEAK_INT,
+    QUANTION_SECTION_TOTAL_ION_CURRENT,
+    QUANTION_SECTION_MS_LEVEL,
+    QUANTION_SECTION_POLARITY,
+    QUANTION_SECTION_POSITION_X,
+    QUANTION_SECTION_POSITION_Y,
+    QUANTION_SECTION_POSITION_Z,
+];
+
+fn clear_buf(out: *mut Buf) {
+    unsafe {
+        ptr::write_unaligned(
+            out,
+            Buf {
+                ptr: ptr::null_mut(),
+                len: 0,
+            },
+        )
+    };
+}
+
+fn session_is_broken(session: *const crate::utilities::ion_image::ImageSession) -> bool {
+    !session.is_null() && unsafe { (*session).is_broken() }
+}
+
+fn mark_session_broken(session: *mut crate::utilities::ion_image::ImageSession) {
+    if !session.is_null() {
+        unsafe { (*session).mark_broken() };
+    }
 }
 
 fn write_buf(out: *mut Buf, bytes: Box<[u8]>) {
@@ -2238,7 +2628,7 @@ mod tests {
             ReadOptions::default(),
         )
         .expect("IonReader::open_bytes failed");
-        Box::into_raw(Box::new(ParsedFile::Lazy(Box::new(ion))))
+        Box::into_raw(Box::new(ParsedFile::new(FileSource::Lazy(Box::new(ion)))))
     }
 
     fn windowed_ion_bytes() -> Vec<u8> {

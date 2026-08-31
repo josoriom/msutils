@@ -1,4 +1,3 @@
-use serde::Serialize;
 
 use crate::utilities::{
     cheminfo::lm::{Data2D, LevenbergMarquardtOptions, lm},
@@ -10,8 +9,7 @@ const FIT_ITERATIONS: usize = 40;
 const FIT_TIMEOUT_SECONDS: f64 = 1.0;
 const MIN_POINTS: usize = 5;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PeakShape {
     Gaussian,
     EMG,
@@ -32,7 +30,7 @@ impl From<&Peak> for PeakSeed {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct PeakParameters {
     pub shape: PeakShape,
     pub height: f64,

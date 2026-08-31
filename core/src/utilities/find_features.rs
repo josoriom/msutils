@@ -7,7 +7,6 @@ use std::{
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::prelude::*;
-use serde::Serialize;
 
 use crate::utilities::{
     calculate_eic::{
@@ -18,7 +17,7 @@ use crate::utilities::{
     find_masses::find_masses,
     find_peaks::{FindPeaksOptions, find_peaks},
     parallel::run_with_cores,
-    structs::{DataXY, FromTo, ser_finite_f64},
+    structs::{DataXY, FromTo},
 };
 
 #[derive(Clone, Debug)]
@@ -85,22 +84,15 @@ impl From<FastError> for FeatureError {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct Feature {
-    #[serde(serialize_with = "ser_finite_f64")]
     pub mz: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub rt: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub from: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub to: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub intensity: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub integral: f64,
     pub n_points: usize,
-    #[serde(skip)]
     pub noise: f64,
 }
 

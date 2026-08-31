@@ -5,9 +5,8 @@ use ionic::{
     ion::{ByteRange, IonError, IonReader, Range},
     mzml::structs::{CvParam, MzML},
 };
-use serde::Serialize;
 
-use crate::utilities::structs::{DataXY, FromTo, Peak, ser_finite_f64};
+use crate::utilities::structs::{DataXY, FromTo, Peak};
 
 pub(crate) const MS1_LEVEL: u8 = 1;
 
@@ -151,17 +150,12 @@ impl From<IonError> for FastError {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default)]
 pub struct SpectrumSummary {
-    #[serde(serialize_with = "ser_finite_f64")]
     pub rt_seconds: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub base_peak_mz: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub selected_ion_mz: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub base_peak_int: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub total_ion_current: f64,
     pub ms_level: u8,
     pub polarity: u8,
@@ -204,9 +198,8 @@ impl SpectrumSummary {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct CentroidScan {
-    #[serde(serialize_with = "ser_finite_f64")]
     pub rt: f64,
     pub mz: Arc<[f64]>,
     pub intensity: Arc<[f64]>,

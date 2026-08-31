@@ -62,14 +62,6 @@ const sample = await quantion.parseIon(
 
 ## Convert
 
-### Sample to JSON
-
-Get JSON from a sample.
-
-```js
-const json = quantion.ionToJson(sample);
-```
-
 ### Sample to mzML
 
 Get mzML text from a sample.

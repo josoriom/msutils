@@ -13,7 +13,7 @@ export type PeakOptions = Partial<{
   allowOverlap: boolean | number;
   minSnr: number;
   minR2: number;
-  shape: 'gaussian' | 'emg' | number;
+  shape: "gaussian" | "emg" | number;
   kernelSize: number;
 }>;
 
@@ -134,8 +134,8 @@ export type SpectrumSummary = {
 
 export type CentroidScan = {
   rt: number;
-  mz: number[];
-  intensity: number[];
+  mz: Float64Array;
+  intensity: Float64Array;
   metadata: SpectrumSummary;
 };
 
@@ -158,8 +158,8 @@ export type IonImage = {
   minY: number;
   minZ: number;
   maxZ: number;
-  data: number[];
-  counts: number[];
+  data: Float64Array;
+  counts: Uint32Array;
 };
 
 export type ByteRange = {

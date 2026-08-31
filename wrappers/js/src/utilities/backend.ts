@@ -1,4 +1,9 @@
-import type { NoiseLevel, PeakOptions } from "../types/types";
+import type {
+  CentroidScan,
+  IonImage,
+  NoiseLevel,
+  PeakOptions,
+} from "../types/types";
 
 export type FileHandle = unknown;
 export type MaybePromise<T> = T | Promise<T>;
@@ -27,8 +32,6 @@ export interface Backend {
     cacheSize: number,
   ): FileHandle | Promise<FileHandle>;
   freeFile(handle: FileHandle): void;
-
-  fileToJson(handle: FileHandle): any;
   fileToMzml(handle: FileHandle): string;
   fileToBin(
     handle: FileHandle,
@@ -51,7 +54,7 @@ export interface Backend {
     a: number,
     b: number,
     level: number,
-  ): MaybePromise<any>;
+  ): MaybePromise<CentroidScan[]>;
 
   getIonImage(
     handle: FileHandle,
@@ -59,7 +62,7 @@ export interface Backend {
     tolerance: number,
     level: number,
     onProgress?: (fetched: number, total: number, heldBytes: number) => void,
-  ): MaybePromise<any>;
+  ): MaybePromise<IonImage>;
 
   findPeaks(
     x: Float64Array,

@@ -4,11 +4,10 @@ use ionic::{
     ScanSource, ScanSummary, coalesce_byte_ranges,
     ion::{ByteRange, IonReader, Range},
 };
-use serde::Serialize;
 
 use super::calculate_eic::{EicReader, FastError, read_mz_window, summed_intensity_in_window};
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct IonImage {
     pub width: u32,
     pub height: u32,
@@ -240,6 +239,7 @@ pub struct ImageSession {
     candidates: Vec<Candidate>,
     sums: PixelSums,
     bounds: PixelBounds,
+    broken: bool,
 }
 
 pub fn image_session_begin(
@@ -254,10 +254,19 @@ pub fn image_session_begin(
         candidates: collect_candidates(reader, ms_level),
         sums: PixelSums::new(),
         bounds: PixelBounds::new(),
+        broken: false,
     }
 }
 
 impl ImageSession {
+    pub fn is_broken(&self) -> bool {
+        self.broken
+    }
+
+    pub fn mark_broken(&mut self) {
+        self.broken = true;
+    }
+
     pub fn scan_count(&self) -> usize {
         self.candidates.len()
     }

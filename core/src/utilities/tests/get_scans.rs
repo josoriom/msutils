@@ -11,7 +11,7 @@ use ionic::{
 };
 
 use crate::{
-    ffi::ParsedFile,
+    ffi::{FileSource, ParsedFile},
     utilities::{
         calculate_eic::{ScanQuery, TimeUnit, get_scans},
         structs::FromTo,
@@ -115,7 +115,7 @@ fn open_split_ion() -> ParsedFile {
         ReadOptions::default(),
     )
     .expect("open ion failed");
-    ParsedFile::Lazy(Box::new(ion))
+    ParsedFile::new(FileSource::Lazy(Box::new(ion)))
 }
 
 #[test]

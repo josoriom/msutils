@@ -1386,7 +1386,7 @@ mod tests {
     }
 
     #[test]
-    fn test_nan_f64_serialises_as_zero_in_consensus_feature() {
+    fn test_consensus_feature_keeps_exact_values() {
         let f = ConsensusFeature {
             mz: f64::NAN,
             rt: f64::INFINITY,
@@ -1397,20 +1397,14 @@ mod tests {
             frequency: 0.5,
             n_samples: 1,
         };
-        let json = serde_json::to_string(&f).expect("serialise ok");
-        // Non-finite mz, rt, from must become 0, not null.
-        assert!(
-            !json.contains("null"),
-            "non-finite fields must not produce null: {json}"
-        );
-        assert!(json.contains("\"mz\":0"), "NaN mz → 0: {json}");
-        assert!(json.contains("\"rt\":0"), "+Inf rt → 0: {json}");
-        assert!(json.contains("\"from\":0"), "-Inf from → 0: {json}");
-        assert!(json.contains("\"to\":1.0"), "finite to unchanged: {json}");
+        assert!(f.mz.is_nan(), "NaN mz stays NaN");
+        assert!(f.rt.is_infinite() && f.rt > 0.0, "positive infinity survives");
+        assert!(f.from.is_infinite() && f.from < 0.0, "negative infinity survives");
+        assert_eq!(f.to, 1.0, "finite values are unchanged");
     }
 
     #[test]
-    fn test_nan_f64_serialises_as_zero_in_feature() {
+    fn test_feature_keeps_exact_values() {
         use crate::utilities::find_features::Feature;
         let f = Feature {
             mz: f64::NAN,
@@ -1422,17 +1416,13 @@ mod tests {
             n_points: 0,
             noise: 0.0,
         };
-        let json = serde_json::to_string(&f).expect("serialise ok");
-        assert!(
-            !json.contains("null"),
-            "non-finite fields must not produce null: {json}"
-        );
-        assert!(json.contains("\"mz\":0"), "NaN mz → 0: {json}");
-        assert!(json.contains("\"rt\":0"), "+Inf rt → 0: {json}");
+        assert!(f.mz.is_nan(), "NaN mz stays NaN");
+        assert!(f.rt.is_infinite(), "infinity survives");
+        assert_eq!(f.to, 1.0, "finite values are unchanged");
     }
 
     #[test]
-    fn test_nan_f64_serialises_as_zero_in_peak() {
+    fn test_peak_keeps_exact_values() {
         use crate::utilities::structs::Peak;
         let p = Peak {
             from: f64::NAN,
@@ -1444,46 +1434,34 @@ mod tests {
             noise: 0.0,
             r2: None,
         };
-        let json = serde_json::to_string(&p).expect("serialise ok");
-        assert!(
-            !json.contains("null"),
-            "non-finite fields must not produce null: {json}"
-        );
-        assert!(json.contains("\"from\":0"), "NaN from → 0: {json}");
-        assert!(json.contains("\"to\":0"), "+Inf to → 0: {json}");
-        assert!(json.contains("\"rt\":1.5"), "finite rt unchanged: {json}");
-        assert!(!json.contains("\"r2\""), "r2 must be skipped: {json}");
+        assert!(p.from.is_nan(), "NaN from stays NaN");
+        assert!(p.to.is_infinite(), "infinity survives");
+        assert_eq!(p.rt, 1.5, "finite rt unchanged");
+        assert!(p.r2.is_none(), "absent r2 stays absent");
     }
 
     #[test]
-    fn test_peak_default_serialises_as_zero_object() {
+    fn test_peak_default_is_all_zero() {
         use crate::utilities::structs::Peak;
-        let json = serde_json::to_string(&Peak::default()).expect("serialise ok");
-        assert!(json.starts_with('{'), "must be an object, not null: {json}");
-        assert!(json.contains("\"from\":0"), "from defaults to 0: {json}");
-        assert!(json.contains("\"to\":0"), "to defaults to 0: {json}");
-        assert!(json.contains("\"rt\":0"), "rt defaults to 0: {json}");
-        assert!(
-            json.contains("\"n_points\":0"),
-            "n_points (snake_case): {json}"
-        );
-        assert!(json.contains("\"noise\":0"), "noise field present: {json}");
-        assert!(!json.contains("null"), "no null values: {json}");
-        assert!(!json.contains("\"r2\""), "r2 is skipped: {json}");
+        let p = Peak::default();
+        assert_eq!(p.from, 0.0);
+        assert_eq!(p.to, 0.0);
+        assert_eq!(p.rt, 0.0);
+        assert_eq!(p.n_points, 0);
+        assert_eq!(p.noise, 0.0);
+        assert!(p.r2.is_none());
     }
 
     #[test]
-    fn test_spectrum_summary_unknown_serialises_without_null() {
-        let s = SpectrumSummary::unknown();
-        let json = serde_json::to_string(&s).expect("serialise ok");
+    fn test_spectrum_summary_unknown_keeps_not_a_number() {
+        let summary = SpectrumSummary::unknown();
+        assert!(summary.rt_seconds.is_nan(), "rt_seconds stays NaN");
+        assert!(summary.base_peak_mz.is_nan(), "base_peak_mz stays NaN");
+        assert!(summary.selected_ion_mz.is_nan(), "selected_ion_mz stays NaN");
+        assert!(summary.base_peak_int.is_nan(), "base_peak_int stays NaN");
         assert!(
-            !json.contains("null"),
-            "unknown SpectrumSummary must not produce null: {json}"
-        );
-        assert!(json.contains("\"rt_seconds\":0"), "rt_seconds → 0: {json}");
-        assert!(
-            json.contains("\"base_peak_mz\":0"),
-            "base_peak_mz → 0: {json}"
+            summary.total_ion_current.is_nan(),
+            "total_ion_current stays NaN"
         );
     }
 

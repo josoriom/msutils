@@ -9,7 +9,6 @@ use std::{
 use ionic::ion::{IonReader, ReadOptions};
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use rayon::prelude::*;
-use serde::Serialize;
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
 use crate::utilities::parallel::run_with_cores;
@@ -25,7 +24,7 @@ use crate::utilities::{
     get_peak::get_peak,
     math::median,
     mz_estimator::{MzEstimator, MzEstimatorKind, SampleMz, make_estimator, same_mass_gap},
-    structs::{DataXY, FromTo, Peak, Roi, ser_finite_f64},
+    structs::{DataXY, FromTo, Peak, Roi},
 };
 
 #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
@@ -88,23 +87,15 @@ impl From<Error> for AlignmentError {
     }
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct ConsensusFeature {
-    #[serde(serialize_with = "ser_finite_f64")]
     pub mz: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub rt: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub from: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub to: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub intensity: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub integral: f64,
-    #[serde(serialize_with = "ser_finite_f64")]
     pub frequency: f64,
-    #[serde(skip)]
     pub n_samples: usize,
 }
 
