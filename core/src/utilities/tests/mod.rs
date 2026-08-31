@@ -11,3 +11,6 @@ pub(crate) mod mz_estimator;
 
 #[cfg(test)]
 pub(crate) mod get_scans;
+
+#[cfg(test)]
+pub(crate) mod bridge;

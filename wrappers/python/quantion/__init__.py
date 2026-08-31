@@ -8,7 +8,6 @@ from quantion.api import (
     parse_ion_path,
     parse_ion_raw,
     parse_ion_remote,
-    ion_to_json,
     ion_to_mzml,
     mzml_to_ion,
     mzml_to_ion_file,
@@ -39,7 +38,6 @@ __all__ = [
     "parse_ion_path",
     "parse_ion_raw",
     "parse_ion_remote",
-    "ion_to_json",
     "ion_to_mzml",
     "mzml_to_ion",
     "mzml_to_ion_file",
@@ -84,8 +82,6 @@ class Quantion:
     def parse_ion_remote(self, url: str, max_cache_size: int = 0) -> SampleFile:
         return parse_ion_remote(url, max_cache_size)
 
-    def ion_to_json(self, file: SampleFile):
-        return ion_to_json(file)
 
     def ion_to_mzml(self, file: SampleFile) -> str:
         return ion_to_mzml(file)

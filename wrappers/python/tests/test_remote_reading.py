@@ -8,14 +8,20 @@ TO_RT = 5.0
 PPM_TOLERANCE = 20.0
 MZ_TOLERANCE = 0.005
 
-FILE_TOTAL = 34353
+FILE_TOTAL = 34241
 HEADER_BYTES = 1024
-GAP_AFTER_HEADER = 1734
 
-BYTES_TO_OPEN = 25680
+BYTES_TO_OPEN = 28326
+BYTES_NEVER_FETCHED = FILE_TOTAL - BYTES_TO_OPEN
 REQUESTS_TO_OPEN = 3
-BYTES_FOR_ONE_QUERY = 1734
-REQUESTS_FOR_ONE_QUERY = 1
+CACHE_AFTER_OPEN = [(0, HEADER_BYTES), (0, 2822), (9761, 24480)]
+BYTES_FOR_ONE_QUERY = 0
+REQUESTS_FOR_ONE_QUERY = 0
+
+BIG_FIXTURE = (
+    support.REPO_ROOT / "core" / "tests" / "fixtures" / "check_features.ion"
+)
+BIG_REQUESTS_TO_OPEN = 2
 
 
 @unittest.skipIf(support.library_problem, support.library_problem)
@@ -39,8 +45,8 @@ class PrefetchRanges(unittest.TestCase):
 
     def test_far_ranges_stay_apart(self):
         source = support.recording_source(FILE_TOTAL)
-        source.prefetch([(100, 10), (30000, 10)])
-        self.assertEqual(source.fetched, [(100, 10), (30000, 10)])
+        source.prefetch([(100, 10), (300000, 10)])
+        self.assertEqual(source.fetched, [(100, 10), (300000, 10)])
 
     def test_empty_ranges_are_ignored(self):
         source = support.recording_source(FILE_TOTAL)
@@ -114,24 +120,23 @@ class RemoteReading(unittest.TestCase):
         self.open_remote()
         self.assertEqual(self.server.requests, REQUESTS_TO_OPEN)
 
-    def test_opening_leaves_the_gap_behind_the_header_unread(self):
+    def test_opening_leaves_part_of_the_file_unfetched(self):
+        self.open_remote()
+        self.assertLess(self.server.bytes_sent, FILE_TOTAL)
+        self.assertEqual(FILE_TOTAL - self.server.bytes_sent, BYTES_NEVER_FETCHED)
+
+    def test_opening_caches_the_header_and_the_planned_spans(self):
         remote = self.open_remote()
         source = remote._remote_source
-        self.assertIsNone(source.read_from_cache(HEADER_BYTES, GAP_AFTER_HEADER))
+        self.assertEqual(sorted(source.cache), CACHE_AFTER_OPEN)
 
-    def test_opening_reads_the_header_once(self):
-        remote = self.open_remote()
-        source = remote._remote_source
-        starts_at_zero = [key for key in source.cache if key[0] == 0]
-        self.assertEqual(starts_at_zero, [(0, HEADER_BYTES)])
-
-    def test_one_query_takes_one_request(self):
+    def test_one_query_takes_no_request(self):
         remote = self.open_remote()
         self.server.reset()
         self.eic_of(remote)
         self.assertEqual(self.server.requests, REQUESTS_FOR_ONE_QUERY)
 
-    def test_one_query_fetches_only_what_it_needs(self):
+    def test_one_query_fetches_no_bytes(self):
         remote = self.open_remote()
         self.server.reset()
         self.eic_of(remote)
@@ -144,10 +149,13 @@ class RemoteReading(unittest.TestCase):
         self.eic_of(remote)
         self.assertEqual(self.server.requests, 0)
 
-    def test_the_whole_file_is_never_fetched(self):
-        remote = self.open_remote()
-        self.eic_of(remote)
-        self.assertLess(self.server.bytes_sent, FILE_TOTAL)
+    def test_a_file_over_the_gap_is_opened_in_part(self):
+        server = support.RangeServer(BIG_FIXTURE)
+        self.addCleanup(server.stop)
+        remote = support.quantion.parse_ion_remote(server.url)
+        self.addCleanup(remote.dispose)
+        self.assertEqual(server.requests, BIG_REQUESTS_TO_OPEN)
+        self.assertLess(server.bytes_sent, BIG_FIXTURE.stat().st_size)
 
     def test_the_remote_answer_matches_the_local_one(self):
         remote_eic = self.eic_of(self.open_remote())

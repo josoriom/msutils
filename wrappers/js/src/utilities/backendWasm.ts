@@ -6,7 +6,10 @@ declare var require: any;
 
 import type { Backend, FileHandle, ByteRangeResult } from "./backend";
 import type { NoiseLevel, PeakOptions } from "../types/types";
-import { parseAndCamelize, toUint8 } from "./shared";
+import { toUint8 } from "./shared";
+import { readIonImage } from "./imageBridge";
+import { readRecords } from "./recordBridge";
+import { readScans } from "./scanBridge";
 import {
   fetchHeader,
   newRemoteSource,
@@ -196,10 +199,10 @@ class WasmHeap {
     return data;
   }
 
-  readJsonFromSlot<T>(slotPtr: number): T {
+  readBridgeFromSlot(slotPtr: number): ArrayBuffer {
     const { ptr, len } = this.readOutputSlot(slotPtr);
     const bytes = this.copyOutAndFree(ptr, len);
-    return parseAndCamelize(this.decoder.decode(bytes)) as T;
+    return bytes.buffer as ArrayBuffer;
   }
 
   writeBytesAt(ptr: number, data: Uint8Array): void {
@@ -209,6 +212,34 @@ class WasmHeap {
 
   allocPermanent(size: number): number {
     return this.alloc(size);
+  }
+}
+
+class TrapGuard {
+  private trapped = false;
+
+  get isTrapped(): boolean {
+    return this.trapped;
+  }
+
+  watch<T extends Function>(call: T): T {
+    const guard = this;
+    return function (this: unknown, ...args: unknown[]) {
+      if (guard.trapped) {
+        throw new Error(
+          "quantion: this WASM instance trapped earlier and cannot be used; load it again",
+        );
+      }
+      try {
+        return (call as unknown as (...rest: unknown[]) => unknown).apply(
+          this,
+          args,
+        );
+      } catch (reason) {
+        if (reason instanceof WebAssembly.RuntimeError) guard.trapped = true;
+        throw reason;
+      }
+    } as unknown as T;
   }
 }
 
@@ -230,7 +261,6 @@ class WasmExports {
     outPtr: number,
   ) => number;
   readonly freeMzml: (handle: number) => void;
-  readonly binToJson: (handle: number, outBuf: number) => number;
   readonly binToMzml: (handle: number, outBuf: number) => number;
   readonly mzmlToBin: (
     handle: number,
@@ -340,8 +370,7 @@ class WasmExports {
     | ((sourceId: number, cacheBytes: number, outHandle: number) => number)
     | null;
   readonly planOpen:
-    | ((headerPtr: number, headerLen: number, outBuf: number) => number)
-    | null;
+    ((headerPtr: number, headerLen: number, outBuf: number) => number) | null;
   readonly planEic:
     | ((
         handle: number,
@@ -350,6 +379,16 @@ class WasmExports {
         to: number,
         ppm: number,
         mzTol: number,
+        outBuf: number,
+      ) => number)
+    | null;
+  readonly planScans:
+    | ((
+        handle: number,
+        queryType: number,
+        from: number,
+        to: number,
+        level: number,
         outBuf: number,
       ) => number)
     | null;
@@ -363,8 +402,7 @@ class WasmExports {
       ) => number)
     | null;
   readonly imageScanCount:
-    | ((session: number, outCount: number) => number)
-    | null;
+    ((session: number, outCount: number) => number) | null;
   readonly imageRanges:
     | ((
         handle: number,
@@ -380,6 +418,8 @@ class WasmExports {
   readonly imageFinish: ((session: number, outBuf: number) => number) | null;
   readonly imageFree: ((session: number) => void) | null;
 
+  readonly guard = new TrapGuard();
+
   constructor(instance: WebAssembly.Instance) {
     const ex = instance.exports;
     this.memory = ex.memory as WebAssembly.Memory;
@@ -392,7 +432,6 @@ class WasmExports {
     this.parseMzml = this.resolve(ex, ["parse_mzml"]);
     this.parseBin = this.resolve(ex, ["parse_bin"]);
     this.freeMzml = this.resolve(ex, ["free_mzml"]);
-    this.binToJson = this.resolve(ex, ["bin_to_json"]);
     this.binToMzml = this.resolve(ex, ["bin_to_mzml"]);
     this.mzmlToBin = this.resolve(ex, ["mzml_to_bin"]);
     this.calculateEic = this.resolve(ex, ["calculate_eic"]);
@@ -407,78 +446,109 @@ class WasmExports {
     this.getIonImage = this.resolve(ex, ["get_ion_image"]);
     this.parseIonUrl =
       typeof ex["parse_ion_url"] === "function"
-        ? (ex["parse_ion_url"] as unknown as (
-            sourceId: number,
-            cacheBytes: number,
-            outHandle: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["parse_ion_url"] as unknown as (
+              sourceId: number,
+              cacheBytes: number,
+              outHandle: number,
+            ) => number,
+          )
         : null;
     this.planOpen =
       typeof ex["plan_open"] === "function"
-        ? (ex["plan_open"] as unknown as (
-            headerPtr: number,
-            headerLen: number,
-            outBuf: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["plan_open"] as unknown as (
+              headerPtr: number,
+              headerLen: number,
+              outBuf: number,
+            ) => number,
+          )
         : null;
     this.planEic =
       typeof ex["plan_eic"] === "function"
-        ? (ex["plan_eic"] as unknown as (
-            handle: number,
-            target: number,
-            from: number,
-            to: number,
-            ppm: number,
-            mzTol: number,
-            outBuf: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["plan_eic"] as unknown as (
+              handle: number,
+              target: number,
+              from: number,
+              to: number,
+              ppm: number,
+              mzTol: number,
+              outBuf: number,
+            ) => number,
+          )
+        : null;
+    this.planScans =
+      typeof ex["plan_scans"] === "function"
+        ? this.guard.watch(
+            ex["plan_scans"] as unknown as (
+              handle: number,
+              queryType: number,
+              from: number,
+              to: number,
+              level: number,
+              outBuf: number,
+            ) => number,
+          )
         : null;
     this.imageBegin =
       typeof ex["image_begin"] === "function"
-        ? (ex["image_begin"] as unknown as (
-            handle: number,
-            mz: number,
-            tolerance: number,
-            level: number,
-            outSession: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["image_begin"] as unknown as (
+              handle: number,
+              mz: number,
+              tolerance: number,
+              level: number,
+              outSession: number,
+            ) => number,
+          )
         : null;
     this.imageScanCount =
       typeof ex["image_scan_count"] === "function"
-        ? (ex["image_scan_count"] as unknown as (
-            session: number,
-            outCount: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["image_scan_count"] as unknown as (
+              session: number,
+              outCount: number,
+            ) => number,
+          )
         : null;
     this.imageRanges =
       typeof ex["image_ranges"] === "function"
-        ? (ex["image_ranges"] as unknown as (
-            handle: number,
-            session: number,
-            from: number,
-            count: number,
-            outBuf: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["image_ranges"] as unknown as (
+              handle: number,
+              session: number,
+              from: number,
+              count: number,
+              outBuf: number,
+            ) => number,
+          )
         : null;
     this.imageFold =
       typeof ex["image_fold"] === "function"
-        ? (ex["image_fold"] as unknown as (
-            handle: number,
-            session: number,
-            from: number,
-            count: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["image_fold"] as unknown as (
+              handle: number,
+              session: number,
+              from: number,
+              count: number,
+            ) => number,
+          )
         : null;
     this.imageFinish =
       typeof ex["image_finish"] === "function"
-        ? (ex["image_finish"] as unknown as (
-            session: number,
-            outBuf: number,
-          ) => number)
+        ? this.guard.watch(
+            ex["image_finish"] as unknown as (
+              session: number,
+              outBuf: number,
+            ) => number,
+          )
         : null;
     this.imageFree =
       typeof ex["image_free"] === "function"
-        ? (ex["image_free"] as unknown as (session: number) => void)
+        ? this.guard.watch(
+            ex["image_free"] as unknown as (session: number) => void,
+          )
         : null;
   }
 
@@ -488,7 +558,7 @@ class WasmExports {
   ): T {
     for (const name of names)
       if (typeof exports[name] === "function")
-        return exports[name] as unknown as T;
+        return this.guard.watch(exports[name] as unknown as T);
     throw new Error(
       `WasmExports: none of [${names.join(", ")}] found in WASM exports`,
     );
@@ -508,7 +578,8 @@ class WasmApi {
   private readonly heap: WasmHeap;
   readonly fn: WasmExports;
 
-  private readonly jsonOutputSlot: number;
+  private readonly textOutputSlot: number;
+  private readonly bridgeOutputSlot: number;
   private readonly jsonScratchSlot: number;
   private readonly blobScratchSlot: number;
   private readonly baselineScratchSlot: number;
@@ -538,7 +609,8 @@ class WasmApi {
 
     this.heap = new WasmHeap(this.fn.memory, this.fn.alloc, this.fn.free);
 
-    this.jsonOutputSlot = this.heap.allocPermanent(OUTPUT_BUFFER_PAIR_BYTES);
+    this.textOutputSlot = this.heap.allocPermanent(OUTPUT_BUFFER_PAIR_BYTES);
+    this.bridgeOutputSlot = this.heap.allocPermanent(OUTPUT_BUFFER_PAIR_BYTES);
     this.jsonScratchSlot = this.heap.allocPermanent(OUTPUT_BUFFER_PAIR_BYTES);
     this.blobScratchSlot = this.heap.allocPermanent(OUTPUT_BUFFER_PAIR_BYTES);
     this.baselineScratchSlot = this.heap.allocPermanent(
@@ -647,6 +719,29 @@ class WasmApi {
     return this.readRangesFromSlot(this.blobScratchSlot);
   }
 
+  planScans(
+    handle: number,
+    queryType: number,
+    a: number,
+    b: number,
+    level: number,
+  ): ByteRangeResult[] {
+    if (!this.fn.planScans) {
+      throw new Error("planScans not in WASM exports");
+    }
+
+    const rc = this.fn.planScans(
+      handle,
+      queryType,
+      a,
+      b,
+      level,
+      this.blobScratchSlot,
+    );
+    if (rc !== 0) throw new Error(`plan_scans failed with code ${rc}`);
+    return this.readRangesFromSlot(this.blobScratchSlot);
+  }
+
   private imageBegin(
     handle: number,
     mz: number,
@@ -706,9 +801,9 @@ class WasmApi {
   private imageFinish(session: number): any {
     if (!this.fn.imageFinish)
       throw new Error("imageFinish not in WASM exports");
-    const rc = this.fn.imageFinish(session, this.jsonOutputSlot);
+    const rc = this.fn.imageFinish(session, this.bridgeOutputSlot);
     if (rc !== 0) throw new Error(`image_finish failed with code ${rc}`);
-    return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
+    return readIonImage(this.heap.readBridgeFromSlot(this.bridgeOutputSlot));
   }
 
   private imageFree(session: number): void {
@@ -799,16 +894,10 @@ class WasmApi {
     }
   }
 
-  fileToJson(handle: number): any {
-    const rc = this.fn.binToJson(handle, this.jsonOutputSlot);
-    if (rc !== 0) throw new Error("bin_to_json failed with code " + rc);
-    return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
-  }
-
   fileToMzml(handle: number): string {
-    const rc = this.fn.binToMzml(handle, this.jsonOutputSlot);
+    const rc = this.fn.binToMzml(handle, this.textOutputSlot);
     if (rc !== 0) throw new Error("bin_to_mzml failed with code " + rc);
-    const { ptr, len } = this.heap.readOutputSlot(this.jsonOutputSlot);
+    const { ptr, len } = this.heap.readOutputSlot(this.textOutputSlot);
     return this.heap.decoder.decode(this.heap.copyOutAndFree(ptr, len));
   }
 
@@ -895,24 +984,35 @@ class WasmApi {
     );
   }
 
-  getScans(
+  async getScans(
     handle: number,
     queryType: number,
     a: number,
     b: number,
     level: number,
-  ): any {
-    this.assertLocalHandle(handle, "getScans");
+  ): Promise<any> {
+    const sourceId = this.source_id_by_handle.get(handle);
+
+    if (sourceId !== undefined) {
+      const source = range_sources.get(sourceId);
+      if (!source) {
+        throw new Error("getScans: remote source is missing");
+      }
+
+      const ranges = this.planScans(handle, queryType, a, b, level);
+      await prefetchRangesForSource(source, ranges);
+    }
+
     const rc = this.fn.getScans(
       handle,
       queryType,
       a,
       b,
       level,
-      this.jsonOutputSlot,
+      this.bridgeOutputSlot,
     );
     if (rc !== 0) throw new Error("get_scans failed with code " + rc);
-    return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
+    return readScans(this.heap.readBridgeFromSlot(this.bridgeOutputSlot));
   }
 
   private getIonImageNow(
@@ -926,10 +1026,10 @@ class WasmApi {
       mz,
       tolerance,
       level,
-      this.jsonOutputSlot,
+      this.bridgeOutputSlot,
     );
     if (rc !== 0) throw new Error("get_ion_image failed with code " + rc);
-    return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
+    return readIonImage(this.heap.readBridgeFromSlot(this.bridgeOutputSlot));
   }
 
   async getIonImage(
@@ -966,19 +1066,23 @@ class WasmApi {
   ): any {
     const [xPtr, xLen] = this.heap.allocAndWrite(toUint8View(x));
     const [yPtr, yLen] = this.heap.allocAndWrite(toUint8View(y));
-    const rc = this.fn.findPeaks(
-      xPtr,
-      yPtr,
-      x.length,
-      this.peakOptsPtr(opts),
-      this.jsonOutputSlot,
-    );
-    this.heap.freeMany([
-      [xPtr, xLen],
-      [yPtr, yLen],
-    ]);
+    let rc: number;
+    try {
+      rc = this.fn.findPeaks(
+        xPtr,
+        yPtr,
+        x.length,
+        this.peakOptsPtr(opts),
+        this.bridgeOutputSlot,
+      );
+    } finally {
+      this.heap.freeMany([
+        [xPtr, xLen],
+        [yPtr, yLen],
+      ]);
+    }
     if (rc !== 0) throw new Error("find_peaks failed with code " + rc);
-    return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
+    return readRecords(this.heap.readBridgeFromSlot(this.bridgeOutputSlot));
   }
 
   getPeak(
@@ -990,32 +1094,40 @@ class WasmApi {
   ): any {
     const [xPtr, xLen] = this.heap.allocAndWrite(toUint8View(x));
     const [yPtr, yLen] = this.heap.allocAndWrite(toUint8View(y));
-    const rc = this.fn.getPeak(
-      xPtr,
-      yPtr,
-      x.length,
-      rt,
-      range,
-      this.peakOptsPtr(opts),
-      this.jsonOutputSlot,
-    );
-    this.heap.freeMany([
-      [xPtr, xLen],
-      [yPtr, yLen],
-    ]);
+    let rc: number;
+    try {
+      rc = this.fn.getPeak(
+        xPtr,
+        yPtr,
+        x.length,
+        rt,
+        range,
+        this.peakOptsPtr(opts),
+        this.bridgeOutputSlot,
+      );
+    } finally {
+      this.heap.freeMany([
+        [xPtr, xLen],
+        [yPtr, yLen],
+      ]);
+    }
     if (rc !== 0) throw new Error("get_peak failed with code " + rc);
-    return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
+    return readRecords(this.heap.readBridgeFromSlot(this.bridgeOutputSlot));
   }
 
   findNoiseLevel(y: Float32Array): NoiseLevel {
     const [yPtr, yLen] = this.heap.allocAndWrite(toUint8View(y));
-    const rc = this.fn.findNoiseLevel(
-      yPtr,
-      y.length,
-      this.noiseLevelSlot,
-      this.noiseLevelSlot + NOISE_LEVEL_INTENSITY_OFFSET,
-    );
-    this.fn.free(yPtr, yLen);
+    let rc: number;
+    try {
+      rc = this.fn.findNoiseLevel(
+        yPtr,
+        y.length,
+        this.noiseLevelSlot,
+        this.noiseLevelSlot + NOISE_LEVEL_INTENSITY_OFFSET,
+      );
+    } finally {
+      this.fn.free(yPtr, yLen);
+    }
     if (rc !== 0) throw new Error("find_noise_level failed with code " + rc);
     return {
       width: this.heap.readU32(this.noiseLevelSlot),
@@ -1031,17 +1143,21 @@ class WasmApi {
     maxIterations: number,
   ): Float64Array {
     const [yPtr, yLen] = this.heap.allocAndWrite(toUint8View(y));
-    const rc = this.fn.calculateBaseline(
-      yPtr,
-      y.length,
-      lambda,
-      maxIterations,
-      this.baselineScratchSlot,
-    );
-    this.fn.free(yPtr, yLen);
+    let rc: number;
+    try {
+      rc = this.fn.calculateBaseline(
+        yPtr,
+        y.length,
+        lambda,
+        maxIterations,
+        this.baselineScratchSlot,
+      );
+    } finally {
+      this.fn.free(yPtr, yLen);
+    }
     if (rc !== 0) throw new Error("calculate_baseline failed with code " + rc);
     const { ptr, len } = this.heap.readOutputSlot(this.baselineScratchSlot);
-    return new Float64Array(this.heap.copyOutAndFree(ptr, len).buffer.slice(0));
+    return new Float64Array(this.heap.copyOutAndFree(ptr, len).buffer);
   }
 
   getPeaksFromEic(
@@ -1072,32 +1188,36 @@ class WasmApi {
       toUint8View(lengths ?? emptyU32),
     );
     const [idPtr, idLen] = this.heap.allocAndWrite(idBytes ?? emptyBytes);
-    const rc = this.fn.getPeaksFromEic(
-      handle,
-      rtPtr,
-      mzPtr,
-      rangePtr,
-      offPtr,
-      lenPtr,
-      idPtr,
-      idBytesLen,
-      count,
-      from,
-      to,
-      this.peakOptsPtr(opts),
-      cores,
-      this.jsonOutputSlot,
-    );
-    this.heap.freeMany([
-      [rtPtr, rtLen],
-      [mzPtr, mzLen],
-      [rangePtr, rangeLen],
-      [offPtr, offLen],
-      [lenPtr, lenLen],
-      [idPtr, idLen],
-    ]);
+    let rc: number;
+    try {
+      rc = this.fn.getPeaksFromEic(
+        handle,
+        rtPtr,
+        mzPtr,
+        rangePtr,
+        offPtr,
+        lenPtr,
+        idPtr,
+        idBytesLen,
+        count,
+        from,
+        to,
+        this.peakOptsPtr(opts),
+        cores,
+        this.bridgeOutputSlot,
+      );
+    } finally {
+      this.heap.freeMany([
+        [rtPtr, rtLen],
+        [mzPtr, mzLen],
+        [rangePtr, rangeLen],
+        [offPtr, offLen],
+        [lenPtr, lenLen],
+        [idPtr, idLen],
+      ]);
+    }
     if (rc !== 0) throw rcError("get_peaks_from_eic", rc);
-    return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
+    return readRecords(this.heap.readBridgeFromSlot(this.bridgeOutputSlot));
   }
 
   getPeaksFromChrom(
@@ -1113,24 +1233,28 @@ class WasmApi {
     const [idxPtr, idxLen] = this.heap.allocAndWrite(toUint8View(indices));
     const [rtPtr, rtLen] = this.heap.allocAndWrite(toUint8View(rts));
     const [winPtr, winLen] = this.heap.allocAndWrite(toUint8View(windows));
-    const rc = this.fn.getPeaksFromChrom(
-      handle,
-      idxPtr,
-      rtPtr,
-      winPtr,
-      count,
-      this.peakOptsPtr(opts),
-      cores,
-      this.jsonOutputSlot,
-    );
-    this.heap.freeMany([
-      [idxPtr, idxLen],
-      [rtPtr, rtLen],
-      [winPtr, winLen],
-    ]);
+    let rc: number;
+    try {
+      rc = this.fn.getPeaksFromChrom(
+        handle,
+        idxPtr,
+        rtPtr,
+        winPtr,
+        count,
+        this.peakOptsPtr(opts),
+        cores,
+        this.bridgeOutputSlot,
+      );
+    } finally {
+      this.heap.freeMany([
+        [idxPtr, idxLen],
+        [rtPtr, rtLen],
+        [winPtr, winLen],
+      ]);
+    }
     if (rc !== 0)
       throw new Error("get_peaks_from_chrom failed with code " + rc);
-    return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
+    return readRecords(this.heap.readBridgeFromSlot(this.bridgeOutputSlot));
   }
 
   findFeature(
@@ -1163,34 +1287,38 @@ class WasmApi {
       toUint8View(lengths ?? emptyU32),
     );
     const [idPtr, idLen] = this.heap.allocAndWrite(idBytes ?? emptyBytes);
-    const rc = this.fn.findFeature(
-      handle,
-      rtPtr,
-      mzPtr,
-      rangePtr,
-      offPtr,
-      lenPtr,
-      idPtr,
-      idBytesLen,
-      count,
-      cores,
-      scanPpm,
-      scanMz,
-      eicPpm,
-      eicMz,
-      this.peakOptsPtr(opts),
-      this.jsonOutputSlot,
-    );
-    this.heap.freeMany([
-      [rtPtr, rtLen],
-      [mzPtr, mzLen],
-      [rangePtr, rangeLen],
-      [offPtr, offLen],
-      [lenPtr, lenLen],
-      [idPtr, idLen],
-    ]);
+    let rc: number;
+    try {
+      rc = this.fn.findFeature(
+        handle,
+        rtPtr,
+        mzPtr,
+        rangePtr,
+        offPtr,
+        lenPtr,
+        idPtr,
+        idBytesLen,
+        count,
+        cores,
+        scanPpm,
+        scanMz,
+        eicPpm,
+        eicMz,
+        this.peakOptsPtr(opts),
+        this.bridgeOutputSlot,
+      );
+    } finally {
+      this.heap.freeMany([
+        [rtPtr, rtLen],
+        [mzPtr, mzLen],
+        [rangePtr, rangeLen],
+        [offPtr, offLen],
+        [lenPtr, lenLen],
+        [idPtr, idLen],
+      ]);
+    }
     if (rc !== 0) throw new Error("find_feature failed with code " + rc);
-    return this.heap.readJsonFromSlot<any>(this.jsonOutputSlot);
+    return readRecords(this.heap.readBridgeFromSlot(this.bridgeOutputSlot));
   }
 
   private peakOptsPtr(opts: PeakOptions | undefined): number {
@@ -1314,10 +1442,6 @@ export class WasmBackend implements Backend {
     this.getApi().freeRaw(handle as number);
   }
 
-  fileToJson(handle: FileHandle): any {
-    return this.getApi().fileToJson(handle as number);
-  }
-
   fileToMzml(handle: FileHandle): string {
     return this.getApi().fileToMzml(handle as number);
   }
@@ -1352,13 +1476,13 @@ export class WasmBackend implements Backend {
     );
   }
 
-  getScans(
+  async getScans(
     handle: FileHandle,
     queryType: number,
     a: number,
     b: number,
     level: number,
-  ): any {
+  ): Promise<any> {
     return this.getApi().getScans(handle as number, queryType, a, b, level);
   }
 
@@ -1497,4 +1621,3 @@ export class WasmBackend implements Backend {
     );
   }
 }
-

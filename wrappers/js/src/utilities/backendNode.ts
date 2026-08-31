@@ -4,7 +4,9 @@ import * as fs from "fs";
 import * as path from "path";
 import type { Backend, FileHandle } from "./backend";
 import type { NoiseLevel, PeakOptions } from "../types/types";
-import { parseAndCamelize } from "./shared";
+import { readRecords } from "./recordBridge";
+import { readIonImage } from "./imageBridge";
+import { readScans } from "./scanBridge";
 import {
   ByteRangeResult,
   RemoteSource,
@@ -131,9 +133,10 @@ export class NodeBackend implements Backend {
       "quantion.node",
     );
     this.native = require(addonPath);
-    if (typeof this.native.bind === "function") {
-      this.native.bind(platformLibPath(proc));
+    if (typeof this.native.bind !== "function") {
+      throw new Error("quantion: the native addon does not expose bind");
     }
+    this.native.bind(platformLibPath(proc));
     this.ready = true;
   }
 
@@ -150,7 +153,6 @@ export class NodeBackend implements Backend {
   parseIonPath(path: string, cacheSize = 0): FileHandle {
     return this.native.parseIonPath(path, cacheSize);
   }
-
 
   planOpen(header: Uint8Array): ByteRangeResult[] {
     return this.native.planOpen(toNodeBuffer(header));
@@ -180,9 +182,6 @@ export class NodeBackend implements Backend {
     this.native.dispose(handle);
   }
 
-  fileToJson(handle: FileHandle): any {
-    return parseAndCamelize(this.native.binToJson(handle) as string);
-  }
 
   fileToMzml(handle: FileHandle): string {
     return this.native.binToMzML(handle) as string;
@@ -226,27 +225,48 @@ export class NodeBackend implements Backend {
     ) as { x: Float64Array; y: Float64Array };
   }
 
-  getScans(
+  async getScans(
     handle: FileHandle,
     queryType: number,
     a: number,
     b: number,
     level: number,
-  ): any {
-    return parseAndCamelize(
-      this.native.getScans(handle, queryType, a, b, level) as string,
+  ): Promise<any> {
+    const source = this.remote_by_handle.get(handle as object);
+    if (source) {
+      const ranges = this.native.planScans(
+        handle,
+        queryType,
+        a,
+        b,
+        level,
+      ) as ByteRangeResult[];
+      await prefetchRanges(source, ranges);
+    }
+    return readScans(
+      this.native.getScans(handle, queryType, a, b, level) as ArrayBuffer,
     );
   }
 
-  getIonImage(
+  async getIonImage(
     handle: FileHandle,
     mz: number,
     tolerance: number,
     level: number,
     _onProgress?: (fetched: number, total: number, heldBytes: number) => void,
-  ): any {
-    return parseAndCamelize(
-      this.native.getIonImage(handle, mz, tolerance, level) as string,
+  ): Promise<any> {
+    const source = this.remote_by_handle.get(handle as object);
+    if (source) {
+      const ranges = this.native.planImage(
+        handle,
+        mz,
+        tolerance,
+        level,
+      ) as ByteRangeResult[];
+      await prefetchRanges(source, ranges);
+    }
+    return readIonImage(
+      this.native.getIonImage(handle, mz, tolerance, level) as ArrayBuffer,
     );
   }
 
@@ -255,8 +275,8 @@ export class NodeBackend implements Backend {
     y: Float64Array,
     opts: PeakOptions | undefined,
   ): any {
-    return parseAndCamelize(
-      this.native.findPeaks(x, y, opts ?? null) as string,
+    return readRecords(
+      this.native.findPeaks(x, y, opts ?? null) as ArrayBuffer,
     );
   }
 
@@ -267,8 +287,8 @@ export class NodeBackend implements Backend {
     range: number,
     opts: PeakOptions | undefined,
   ): any {
-    return parseAndCamelize(
-      this.native.getPeak(x, y, rt, range, opts ?? null) as string,
+    return readRecords(
+      this.native.getPeak(x, y, rt, range, opts ?? null) as ArrayBuffer,
     );
   }
 
@@ -305,7 +325,7 @@ export class NodeBackend implements Backend {
     cores: number,
   ): any {
     const ids = unpackIds(count, offsets, lengths, idBytes);
-    return parseAndCamelize(
+    return readRecords(
       this.native.getPeaksFromEic(
         handle,
         rts,
@@ -316,7 +336,7 @@ export class NodeBackend implements Backend {
         to,
         opts ?? null,
         cores,
-      ) as string,
+      ) as ArrayBuffer,
     );
   }
 
@@ -329,7 +349,7 @@ export class NodeBackend implements Backend {
     opts: PeakOptions | undefined,
     cores: number,
   ): any {
-    return parseAndCamelize(
+    return readRecords(
       this.native.getPeaksFromChrom(
         handle,
         indices,
@@ -337,7 +357,7 @@ export class NodeBackend implements Backend {
         windows,
         opts ?? null,
         cores,
-      ) as string,
+      ) as ArrayBuffer,
     );
   }
 
@@ -353,7 +373,7 @@ export class NodeBackend implements Backend {
     opts: PeakOptions | undefined,
     cores: number,
   ): any {
-    return parseAndCamelize(
+    return readRecords(
       this.native.findFeatures(
         handle,
         from,
@@ -365,7 +385,7 @@ export class NodeBackend implements Backend {
         gridStep,
         opts ?? null,
         cores,
-      ) as string,
+      ) as ArrayBuffer,
     );
   }
 
@@ -387,7 +407,7 @@ export class NodeBackend implements Backend {
     opts: PeakOptions | undefined,
   ): any {
     const ids = unpackIds(count, offsets, lengths, idBytes);
-    return parseAndCamelize(
+    return readRecords(
       this.native.findFeature(
         handle,
         rts,
@@ -400,7 +420,7 @@ export class NodeBackend implements Backend {
         eicPpm,
         eicMz,
         opts ?? null,
-      ) as string,
+      ) as ArrayBuffer,
     );
   }
 
@@ -420,7 +440,7 @@ export class NodeBackend implements Backend {
     opts: PeakOptions | undefined,
     cores: number,
   ): any {
-    return parseAndCamelize(
+    return readRecords(
       this.native.getFeatures(
         dirPath,
         from,
@@ -436,7 +456,7 @@ export class NodeBackend implements Backend {
         prevalence,
         opts ?? null,
         cores,
-      ) as string,
+      ) as ArrayBuffer,
     );
   }
 }

@@ -9,6 +9,196 @@
 
 #define QUANTION_ABI_VERSION 1
 
+#define QUANTION_BRIDGE_MAGIC 1112821329
+
+#define QUANTION_BRIDGE_LAYOUT_VERSION 1
+
+#define QUANTION_BRIDGE_HEADER_BYTES 32
+
+#define QUANTION_SECTION_ENTRY_BYTES 24
+
+#define QUANTION_PAYLOAD_SCANS 1
+
+#define QUANTION_PAYLOAD_ION_IMAGE 2
+
+#define QUANTION_PAYLOAD_PEAKS 3
+
+#define QUANTION_PAYLOAD_FEATURES 4
+
+#define QUANTION_PAYLOAD_CHROM_PEAKS 5
+
+#define QUANTION_PAYLOAD_FIT_RESULT 6
+
+#define QUANTION_PAYLOAD_EIC_PEAKS 7
+
+#define QUANTION_PAYLOAD_CONSENSUS_FEATURES 8
+
+#define QUANTION_PAYLOAD_FOUND_FEATURES 9
+
+#define QUANTION_ELEMENT_F64 1
+
+#define QUANTION_ELEMENT_U32 2
+
+#define QUANTION_ELEMENT_U64 3
+
+#define QUANTION_ELEMENT_U8 4
+
+#define QUANTION_SECTION_POINT_STARTS 1
+
+#define QUANTION_SECTION_MZ 2
+
+#define QUANTION_SECTION_INTENSITY 3
+
+#define QUANTION_SECTION_RT 4
+
+#define QUANTION_SECTION_RT_SECONDS 5
+
+#define QUANTION_SECTION_BASE_PEAK_MZ 6
+
+#define QUANTION_SECTION_SELECTED_ION_MZ 7
+
+#define QUANTION_SECTION_BASE_PEAK_INT 8
+
+#define QUANTION_SECTION_TOTAL_ION_CURRENT 9
+
+#define QUANTION_SECTION_MS_LEVEL 10
+
+#define QUANTION_SECTION_POLARITY 11
+
+#define QUANTION_SECTION_POSITION_X 12
+
+#define QUANTION_SECTION_POSITION_Y 13
+
+#define QUANTION_SECTION_POSITION_Z 14
+
+#define QUANTION_SECTION_IMAGE_SHAPE 15
+
+#define QUANTION_SECTION_IMAGE_DATA 16
+
+#define QUANTION_SECTION_IMAGE_COUNTS 17
+
+#define QUANTION_SECTION_PEAK_FROM 18
+
+#define QUANTION_SECTION_PEAK_TO 19
+
+#define QUANTION_SECTION_PEAK_RT 20
+
+#define QUANTION_SECTION_PEAK_INTEGRAL 21
+
+#define QUANTION_SECTION_PEAK_INTENSITY 22
+
+#define QUANTION_SECTION_PEAK_POINT_COUNT 23
+
+#define QUANTION_SECTION_PEAK_NOISE 24
+
+#define QUANTION_SECTION_PEAK_R2 25
+
+#define QUANTION_SECTION_FEATURE_MZ 26
+
+#define QUANTION_SECTION_FEATURE_RT 27
+
+#define QUANTION_SECTION_FEATURE_FROM 28
+
+#define QUANTION_SECTION_FEATURE_TO 29
+
+#define QUANTION_SECTION_FEATURE_INTENSITY 30
+
+#define QUANTION_SECTION_FEATURE_INTEGRAL 31
+
+#define QUANTION_SECTION_FEATURE_POINT_COUNT 32
+
+#define QUANTION_SECTION_FEATURE_NOISE 33
+
+#define QUANTION_SECTION_CHROM_INDEX 34
+
+#define QUANTION_SECTION_CHROM_TARGET_RT 35
+
+#define QUANTION_SECTION_CHROM_RT 36
+
+#define QUANTION_SECTION_CHROM_FROM 37
+
+#define QUANTION_SECTION_CHROM_TO 38
+
+#define QUANTION_SECTION_CHROM_INTENSITY 39
+
+#define QUANTION_SECTION_CHROM_INTEGRAL 40
+
+#define QUANTION_SECTION_CHROM_TOTAL_AREA 41
+
+#define QUANTION_SECTION_CHROM_ID_STARTS 42
+
+#define QUANTION_SECTION_CHROM_ID_BYTES 43
+
+#define QUANTION_SECTION_CHROM_TIMESTAMP_STARTS 44
+
+#define QUANTION_SECTION_CHROM_TIMESTAMP_BYTES 45
+
+#define QUANTION_SECTION_FIT_SHAPE 46
+
+#define QUANTION_SECTION_FIT_HEIGHT 47
+
+#define QUANTION_SECTION_FIT_CENTER 48
+
+#define QUANTION_SECTION_FIT_FWHM 49
+
+#define QUANTION_SECTION_FIT_TAIL 50
+
+#define QUANTION_SECTION_FIT_R2 51
+
+#define QUANTION_SECTION_EIC_PEAK_ID_STARTS 52
+
+#define QUANTION_SECTION_EIC_PEAK_ID_BYTES 53
+
+#define QUANTION_SECTION_EIC_PEAK_MZ 54
+
+#define QUANTION_SECTION_EIC_PEAK_ORT 55
+
+#define QUANTION_SECTION_EIC_PEAK_RT 56
+
+#define QUANTION_SECTION_EIC_PEAK_FROM 57
+
+#define QUANTION_SECTION_EIC_PEAK_TO 58
+
+#define QUANTION_SECTION_EIC_PEAK_INTENSITY 59
+
+#define QUANTION_SECTION_EIC_PEAK_INTEGRAL 60
+
+#define QUANTION_SECTION_EIC_PEAK_NOISE 61
+
+#define QUANTION_SECTION_CONSENSUS_MZ 62
+
+#define QUANTION_SECTION_CONSENSUS_RT 63
+
+#define QUANTION_SECTION_CONSENSUS_FROM 64
+
+#define QUANTION_SECTION_CONSENSUS_TO 65
+
+#define QUANTION_SECTION_CONSENSUS_INTENSITY 66
+
+#define QUANTION_SECTION_CONSENSUS_INTEGRAL 67
+
+#define QUANTION_SECTION_CONSENSUS_FREQUENCY 68
+
+#define QUANTION_SECTION_FOUND_ID_STARTS 69
+
+#define QUANTION_SECTION_FOUND_ID_BYTES 70
+
+#define QUANTION_SECTION_FOUND_MZ 71
+
+#define QUANTION_SECTION_FOUND_RT 72
+
+#define QUANTION_SECTION_FOUND_FROM 73
+
+#define QUANTION_SECTION_FOUND_TO 74
+
+#define QUANTION_SECTION_FOUND_INTENSITY 75
+
+#define QUANTION_SECTION_FOUND_INTEGRAL 76
+
+#define QUANTION_SECTION_FOUND_POINT_COUNT 77
+
+#define QUANTION_SECTION_FOUND_NOISE 78
+
 typedef struct ImageSession ImageSession;
 
 typedef struct ParsedFile ParsedFile;
@@ -122,18 +312,9 @@ int parse_ion_path(const char *path_ptr, uintptr_t max_cache_size, struct Parsed
  *
  * # Safety
  * `header_ptr` must point to at least `header_len` readable bytes, and `header_len` must be at
- * least 408 so the total file size can be read.
+ * least 1024 so the header can be parsed.
  */
 int plan_open(const uint8_t *header_ptr, uintptr_t header_len, struct Buf *out);
-
-/**
- * Serialize a parsed file to JSON and write it to `out`.
- *
- * # Safety
- * `h` must be a valid `ParsedFile` pointer from this library.
- * `out` must be a valid writable `Buf` pointer.
- */
-int bin_to_json(struct ParsedFile *h, struct Buf *out);
 
 /**
  * Convert a parsed file to mzML and write the result to `out`.
@@ -309,6 +490,19 @@ int plan_eic(struct ParsedFile *h,
              double mz_tol,
              struct Buf *out);
 
+int plan_scans(struct ParsedFile *h,
+               uint8_t query_type,
+               double from_value,
+               double to_value,
+               uint8_t level,
+               struct Buf *out);
+
+int plan_image(struct ParsedFile *h,
+               double target,
+               double tolerance,
+               uint8_t level,
+               struct Buf *out);
+
 /**
  * Get scans by query and write the result to `out`.
  *
@@ -329,7 +523,7 @@ int get_scans(struct ParsedFile *h,
 
 /**
  * Build a 2D ion image for a target m/z by summing intensity in `[target - tolerance, target + tolerance]`
- * per spectrum and scattering the mean into a position_x/position_y grid. Writes a JSON object to `out`.
+ * per spectrum and scattering the mean into a position_x/position_y grid. Writes an ion image bridge to `out`.
  *
  * # Safety
  * `h` must be a valid `ParsedFile` pointer from this library.

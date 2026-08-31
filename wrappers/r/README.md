@@ -47,19 +47,12 @@ out <- quantion::mzml_to_ion(sample, level = 12L, f32_compress = FALSE)
 writeBin(out, "/path/to/file.ion")
 ```
 
-### Sample to other formats
+### Sample to mzML
 
-Get JSON, mzML, or R data frames from a sample.
+Get mzML text from a sample.
 
 ```r
-# Convert to JSON
-json <- quantion::ion_to_json(sample)
-
-# Convert to mzML
 mzml <- quantion::ion_to_mzml(sample)
-
-# Convert to R data frames
-df <- quantion::ion_to_df(sample)
 ```
 
 ## Extract from samples

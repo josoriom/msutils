@@ -49,15 +49,6 @@ export class SampleFile {
   }
 
   /**
-   * Return the sample data as a plain JavaScript object.
-   * @returns Parsed sample data with camelCase keys.
-   */
-  toJson(): any {
-    this.assertValid("toJson");
-    return this._backend.fileToJson(this._handle!);
-  }
-
-  /**
    * Serialize the sample back to mzML format.
    * @returns Full mzML file content as a string.
    */

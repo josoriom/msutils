@@ -155,16 +155,6 @@ function parseIonSource(
   return backend.parseIonBuffer(source.bytes, cacheSize);
 }
 
-/**
- * Return the sample data as a JSON string.
- *
- * @param file - Loaded sample file.
- * @returns JSON string representation of the sample.
- */
-export function ionToJson(file: SampleFile): string {
-  assertFile(file, "ionToJson");
-  return JSON.stringify(backend().fileToJson(file._handle!));
-}
 
 /**
  * Serialize a sample back to mzML format.
@@ -295,7 +285,8 @@ export function getPeak(
   if (!Number.isFinite(range) || range <= 0) {
     throw new RangeError("getPeak: range must be a positive finite number");
   }
-  return backend().getPeak(x, y, rt, range, opts);
+  const rows = backend().getPeak(x, y, rt, range, opts);
+  return rows.length ? rows[0] : null;
 }
 
 /**
@@ -355,11 +346,11 @@ function assertLevel(level: number, caller: string): void {
  * @param level - MS level (1 = MS1, 2 = MS2, etc.). Default 1.
  * @returns Array of scans for range queries, single scan (or null) for closest queries.
  */
-export function getScans(
+export async function getScans(
   file: SampleFile,
   query: ScanQuery,
   level = 1,
-): CentroidScan[] | CentroidScan | null {
+): Promise<CentroidScan[] | CentroidScan | null> {
   assertFile(file, "getScans");
   assertLevel(level, "getScans");
 
@@ -402,11 +393,41 @@ export function getScans(
     }
   }
 
-  const raw = backend().getScans(file._handle!, queryType, a, b, level);
+  const raw = await file._backend.getScans(
+    file._handle!,
+    queryType,
+    a,
+    b,
+    level,
+  );
   if (queryType === QUERY_CLOSEST_RT || queryType === QUERY_CLOSEST_MZ) {
     return raw?.length ? raw[0] : null;
   }
   return raw as CentroidScan[];
+}
+
+/**
+ * Copy one scan's `mz` and `intensity` into plain arrays.
+ *
+ * A scan returned by `getScans` holds views over the bridge the core produced, so
+ * keeping a single scan alive keeps the whole bridge alive and blocks rebinding.
+ * Use this when a scan must outlive the rest of the result.
+ *
+ * @param scan - Scan whose arrays should be detached.
+ * @returns The same scan with `mz` and `intensity` copied into plain arrays.
+ */
+export function toNumberArrays(scan: CentroidScan): {
+  rt: number;
+  mz: number[];
+  intensity: number[];
+  metadata: CentroidScan["metadata"];
+} {
+  return {
+    rt: scan.rt,
+    mz: Array.from(scan.mz),
+    intensity: Array.from(scan.intensity),
+    metadata: scan.metadata,
+  };
 }
 
 /**

@@ -25,11 +25,7 @@ A \emph{sample file} is a pointer to a parsed mzML held in memory, or to an ion 
 \code{\link{dispose}()} — free a sample file immediately.
 }
 \section{Convert}{
-\code{\link{ion_to_json}()} — get JSON from a sample file.
-
 \code{\link{ion_to_mzml}()} — get mzML text from a sample file.
-
-\code{\link{ion_to_df}()} — get R lists and data frames from a sample file.
 }
 \section{Extract}{
 \code{\link{calculate_eic}()} — get an EIC from a sample file for one m/z.

@@ -20,7 +20,6 @@ describe("parseIon dispatch to backend primitives", () => {
       parseIonRemote: parseIonRemoteMock,
       parseIonBuffer: parseIonBufferMock,
       freeFile: jest.fn(),
-      fileToJson: jest.fn(),
       fileToMzml: jest.fn(),
       fileToBin: jest.fn(),
       calculateEic: jest.fn(),

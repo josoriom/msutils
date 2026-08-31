@@ -62,14 +62,6 @@ const sample = await quantion.parseIon(
 
 ## Convert
 
-### Sample to JSON
-
-Get JSON from a sample.
-
-```js
-const json = quantion.ionToJson(sample);
-```
-
 ### Sample to mzML
 
 Get mzML text from a sample.
@@ -109,20 +101,24 @@ Get scans from a sample by retention time range, m/z range, or closest value.
 
 ```js
 // Get scans in RT range
-const scans = quantion.getScans(sample, { rt: { from: 1, to: 15 } }, 1);
+const scans = await quantion.getScans(sample, { rt: { from: 1, to: 15 } }, 1);
 
 // Get scan closest to RT
-const scan = quantion.getScans(sample, { rt: { closest: 5.3 } }, 1);
+const scan = await quantion.getScans(sample, { rt: { closest: 5.3 } }, 1);
 
 // Get scans in m/z range
-const scans = quantion.getScans(
+const scans = await quantion.getScans(
   sample,
   { selectedMz: { from: 100, to: 500 } },
   1,
 );
 
 // Get scan closest to m/z
-const scan = quantion.getScans(sample, { selectedMz: { closest: 174.112 } }, 1);
+const scan = await quantion.getScans(
+  sample,
+  { selectedMz: { closest: 174.112 } },
+  1,
+);
 ```
 
 ## Process XY data

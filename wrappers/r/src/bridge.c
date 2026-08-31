@@ -30,7 +30,6 @@ typedef struct MzML MzML;
 typedef uint32_t (*fn_quantion_abi_version)(void);
 typedef size_t (*fn_quantion_sizeof_peak_options)(void);
 typedef int32_t (*fn_parse_mzml)(const unsigned char *, size_t, MzML **);
-typedef int32_t (*fn_bin_to_json)(const MzML *, Buf *);
 typedef int32_t (*fn_bin_to_mzml)(const MzML *, Buf *);
 typedef int32_t (*fn_get_peak)(const double *, const double *, size_t, double, double, const CPeakOptions *, Buf *);
 typedef int32_t (*fn_fit_peak)(const double *, const double *, size_t, double, double, int32_t, Buf *);
@@ -50,6 +49,7 @@ typedef int32_t (*fn_read_range)(void *, uint64_t, uint64_t, uint8_t *);
 typedef int32_t (*fn_parse_ion_source)(fn_read_range, void *, size_t, MzML **);
 typedef int32_t (*fn_plan_open)(const uint8_t *, size_t, Buf *);
 typedef int32_t (*fn_plan_eic)(MzML *, double, double, double, double, double, Buf *);
+typedef int32_t (*fn_plan_scans)(MzML *, uint8_t, double, double, uint8_t, Buf *);
 typedef int32_t (*fn_parse_ion_path)(const char *, size_t, MzML **);
 typedef int32_t (*fn_get_features)(const char *, double, double, double, double, double, double, double, double, double, double, int32_t, const CPeakOptions *, int32_t, Buf *);
 typedef int32_t (*fn_get_scans)(const MzML *, uint8_t, double, double, uint8_t, Buf *);
@@ -61,7 +61,6 @@ typedef struct
   fn_quantion_abi_version quantion_abi_version;
   fn_quantion_sizeof_peak_options quantion_sizeof_peak_options;
   fn_parse_mzml parse_mzml;
-  fn_bin_to_json bin_to_json;
   fn_bin_to_mzml bin_to_mzml;
   fn_get_peak get_peak;
   fn_fit_peak fit_peak;
@@ -81,6 +80,7 @@ typedef struct
   fn_parse_ion_source parse_ion_source;
   fn_plan_open plan_open;
   fn_plan_eic plan_eic;
+  fn_plan_scans plan_scans;
   fn_parse_ion_path parse_ion_path;
   fn_free_mzml free_mzml;
   fn_get_features get_features;
@@ -141,8 +141,6 @@ int abi_load(const char *path, const char **err)
   }
   if (resolve_required((void **)&ABI.parse_mzml, "parse_mzml"))
     goto fail;
-  if (resolve_required((void **)&ABI.bin_to_json, "bin_to_json"))
-    goto fail;
   if (resolve_required((void **)&ABI.bin_to_mzml, "bin_to_mzml"))
     goto fail;
   if (resolve_required((void **)&ABI.get_peak, "get_peak"))
@@ -174,6 +172,7 @@ int abi_load(const char *path, const char **err)
   ABI.parse_ion_source = (fn_parse_ion_source)DLSYM(abi_handle, "parse_ion_source");
   ABI.plan_open = (fn_plan_open)DLSYM(abi_handle, "plan_open");
   ABI.plan_eic = (fn_plan_eic)DLSYM(abi_handle, "plan_eic");
+  ABI.plan_scans = (fn_plan_scans)DLSYM(abi_handle, "plan_scans");
   if (resolve_required((void **)&ABI.parse_bin, "parse_bin"))
     goto fail;
   if (resolve_required((void **)&ABI.parse_ion_path, "parse_ion_path"))
@@ -262,6 +261,527 @@ static SEXP mk_string_len(const unsigned char *ptr, size_t len)
   SEXP s = R_UnwindProtect(mk_string_build, &d, mk_string_free, &d, cont);
   UNPROTECT(1);
   return s;
+}
+
+
+typedef struct
+{
+  uint32_t element_type;
+  uint64_t byte_offset;
+  uint64_t byte_length;
+} bridge_section;
+
+typedef struct
+{
+  const unsigned char *raw;
+  uint64_t total_bytes;
+  uint16_t payload_kind;
+  uint64_t record_count;
+  uint32_t section_count;
+  bridge_section sections[64];
+  uint32_t section_ids[64];
+} bridge_view;
+
+static uint16_t read_u16(const unsigned char *raw, uint64_t at)
+{
+  uint16_t value;
+  memcpy(&value, raw + at, sizeof(value));
+  return value;
+}
+
+static uint32_t read_u32(const unsigned char *raw, uint64_t at)
+{
+  uint32_t value;
+  memcpy(&value, raw + at, sizeof(value));
+  return value;
+}
+
+static uint64_t read_u64(const unsigned char *raw, uint64_t at)
+{
+  uint64_t value;
+  memcpy(&value, raw + at, sizeof(value));
+  return value;
+}
+
+static double read_f64(const unsigned char *raw, uint64_t at)
+{
+  double value;
+  memcpy(&value, raw + at, sizeof(value));
+  return value;
+}
+
+static size_t size_of_element(uint32_t element_type)
+{
+  if (element_type == QUANTION_ELEMENT_F64)
+    return 8;
+  if (element_type == QUANTION_ELEMENT_U32)
+    return 4;
+  if (element_type == QUANTION_ELEMENT_U64)
+    return 8;
+  if (element_type == QUANTION_ELEMENT_U8)
+    return 1;
+  return 0;
+}
+
+static uint32_t expected_element_type(uint32_t section_id)
+{
+  if (section_id == QUANTION_SECTION_POINT_STARTS)
+    return QUANTION_ELEMENT_U64;
+  if (section_id == QUANTION_SECTION_IMAGE_SHAPE || section_id == QUANTION_SECTION_IMAGE_COUNTS)
+    return QUANTION_ELEMENT_U32;
+  if (section_id <= QUANTION_SECTION_IMAGE_DATA)
+    return QUANTION_ELEMENT_F64;
+  return 0;
+}
+
+static void read_bridge_view(bridge_view *bridge, const unsigned char *raw, size_t len)
+{
+  if (len < QUANTION_BRIDGE_HEADER_BYTES)
+    error("quantion bridge: buffer is shorter than the header");
+
+  uint64_t total = (uint64_t)len;
+  if (read_u32(raw, 0) != QUANTION_BRIDGE_MAGIC)
+    error("quantion bridge: magic does not match");
+  if (read_u16(raw, 4) != QUANTION_BRIDGE_LAYOUT_VERSION)
+    error("quantion bridge: layout version is not supported");
+
+  uint32_t count = read_u32(raw, 8);
+  if (read_u32(raw, 12) != QUANTION_BRIDGE_HEADER_BYTES)
+    error("quantion bridge: section table does not start after the header");
+  if (read_u64(raw, 16) != total)
+    error("quantion bridge: total bytes does not match the buffer");
+  if (count > 64)
+    error("quantion bridge: too many sections");
+  if ((uint64_t)count * QUANTION_SECTION_ENTRY_BYTES > total - QUANTION_BRIDGE_HEADER_BYTES)
+    error("quantion bridge: section table does not fit");
+
+  bridge->raw = raw;
+  bridge->total_bytes = total;
+  bridge->payload_kind = read_u16(raw, 6);
+  bridge->record_count = read_u64(raw, 24);
+  bridge->section_count = count;
+
+  uint64_t reach = QUANTION_BRIDGE_HEADER_BYTES + (uint64_t)count * QUANTION_SECTION_ENTRY_BYTES;
+  for (uint32_t index = 0; index < count; index++)
+  {
+    uint64_t start = QUANTION_BRIDGE_HEADER_BYTES + (uint64_t)index * QUANTION_SECTION_ENTRY_BYTES;
+    uint32_t section_id = read_u32(raw, start);
+    uint32_t element_type = read_u32(raw, start + 4);
+    uint64_t offset = read_u64(raw, start + 8);
+    uint64_t length = read_u64(raw, start + 16);
+
+    for (uint32_t seen = 0; seen < index; seen++)
+      if (bridge->section_ids[seen] == section_id)
+        error("quantion bridge: section %u appears twice", section_id);
+    if (offset > total || length > total - offset)
+      error("quantion bridge: section %u runs past the end", section_id);
+    if (offset % 8 != 0)
+      error("quantion bridge: section %u is not aligned to eight bytes", section_id);
+    if (offset < reach)
+      error("quantion bridge: section %u overlaps the section before it", section_id);
+
+    size_t element_size = size_of_element(element_type);
+    if (element_size == 0)
+      error("quantion bridge: section %u has an unknown element type", section_id);
+    if (length % (uint64_t)element_size != 0)
+      error("quantion bridge: section %u is not a whole number of elements", section_id);
+
+    uint32_t expected = expected_element_type(section_id);
+    if (expected != 0 && expected != element_type)
+      error("quantion bridge: section %u has the wrong element type", section_id);
+
+    reach = offset + length;
+    bridge->section_ids[index] = section_id;
+    bridge->sections[index].element_type = element_type;
+    bridge->sections[index].byte_offset = offset;
+    bridge->sections[index].byte_length = length;
+  }
+}
+
+static const bridge_section *find_section(const bridge_view *bridge, uint32_t section_id)
+{
+  for (uint32_t index = 0; index < bridge->section_count; index++)
+    if (bridge->section_ids[index] == section_id)
+      return &bridge->sections[index];
+  error("quantion bridge: section %u is missing", section_id);
+  return NULL;
+}
+
+static SEXP number_column(const bridge_view *bridge, uint32_t section_id, R_xlen_t count)
+{
+  const bridge_section *section = find_section(bridge, section_id);
+  if (section->byte_length / 8 != (uint64_t)count)
+    error("quantion bridge: section %u does not match the record count", section_id);
+  SEXP column = PROTECT(Rf_allocVector(REALSXP, count));
+  if (count > 0)
+    memcpy(REAL(column), bridge->raw + section->byte_offset, (size_t)count * 8);
+  UNPROTECT(1);
+  return column;
+}
+
+static SEXP point_column(const bridge_view *bridge, uint32_t section_id,
+                         const unsigned char *starts_at, R_xlen_t count)
+{
+  const bridge_section *values = find_section(bridge, section_id);
+  SEXP column = PROTECT(Rf_allocVector(VECSXP, count));
+  for (R_xlen_t index = 0; index < count; index++)
+  {
+    uint64_t from = read_u64(starts_at, (uint64_t)index * 8);
+    uint64_t to = read_u64(starts_at, (uint64_t)(index + 1) * 8);
+    if (to < from || to > values->byte_length / 8)
+      error("quantion bridge: point starts run past section %u", section_id);
+    R_xlen_t points = (R_xlen_t)(to - from);
+    SEXP scan = PROTECT(Rf_allocVector(REALSXP, points));
+    if (points > 0)
+      memcpy(REAL(scan), bridge->raw + values->byte_offset + from * 8, (size_t)points * 8);
+    SET_VECTOR_ELT(column, index, scan);
+    UNPROTECT(1);
+  }
+  UNPROTECT(1);
+  return column;
+}
+
+static const uint32_t METADATA_SECTIONS[10] = {
+    QUANTION_SECTION_RT_SECONDS,
+    QUANTION_SECTION_BASE_PEAK_MZ,
+    QUANTION_SECTION_SELECTED_ION_MZ,
+    QUANTION_SECTION_BASE_PEAK_INT,
+    QUANTION_SECTION_TOTAL_ION_CURRENT,
+    QUANTION_SECTION_MS_LEVEL,
+    QUANTION_SECTION_POLARITY,
+    QUANTION_SECTION_POSITION_X,
+    QUANTION_SECTION_POSITION_Y,
+    QUANTION_SECTION_POSITION_Z,
+};
+
+static const char *METADATA_NAMES[10] = {
+    "rt_seconds", "base_peak_mz", "selected_ion_mz", "base_peak_int",
+    "total_ion_current", "ms_level", "polarity",
+    "position_x", "position_y", "position_z"};
+
+static SEXP set_data_frame(SEXP columns, SEXP names, R_xlen_t rows)
+{
+  Rf_setAttrib(columns, R_NamesSymbol, names);
+  SEXP row_names = PROTECT(Rf_allocVector(INTSXP, 2));
+  INTEGER(row_names)[0] = NA_INTEGER;
+  INTEGER(row_names)[1] = -(int)rows;
+  Rf_setAttrib(columns, R_RowNamesSymbol, row_names);
+  UNPROTECT(1);
+  Rf_setAttrib(columns, R_ClassSymbol, Rf_mkString("data.frame"));
+  return columns;
+}
+
+static SEXP build_metadata(const bridge_view *bridge, R_xlen_t count)
+{
+  SEXP columns = PROTECT(Rf_allocVector(VECSXP, 10));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 10));
+  for (int index = 0; index < 10; index++)
+  {
+    SET_VECTOR_ELT(columns, index, number_column(bridge, METADATA_SECTIONS[index], count));
+    SET_STRING_ELT(names, index, Rf_mkChar(METADATA_NAMES[index]));
+  }
+  set_data_frame(columns, names, count);
+  UNPROTECT(2);
+  return columns;
+}
+
+struct scans_bridge_data
+{
+  const unsigned char *ptr;
+  size_t len;
+};
+
+static SEXP scans_bridge_build(void *data)
+{
+  struct scans_bridge_data *held = (struct scans_bridge_data *)data;
+  bridge_view bridge;
+  read_bridge_view(&bridge, held->ptr, held->len);
+  if (bridge.payload_kind != QUANTION_PAYLOAD_SCANS)
+    error("quantion bridge: expected a scans payload");
+
+  R_xlen_t count = (R_xlen_t)bridge.record_count;
+  const bridge_section *starts = find_section(&bridge, QUANTION_SECTION_POINT_STARTS);
+  if (starts->byte_length / 8 != (uint64_t)count + 1)
+    error("quantion bridge: point starts do not match the scan count");
+
+  const bridge_section *mz = find_section(&bridge, QUANTION_SECTION_MZ);
+  const bridge_section *intensity = find_section(&bridge, QUANTION_SECTION_INTENSITY);
+  if (intensity->byte_length != mz->byte_length)
+    error("quantion bridge: intensity length does not match m/z length");
+
+  const unsigned char *starts_at = bridge.raw + starts->byte_offset;
+  uint64_t previous = 0;
+  for (R_xlen_t index = 0; index <= count; index++)
+  {
+    uint64_t value = read_u64(starts_at, (uint64_t)index * 8);
+    if (value < previous)
+      error("quantion bridge: point starts do not increase");
+    previous = value;
+  }
+  if (previous != mz->byte_length / 8)
+    error("quantion bridge: point starts do not span the m/z section");
+
+  SEXP columns = PROTECT(Rf_allocVector(VECSXP, 4));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 4));
+  SET_VECTOR_ELT(columns, 0, number_column(&bridge, QUANTION_SECTION_RT, count));
+  SET_STRING_ELT(names, 0, Rf_mkChar("rt"));
+  SET_VECTOR_ELT(columns, 1, point_column(&bridge, QUANTION_SECTION_MZ, starts_at, count));
+  SET_STRING_ELT(names, 1, Rf_mkChar("mz"));
+  SET_VECTOR_ELT(columns, 2, point_column(&bridge, QUANTION_SECTION_INTENSITY, starts_at, count));
+  SET_STRING_ELT(names, 2, Rf_mkChar("intensity"));
+  SET_VECTOR_ELT(columns, 3, build_metadata(&bridge, count));
+  SET_STRING_ELT(names, 3, Rf_mkChar("metadata"));
+  set_data_frame(columns, names, count);
+  UNPROTECT(2);
+  return columns;
+}
+
+static void scans_bridge_free(void *data, Rboolean jump)
+{
+  (void)jump;
+  struct scans_bridge_data *held = (struct scans_bridge_data *)data;
+  if (held->ptr && ABI.free_)
+    ABI.free_((unsigned char *)held->ptr, held->len);
+  held->ptr = NULL;
+}
+
+
+struct buf_copy_data
+{
+  const unsigned char *first_ptr;
+  size_t first_len;
+  const unsigned char *second_ptr;
+  size_t second_len;
+  int as_raw;
+};
+
+static SEXP copy_one_buf(const unsigned char *ptr, size_t len, int as_raw)
+{
+  if (as_raw)
+  {
+    SEXP out = Rf_allocVector(RAWSXP, (R_xlen_t)len);
+    if (len > 0)
+      memcpy(RAW(out), ptr, len);
+    return out;
+  }
+  R_xlen_t count = (R_xlen_t)(len / 8);
+  SEXP out = Rf_allocVector(REALSXP, count);
+  if (count > 0)
+    memcpy(REAL(out), ptr, (size_t)count * 8);
+  return out;
+}
+
+static SEXP buf_copy_build(void *data)
+{
+  struct buf_copy_data *held = (struct buf_copy_data *)data;
+  if (held->second_ptr == NULL)
+    return copy_one_buf(held->first_ptr, held->first_len, held->as_raw);
+
+  SEXP x = PROTECT(copy_one_buf(held->first_ptr, held->first_len, held->as_raw));
+  SEXP y = PROTECT(copy_one_buf(held->second_ptr, held->second_len, held->as_raw));
+  SEXP pair = PROTECT(Rf_allocVector(VECSXP, 2));
+  SET_VECTOR_ELT(pair, 0, x);
+  SET_VECTOR_ELT(pair, 1, y);
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 2));
+  SET_STRING_ELT(names, 0, Rf_mkChar("x"));
+  SET_STRING_ELT(names, 1, Rf_mkChar("y"));
+  Rf_setAttrib(pair, R_NamesSymbol, names);
+  UNPROTECT(4);
+  return pair;
+}
+
+static void buf_copy_free(void *data, Rboolean jump)
+{
+  (void)jump;
+  struct buf_copy_data *held = (struct buf_copy_data *)data;
+  if (held->first_ptr && ABI.free_)
+    ABI.free_((unsigned char *)held->first_ptr, held->first_len);
+  if (held->second_ptr && ABI.free_)
+    ABI.free_((unsigned char *)held->second_ptr, held->second_len);
+  held->first_ptr = NULL;
+  held->second_ptr = NULL;
+}
+
+static SEXP ranges_build(void *data)
+{
+  struct buf_copy_data *held = (struct buf_copy_data *)data;
+  size_t count = held->first_len / 16;
+  SEXP result = PROTECT(allocMatrix(REALSXP, (int)count, 2));
+  double *values = REAL(result);
+  for (size_t index = 0; index < count; index++)
+  {
+    uint64_t offset = 0;
+    uint64_t length = 0;
+    memcpy(&offset, held->first_ptr + index * 16, 8);
+    memcpy(&length, held->first_ptr + index * 16 + 8, 8);
+    values[index] = (double)offset;
+    values[count + index] = (double)length;
+  }
+  UNPROTECT(1);
+  return result;
+}
+
+
+typedef struct
+{
+  const char *name;
+  uint32_t id;
+  uint32_t second_id;
+  int kind;
+} record_column;
+
+#define COLUMN_NUMBER 0
+#define COLUMN_COUNT 1
+#define COLUMN_TEXT 2
+
+static const record_column PEAK_COLUMNS[] = {
+    {"from", 18, 0, COLUMN_NUMBER}, {"to", 19, 0, COLUMN_NUMBER},
+    {"rt", 20, 0, COLUMN_NUMBER}, {"integral", 21, 0, COLUMN_NUMBER},
+    {"intensity", 22, 0, COLUMN_NUMBER}, {"n_points", 23, 0, COLUMN_COUNT},
+    {"noise", 24, 0, COLUMN_NUMBER}, {"r2", 25, 0, COLUMN_NUMBER}};
+
+static const record_column FEATURE_COLUMNS[] = {
+    {"mz", 26, 0, COLUMN_NUMBER}, {"rt", 27, 0, COLUMN_NUMBER},
+    {"from", 28, 0, COLUMN_NUMBER}, {"to", 29, 0, COLUMN_NUMBER},
+    {"intensity", 30, 0, COLUMN_NUMBER}, {"integral", 31, 0, COLUMN_NUMBER},
+    {"n_points", 32, 0, COLUMN_COUNT}, {"noise", 33, 0, COLUMN_NUMBER}};
+
+static const record_column CHROM_COLUMNS[] = {
+    {"index", 34, 0, COLUMN_COUNT}, {"id", 42, 43, COLUMN_TEXT},
+    {"ort", 35, 0, COLUMN_NUMBER}, {"rt", 36, 0, COLUMN_NUMBER},
+    {"from", 37, 0, COLUMN_NUMBER}, {"to", 38, 0, COLUMN_NUMBER},
+    {"intensity", 39, 0, COLUMN_NUMBER}, {"integral", 40, 0, COLUMN_NUMBER},
+    {"total_area", 41, 0, COLUMN_NUMBER}, {"timestamp", 44, 45, COLUMN_TEXT}};
+
+static const record_column FIT_COLUMNS[] = {
+    {"shape", 46, 0, COLUMN_NUMBER}, {"height", 47, 0, COLUMN_NUMBER},
+    {"center", 48, 0, COLUMN_NUMBER}, {"fwhm", 49, 0, COLUMN_NUMBER},
+    {"tail", 50, 0, COLUMN_NUMBER}, {"r2", 51, 0, COLUMN_NUMBER}};
+
+static const record_column EIC_PEAK_COLUMNS[] = {
+    {"id", 52, 53, COLUMN_TEXT}, {"mz", 54, 0, COLUMN_NUMBER},
+    {"ort", 55, 0, COLUMN_NUMBER}, {"rt", 56, 0, COLUMN_NUMBER},
+    {"from", 57, 0, COLUMN_NUMBER}, {"to", 58, 0, COLUMN_NUMBER},
+    {"intensity", 59, 0, COLUMN_NUMBER}, {"integral", 60, 0, COLUMN_NUMBER},
+    {"noise", 61, 0, COLUMN_NUMBER}};
+
+static const record_column CONSENSUS_COLUMNS[] = {
+    {"mz", 62, 0, COLUMN_NUMBER}, {"rt", 63, 0, COLUMN_NUMBER},
+    {"from", 64, 0, COLUMN_NUMBER}, {"to", 65, 0, COLUMN_NUMBER},
+    {"intensity", 66, 0, COLUMN_NUMBER}, {"integral", 67, 0, COLUMN_NUMBER},
+    {"frequency", 68, 0, COLUMN_NUMBER}};
+
+static const record_column FOUND_COLUMNS[] = {
+    {"id", 69, 70, COLUMN_TEXT}, {"mz", 71, 0, COLUMN_NUMBER},
+    {"rt", 72, 0, COLUMN_NUMBER}, {"from", 73, 0, COLUMN_NUMBER},
+    {"to", 74, 0, COLUMN_NUMBER}, {"intensity", 75, 0, COLUMN_NUMBER},
+    {"integral", 76, 0, COLUMN_NUMBER}, {"n_points", 77, 0, COLUMN_COUNT},
+    {"noise", 78, 0, COLUMN_NUMBER}};
+
+static const record_column *columns_for_kind(uint16_t kind, int *count)
+{
+  switch (kind)
+  {
+  case QUANTION_PAYLOAD_PEAKS:
+    *count = 8;
+    return PEAK_COLUMNS;
+  case QUANTION_PAYLOAD_FEATURES:
+    *count = 8;
+    return FEATURE_COLUMNS;
+  case QUANTION_PAYLOAD_CHROM_PEAKS:
+    *count = 10;
+    return CHROM_COLUMNS;
+  case QUANTION_PAYLOAD_FIT_RESULT:
+    *count = 6;
+    return FIT_COLUMNS;
+  case QUANTION_PAYLOAD_EIC_PEAKS:
+    *count = 9;
+    return EIC_PEAK_COLUMNS;
+  case QUANTION_PAYLOAD_CONSENSUS_FEATURES:
+    *count = 7;
+    return CONSENSUS_COLUMNS;
+  case QUANTION_PAYLOAD_FOUND_FEATURES:
+    *count = 9;
+    return FOUND_COLUMNS;
+  default:
+    *count = 0;
+    return NULL;
+  }
+}
+
+static SEXP count_column(const bridge_view *bridge, uint32_t section_id, R_xlen_t rows)
+{
+  const bridge_section *section = find_section(bridge, section_id);
+  if (section->byte_length / 4 != (uint64_t)rows)
+    error("quantion bridge: section %u does not match the record count", section_id);
+  SEXP column = PROTECT(Rf_allocVector(REALSXP, rows));
+  for (R_xlen_t index = 0; index < rows; index++)
+    REAL(column)[index] = (double)read_u32(bridge->raw, section->byte_offset + (uint64_t)index * 4);
+  UNPROTECT(1);
+  return column;
+}
+
+static SEXP text_column(const bridge_view *bridge, uint32_t starts_id, uint32_t bytes_id,
+                        R_xlen_t rows)
+{
+  const bridge_section *starts = find_section(bridge, starts_id);
+  const bridge_section *blob = find_section(bridge, bytes_id);
+  if (starts->byte_length / 8 != (uint64_t)rows + 1)
+    error("quantion bridge: text starts do not match the record count");
+
+  SEXP column = PROTECT(Rf_allocVector(STRSXP, rows));
+  uint64_t previous = 0;
+  for (R_xlen_t index = 0; index < rows; index++)
+  {
+    uint64_t from = read_u64(bridge->raw, starts->byte_offset + (uint64_t)index * 8);
+    uint64_t to = read_u64(bridge->raw, starts->byte_offset + (uint64_t)(index + 1) * 8);
+    if (from < previous || to < from || to > blob->byte_length)
+      error("quantion bridge: text starts run past the blob");
+    previous = from;
+    SET_STRING_ELT(column, index,
+                   Rf_mkCharLenCE((const char *)(bridge->raw + blob->byte_offset + from),
+                                  (int)(to - from), CE_UTF8));
+  }
+  UNPROTECT(1);
+  return column;
+}
+
+static SEXP records_bridge_build(void *data)
+{
+  struct scans_bridge_data *held = (struct scans_bridge_data *)data;
+  bridge_view bridge;
+  read_bridge_view(&bridge, held->ptr, held->len);
+
+  int column_count = 0;
+  const record_column *spec = columns_for_kind(bridge.payload_kind, &column_count);
+  if (spec == NULL)
+    error("quantion bridge: payload kind %u is not a record table", bridge.payload_kind);
+
+  R_xlen_t rows = (R_xlen_t)bridge.record_count;
+  SEXP columns = PROTECT(Rf_allocVector(VECSXP, column_count));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, column_count));
+  for (int index = 0; index < column_count; index++)
+  {
+    SEXP column;
+    if (spec[index].kind == COLUMN_NUMBER)
+      column = number_column(&bridge, spec[index].id, rows);
+    else if (spec[index].kind == COLUMN_COUNT)
+      column = count_column(&bridge, spec[index].id, rows);
+    else
+      column = text_column(&bridge, spec[index].id, spec[index].second_id, rows);
+    SET_VECTOR_ELT(columns, index, column);
+    SET_STRING_ELT(names, index, Rf_mkChar(spec[index].name));
+  }
+  set_data_frame(columns, names, rows);
+  UNPROTECT(2);
+  return columns;
+}
+
+static SEXP take_records_bridge(const char *label, Buf *out, SEXP cont)
+{
+  (void)label;
+  struct scans_bridge_data held = {out->ptr, out->len};
+  return R_UnwindProtect(records_bridge_build, &held, scans_bridge_free, &held, cont);
 }
 
 #define REQUIRE_BOUND(ptr, name)                                            \
@@ -519,17 +1039,6 @@ SEXP C_parse_mzml(SEXP data)
   return ptr;
 }
 
-SEXP C_ion_to_json(SEXP bin)
-{
-  MzML *handle = GetHandle(bin);
-  REQUIRE_BOUND(ABI.bin_to_json, "bin_to_json");
-  REQUIRE_BOUND(ABI.free_, "free_");
-  Buf out = (Buf){0};
-  int code = ABI.bin_to_json(handle, &out);
-  die_code("bin_to_json", code);
-  SEXP res = mk_string_len(out.ptr, out.len);
-  return res;
-}
 
 SEXP C_ion_to_mzml(SEXP bin)
 {
@@ -556,16 +1065,20 @@ SEXP C_mzml_to_ion(SEXP bin, SEXP level, SEXP f32_compress)
     error("f32_compress must be TRUE/FALSE");
   REQUIRE_BOUND(ABI.mzml_to_bin, "mzml_to_bin");
   REQUIRE_BOUND(ABI.free_, "free_");
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf out = (Buf){0};
   int32_t code = ABI.mzml_to_bin(
       handle,
       &out,
       (uint8_t)lv,
       (uint8_t)(fc ? 1 : 0));
-  die_code("mzml_to_bin", code);
-  SEXP res = PROTECT(Rf_allocVector(RAWSXP, (R_xlen_t)out.len));
-  memcpy(RAW(res), out.ptr, out.len);
-  ABI.free_(out.ptr, out.len);
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("mzml_to_bin", code);
+  }
+  struct buf_copy_data held = {out.ptr, out.len, NULL, 0, 1};
+  SEXP res = R_UnwindProtect(buf_copy_build, &held, buf_copy_free, &held, cont);
   UNPROTECT(1);
   return res;
 }
@@ -605,10 +1118,16 @@ SEXP C_get_peak(SEXP x, SEXP y, SEXP rt, SEXP range, SEXP options)
   CPeakOptions opts;
   const CPeakOptions *opt_ptr = NULL;
   (void)as_opts_ptr(options, &opts, &opt_ptr);
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf out = (Buf){0};
   int code = ABI.get_peak(REAL(x), REAL(y), (size_t)n, asReal(rt), asReal(range), opt_ptr, &out);
-  die_code("get_peak", code);
-  SEXP res = mk_string_len(out.ptr, out.len);
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("get_peak", code);
+  }
+  SEXP res = take_records_bridge("get_peak", &out, cont);
+  UNPROTECT(1);
   return res;
 }
 
@@ -621,11 +1140,17 @@ SEXP C_fit_peak(SEXP x, SEXP y, SEXP rt, SEXP intensity, SEXP shape)
   REQUIRE_BOUND(ABI.fit_peak, "fit_peak");
   REQUIRE_BOUND(ABI.free_, "free_");
   R_xlen_t n = XLENGTH(y);
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf out = (Buf){0};
   int code = ABI.fit_peak(REAL(x), REAL(y), (size_t)n,
                           asReal(rt), asReal(intensity), (int32_t)asInteger(shape), &out);
-  die_code("fit_peak", code);
-  SEXP res = mk_string_len(out.ptr, out.len);
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("fit_peak", code);
+  }
+  SEXP res = take_records_bridge("fit_peak", &out, cont);
+  UNPROTECT(1);
   return res;
 }
 
@@ -636,14 +1161,17 @@ SEXP C_draw_peak(SEXP x, SEXP shape, SEXP height, SEXP center, SEXP fwhm, SEXP t
   REQUIRE_BOUND(ABI.draw_peak, "draw_peak");
   REQUIRE_BOUND(ABI.free_, "free_");
   R_xlen_t n = XLENGTH(x);
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf out = (Buf){0};
   int code = ABI.draw_peak(REAL(x), (size_t)n, (int32_t)asInteger(shape),
                            asReal(height), asReal(center), asReal(fwhm), asReal(tail), &out);
-  die_code("draw_peak", code);
-  size_t ny = out.len / 8;
-  SEXP Ry = PROTECT(Rf_allocVector(REALSXP, (R_xlen_t)ny));
-  memcpy(REAL(Ry), out.ptr, ny * sizeof(double));
-  ABI.free_(out.ptr, out.len);
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("draw_peak", code);
+  }
+  struct buf_copy_data held = {out.ptr, out.len, NULL, 0, 0};
+  SEXP Ry = R_UnwindProtect(buf_copy_build, &held, buf_copy_free, &held, cont);
   UNPROTECT(1);
   return Ry;
 }
@@ -705,14 +1233,20 @@ SEXP C_get_peaks_from_eic(SEXP bin, SEXP rts, SEXP mzs, SEXP ranges, SEXP ids, S
   const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
 
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf out = (Buf){0};
   int code = ABI.get_peaks_from_eic(
       handle, REAL(rts), REAL(mzs), REAL(ranges),
       offs, lens, ids_buf, ids_len,
       (size_t)n, asReal(from_left), asReal(to_right), opt_ptr, ncores, &out);
 
-  die_code("get_peaks_from_eic", code);
-  SEXP res = mk_string_len(out.ptr, out.len);
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("get_peaks_from_eic", code);
+  }
+  SEXP res = take_records_bridge("get_peaks_from_eic", &out, cont);
+  UNPROTECT(1);
   return res;
 }
 
@@ -762,13 +1296,19 @@ SEXP C_get_peaks_from_chrom(SEXP bin, SEXP idxs, SEXP rts, SEXP ranges, SEXP opt
   const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
 
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf out = (Buf){0};
   int code = ABI.get_peaks_from_chrom(
       handle,
       uidx, REAL(rts), REAL(ranges), (size_t)n, opt_ptr, ncores, &out);
 
-  die_code("get_peaks_from_chrom", code);
-  SEXP res = mk_string_len(out.ptr, out.len);
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("get_peaks_from_chrom", code);
+  }
+  SEXP res = take_records_bridge("get_peaks_from_chrom", &out, cont);
+  UNPROTECT(1);
   return res;
 }
 
@@ -780,27 +1320,20 @@ SEXP C_calculate_eic(SEXP bin, SEXP targets, SEXP from, SEXP to, SEXP ppm_tol, S
   REQUIRE_BOUND(ABI.calculate_eic, "calculate_eic");
   REQUIRE_BOUND(ABI.free_, "free_");
   double t = asReal(targets);
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf bx = (Buf){0}, by = (Buf){0};
   int code = ABI.calculate_eic(
       handle,
       t, asReal(from), asReal(to), asReal(ppm_tol), asReal(mz_tol),
       &bx, &by);
-  die_code("calculate_eic", code);
-  size_t nx = bx.len / 8, ny = by.len / 8;
-  SEXP Rx = PROTECT(Rf_allocVector(REALSXP, (R_xlen_t)nx));
-  SEXP Ry = PROTECT(Rf_allocVector(REALSXP, (R_xlen_t)ny));
-  memcpy(REAL(Rx), bx.ptr, nx * sizeof(double));
-  memcpy(REAL(Ry), by.ptr, ny * sizeof(double));
-  ABI.free_(bx.ptr, bx.len);
-  ABI.free_(by.ptr, by.len);
-  SEXP out = PROTECT(Rf_allocVector(VECSXP, 2));
-  SET_VECTOR_ELT(out, 0, Rx);
-  SET_VECTOR_ELT(out, 1, Ry);
-  SEXP nms = PROTECT(Rf_allocVector(STRSXP, 2));
-  SET_STRING_ELT(nms, 0, Rf_mkChar("x"));
-  SET_STRING_ELT(nms, 1, Rf_mkChar("y"));
-  Rf_setAttrib(out, R_NamesSymbol, nms);
-  UNPROTECT(4);
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("calculate_eic", code);
+  }
+  struct buf_copy_data held = {bx.ptr, bx.len, by.ptr, by.len, 0};
+  SEXP out = R_UnwindProtect(buf_copy_build, &held, buf_copy_free, &held, cont);
+  UNPROTECT(1);
   return out;
 }
 
@@ -816,10 +1349,16 @@ SEXP C_find_peaks(SEXP x, SEXP y, SEXP options)
   CPeakOptions opts;
   const CPeakOptions *opt_ptr = NULL;
   (void)as_opts_ptr(options, &opts, &opt_ptr);
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf out = (Buf){0};
   int code = ABI.find_peaks(REAL(x), REAL(y), (size_t)n, opt_ptr, &out);
-  die_code("find_peaks", code);
-  SEXP res = mk_string_len(out.ptr, out.len);
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("find_peaks", code);
+  }
+  SEXP res = take_records_bridge("find_peaks", &out, cont);
+  UNPROTECT(1);
   return res;
 }
 
@@ -832,13 +1371,16 @@ SEXP C_calculate_baseline(SEXP y, SEXP lambda, SEXP max_iterations)
   R_xlen_t n = XLENGTH(y);
   int lam = asInteger(lambda);
   int maxit = asInteger(max_iterations);
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf out = (Buf){0};
   int code = ABI.calculate_baseline(REAL(y), (size_t)n, (int32_t)lam, (int32_t)maxit, &out);
-  die_code("calculate_baseline", code);
-  size_t m = out.len / 8;
-  SEXP Ry = PROTECT(Rf_allocVector(REALSXP, (R_xlen_t)m));
-  memcpy(REAL(Ry), out.ptr, m * sizeof(double));
-  ABI.free_(out.ptr, out.len);
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("calculate_baseline", code);
+  }
+  struct buf_copy_data held = {out.ptr, out.len, NULL, 0, 0};
+  SEXP Ry = R_UnwindProtect(buf_copy_build, &held, buf_copy_free, &held, cont);
   UNPROTECT(1);
   return Ry;
 }
@@ -880,6 +1422,7 @@ SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, 
   const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
 
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf out = (Buf){0};
   int code = ABI.find_features(
       handle,
@@ -889,8 +1432,13 @@ SEXP C_find_features(SEXP data, SEXP from_time, SEXP to_time, SEXP eic_ppm_tol, 
       asReal(grid_step_ppm),
       opt_ptr, (int32_t)ncores, &out);
 
-  die_code("find_features", code);
-  SEXP res = mk_string_len(out.ptr, out.len);
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("find_features", code);
+  }
+  SEXP res = take_records_bridge("find_features", &out, cont);
+  UNPROTECT(1);
   return res;
 }
 
@@ -954,6 +1502,7 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
   const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
 
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf out = (Buf){0};
   int32_t code = ABI.find_feature(
       handle, REAL(rts), REAL(mzs), REAL(wins),
@@ -962,27 +1511,21 @@ SEXP C_find_feature(SEXP bin, SEXP rts, SEXP mzs, SEXP wins, SEXP ids, SEXP scan
       asReal(scan_ppm), asReal(scan_mz), asReal(eic_ppm), asReal(eic_mz),
       opt_ptr, &out);
 
-  die_code("find_feature", code);
-  SEXP res = mk_string_len(out.ptr, out.len);
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("find_feature", code);
+  }
+  SEXP res = take_records_bridge("find_feature", &out, cont);
+  UNPROTECT(1);
   return res;
 }
 
 static SEXP ranges_to_matrix(Buf *out)
 {
-  size_t count = out->len / 16;
-  SEXP result = PROTECT(allocMatrix(REALSXP, (int)count, 2));
-  double *values = REAL(result);
-  for (size_t index = 0; index < count; index++)
-  {
-    uint64_t offset = 0;
-    uint64_t length = 0;
-    memcpy(&offset, out->ptr + index * 16, 8);
-    memcpy(&length, out->ptr + index * 16 + 8, 8);
-    values[index] = (double)offset;
-    values[count + index] = (double)length;
-  }
-  if (ABI.free_ && out->ptr)
-    ABI.free_(out->ptr, out->len);
+  SEXP cont = PROTECT(R_MakeUnwindCont());
+  struct buf_copy_data held = {out->ptr, out->len, NULL, 0, 0};
+  SEXP result = R_UnwindProtect(ranges_build, &held, buf_copy_free, &held, cont);
   UNPROTECT(1);
   return result;
 }
@@ -1012,6 +1555,22 @@ SEXP C_plan_eic(SEXP ptr, SEXP target, SEXP from, SEXP to, SEXP ppm, SEXP mz_tol
   int code = ABI.plan_eic(handle, asReal(target), asReal(from), asReal(to),
                           asReal(ppm), asReal(mz_tol), &out);
   die_code("plan_eic", code);
+  return ranges_to_matrix(&out);
+}
+
+SEXP C_plan_scans(SEXP ptr, SEXP query_type, SEXP from_value, SEXP to_value, SEXP level)
+{
+  REQUIRE_BOUND(ABI.plan_scans, "plan_scans");
+  MzML *handle = (MzML *)R_ExternalPtrAddr(ptr);
+  if (handle == NULL)
+    error("quantion: the file handle is not valid");
+
+  Buf out;
+  memset(&out, 0, sizeof(out));
+  int code = ABI.plan_scans(handle, (uint8_t)asInteger(query_type),
+                            asReal(from_value), asReal(to_value),
+                            (uint8_t)asInteger(level), &out);
+  die_code("plan_scans", code);
   return ranges_to_matrix(&out);
 }
 
@@ -1105,11 +1664,20 @@ SEXP C_get_scans(SEXP bin, SEXP query_type, SEXP a, SEXP b, SEXP level)
   MzML *handle = GetHandle(bin);
   REQUIRE_BOUND(ABI.get_scans, "get_scans");
   REQUIRE_BOUND(ABI.free_, "free_");
+
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf out = (Buf){0};
   int code = ABI.get_scans(handle, (uint8_t)asInteger(query_type), asReal(a), asReal(b), (uint8_t)asInteger(level), &out);
-  die_code("get_scans", code);
-  SEXP res = mk_string_len(out.ptr, out.len);
-  return res;
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("get_scans", code);
+  }
+
+  struct scans_bridge_data held = {out.ptr, out.len};
+  SEXP result = R_UnwindProtect(scans_bridge_build, &held, scans_bridge_free, &held, cont);
+  UNPROTECT(1);
+  return result;
 }
 
 SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
@@ -1133,6 +1701,7 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
   const CPeakOptions *opt_ptr = NULL;
   as_opts_ptr(options, &opts, &opt_ptr);
 
+  SEXP cont = PROTECT(R_MakeUnwindCont());
   Buf out = (Buf){0};
   int code = ABI.get_features(
       path,
@@ -1144,7 +1713,12 @@ SEXP C_get_features(SEXP dir_path, SEXP from_time, SEXP to_time,
       opt_ptr, (int32_t)ncores,
       &out);
 
-  die_code("get_features", code);
-  SEXP res = mk_string_len(out.ptr, out.len);
+  if (code != 0)
+  {
+    UNPROTECT(1);
+    die_code("get_features", code);
+  }
+  SEXP res = take_records_bridge("get_features", &out, cont);
+  UNPROTECT(1);
   return res;
 }

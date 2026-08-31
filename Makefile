@@ -15,7 +15,7 @@ OUT           ?= $(ARTIFACTS)/$(CRATE_VERSION)
 
 .PHONY: help all mac linux windows wasm \
         macos-arm64 macos-x86_64 linux-amd64 linux-arm64 windows-amd64 windows-arm64 \
-        doctor check-version test header-check native quick-check check-api check-api-update \
+        doctor check-version test header header-check native quick-check check-api check-api-update \
         release publish clean
 
 # build every platform into artifacts/<version>/
@@ -136,6 +136,11 @@ check-version:
 test:
 	cargo test --all-features --manifest-path $(CRATE_MANIFEST)
 
+# rewrite every quantion.h from the current Rust sources
+header:
+	touch core/build.rs
+	cargo build --locked --manifest-path $(CRATE_MANIFEST)
+
 # fail if a fresh build changes any committed quantion.h
 header-check:
 	@scripts/header-check.sh
@@ -165,11 +170,13 @@ release:
 publish:
 	@scripts/publish.sh "$(VERSION)"
 
-# delete cargo build folders. keeps artifacts/
+# delete every build folder and every built binary, so the next release starts over
 clean:
 	cargo clean --manifest-path $(CRATE_MANIFEST)
-	rm -rf core/target-linux-amd64 core/target-linux-arm64 \
+	rm -rf core/target core/target-linux-amd64 core/target-linux-arm64 \
 	       core/target-windows-amd64 core/target-windows-arm64
+	rm -rf $(OUT)
+	rm -f $(ARTIFACTS)/.build-state.json
 
 # list every target with its one-line description
 help:

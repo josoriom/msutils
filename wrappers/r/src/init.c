@@ -5,7 +5,6 @@
 SEXP C_bind_rust(SEXP path);
 SEXP C_unbind_rust(SEXP unused);
 SEXP C_parse_mzml(SEXP data);
-SEXP C_ion_to_json(SEXP bin);
 SEXP C_ion_to_mzml(SEXP bin);
 SEXP C_get_peak(SEXP x, SEXP y, SEXP rt, SEXP range, SEXP options);
 SEXP C_fit_peak(SEXP x, SEXP y, SEXP rt, SEXP intensity, SEXP shape);
@@ -22,6 +21,7 @@ SEXP C_mzml_to_ion_file(SEXP input_path, SEXP output_path, SEXP level, SEXP f32_
 SEXP C_parse_ion(SEXP bin, SEXP max_cache_size);
 SEXP C_plan_open(SEXP header);
 SEXP C_plan_eic(SEXP ptr, SEXP target, SEXP from, SEXP to, SEXP ppm, SEXP mz_tol);
+SEXP C_plan_scans(SEXP ptr, SEXP query_type, SEXP from_value, SEXP to_value, SEXP level);
 SEXP C_store_new(void);
 SEXP C_store_add(SEXP store_ptr, SEXP offset, SEXP bytes);
 SEXP C_parse_ion_source(SEXP store_ptr, SEXP max_cache_size);
@@ -38,7 +38,6 @@ static const R_CallMethodDef CallEntries[] = {
     {"C_bind_rust", (DL_FUNC)&C_bind_rust, 1},
     {"C_unbind_rust", (DL_FUNC)&C_unbind_rust, 1},
     {"C_parse_mzml", (DL_FUNC)&C_parse_mzml, 1},
-    {"C_ion_to_json", (DL_FUNC)&C_ion_to_json, 1},
     {"C_ion_to_mzml", (DL_FUNC)&C_ion_to_mzml, 1},
     {"C_get_peak", (DL_FUNC)&C_get_peak, 5},
     {"C_fit_peak", (DL_FUNC)&C_fit_peak, 5},
@@ -55,6 +54,7 @@ static const R_CallMethodDef CallEntries[] = {
     {"C_parse_ion", (DL_FUNC)&C_parse_ion, 2},
     {"C_plan_open", (DL_FUNC)&C_plan_open, 1},
     {"C_plan_eic", (DL_FUNC)&C_plan_eic, 6},
+    {"C_plan_scans", (DL_FUNC)&C_plan_scans, 5},
     {"C_store_new", (DL_FUNC)&C_store_new, 0},
     {"C_store_add", (DL_FUNC)&C_store_add, 3},
     {"C_parse_ion_source", (DL_FUNC)&C_parse_ion_source, 2},

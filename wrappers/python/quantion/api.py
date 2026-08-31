@@ -16,7 +16,8 @@ from quantion._bridge import (
     _check,
     buf_to_bytes,
     buf_to_f64,
-    buf_to_json,
+    buf_to_records,
+    buf_to_scans,
     buf_to_str,
 )
 from quantion._pack import (
@@ -109,13 +110,6 @@ def _get_numeric(mapping: Optional[Dict], key: str, default: float) -> float:
     value = mapping.get(key, default)
     parsed = float(value)
     return parsed if math.isfinite(parsed) else default
-
-
-def _ion_to_json_raw(file: SampleFile) -> Any:
-    abi = file._abi
-    buf = _Buf()
-    _check("bin_to_json", abi.bin_to_json(file.handle, ctypes.byref(buf)))
-    return buf_to_json(abi, buf)
 
 
 def _ion_to_mzml_raw(file: SampleFile) -> str:
@@ -211,12 +205,10 @@ def parse_ion_path(path, max_cache_size: int = 0) -> SampleFile:
     return SampleFile(ptr, abi)
 
 
-LARGEST_GAP = 65536
+LARGEST_GAP = 131072
 
 
 def gap_for(total: int) -> int:
-    if total <= 0:
-        return LARGEST_GAP
     return min(LARGEST_GAP, total // 8)
 
 
@@ -321,6 +313,23 @@ def _plan_eic(file: SampleFile, target_mz: float, from_rt: float, to_rt: float,
     ]
 
 
+def _plan_scans(file: SampleFile, query_type: int, from_value: float,
+                to_value: float, level: int) -> list[tuple[int, int]]:
+    buffer = _Buf()
+    _check("plan_scans", file._abi.plan_scans(
+        file.handle,
+        c_uint8(query_type), c_double(from_value), c_double(to_value),
+        c_uint8(level),
+        ctypes.byref(buffer),
+    ))
+    packed = buf_to_bytes(file._abi, buffer)
+    return [
+        (int.from_bytes(packed[i:i + 8], "little"),
+         int.from_bytes(packed[i + 8:i + 16], "little"))
+        for i in range(0, len(packed), 16)
+    ]
+
+
 def parse_ion_remote(url: str, max_cache_size: int = 0) -> SampleFile:
     """Load an ion file over HTTP, reading only the bytes it needs.
 
@@ -365,17 +374,6 @@ def parse_ion_remote(url: str, max_cache_size: int = 0) -> SampleFile:
     file._range_callback = callback
     file._remote_source = source
     return file
-
-
-def ion_to_json(file: SampleFile) -> Any:
-    """Get JSON from a sample.
-
-    Args:
-        file: SampleFile from parse_mzml() or parse_ion().
-
-    Returns: Parsed JSON object with all run metadata, spectra, and chromatograms.
-    """
-    return _ion_to_json_raw(file)
 
 
 def ion_to_mzml(file: SampleFile) -> str:
@@ -520,7 +518,7 @@ def find_peaks(
         _as_f64_ptr(x_array), _as_f64_ptr(y_array), c_size_t(len(x_array)),
         _as_opts_ptr(peak_options), ctypes.byref(buf),
     ))
-    return buf_to_json(abi, buf)
+    return buf_to_records(abi, buf)
 
 
 def get_peak(
@@ -561,7 +559,8 @@ def get_peak(
         _as_opts_ptr(peak_options),
         ctypes.byref(buf),
     ))
-    return buf_to_json(abi, buf)
+    rows = buf_to_records(abi, buf)
+    return rows[0] if rows else {}
 
 
 def _shape_code(shape: str) -> int:
@@ -610,7 +609,8 @@ def fit_peak(
         c_int32(_shape_code(shape)),
         ctypes.byref(buf),
     ))
-    return buf_to_json(abi, buf)
+    rows = buf_to_records(abi, buf)
+    return rows[0] if rows else None
 
 
 def draw_peak(x: Sequence, params: Dict) -> np.ndarray:
@@ -745,13 +745,17 @@ def get_scans(
             raise ValueError("get_scans: mz must be a positive finite number")
         query_type, b = _QUERY_CLOSEST_MZ, math.nan
 
+    source = getattr(file, "_remote_source", None)
+    if source is not None and abi.plan_scans is not None:
+        source.prefetch(_plan_scans(file, query_type, a, b, level))
+
     buf = _Buf()
     _check("get_scans", abi.get_scans(
         file.handle,
         c_uint8(query_type), c_double(a), c_double(b), c_uint8(level),
         ctypes.byref(buf),
     ))
-    scans = buf_to_json(abi, buf)
+    scans = buf_to_scans(abi, buf)
     if query_type in (_QUERY_CLOSEST_RT, _QUERY_CLOSEST_MZ):
         return scans[0] if scans else None
     return scans
@@ -810,7 +814,7 @@ def get_peaks_from_eic(
             ctypes.byref(buf),
         )
     _check("get_peaks_from_eic", rc)
-    return buf_to_json(abi, buf)
+    return buf_to_records(abi, buf)
 
 
 def get_peaks_from_chrom(
@@ -855,7 +859,7 @@ def get_peaks_from_chrom(
         c_size_t(n), _as_opts_ptr(peak_options), c_size_t(to_cores(cores)),
         ctypes.byref(buf),
     ))
-    return buf_to_json(abi, buf)
+    return buf_to_records(abi, buf)
 
 
 def find_features(
@@ -921,7 +925,7 @@ def find_features(
         _as_opts_ptr(peak_options), c_int32(to_cores(cores)),
         ctypes.byref(buf),
     ))
-    return buf_to_json(abi, buf)
+    return buf_to_records(abi, buf)
 
 
 def find_feature(
@@ -1000,7 +1004,7 @@ def find_feature(
             _as_opts_ptr(peak_options), ctypes.byref(buf),
         )
     _check("find_feature", rc)
-    return buf_to_json(abi, buf)
+    return buf_to_records(abi, buf)
 
 
 def get_features(
@@ -1089,4 +1093,4 @@ def get_features(
         _as_opts_ptr(peak_options), c_int32(to_cores(cores)),
         ctypes.byref(buf),
     ))
-    return buf_to_json(abi, buf)
+    return buf_to_records(abi, buf)

@@ -36,7 +36,9 @@ pub mod baseline {
 
 pub mod features {
     #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
-    pub use crate::utilities::get_features::{AlignmentOptions, get_features};
+    pub use crate::utilities::get_features::{
+        AlignmentOptions, ConsensusFeature, get_features, get_features_from_detected,
+    };
     pub use crate::utilities::{
         find_feature::{FindFeatureOptions, find_feature},
         find_features::{FindFeaturesOptions, find_features},

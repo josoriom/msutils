@@ -137,7 +137,7 @@ describe("parseIonUrl Real WASM End-to-End", () => {
     return ranges;
   }
 
-  function read_json_from_slot(slot_ptr: number): any {
+  function read_bridge_from_slot(slot_ptr: number): any {
     if (!wasm_memory) throw new Error("WASM memory not initialized");
 
     const view = new Uint32Array(wasm_memory.buffer, slot_ptr, 2);
@@ -146,9 +146,18 @@ describe("parseIonUrl Real WASM End-to-End", () => {
 
     if (data_len === 0) return null;
 
-    const data_bytes = new Uint8Array(wasm_memory.buffer, data_ptr, data_len);
-    const json_str = new TextDecoder().decode(data_bytes);
-    return JSON.parse(json_str);
+    const copy = new Uint8Array(data_len);
+    copy.set(new Uint8Array(wasm_memory.buffer, data_ptr, data_len));
+    const header = new DataView(copy.buffer);
+    return {
+      magic: header.getUint32(0, true),
+      layoutVersion: header.getUint16(4, true),
+      payloadKind: header.getUint16(6, true),
+      sectionCount: header.getUint32(8, true),
+      totalBytes: Number(header.getBigUint64(16, true)),
+      recordCount: Number(header.getBigUint64(24, true)),
+      byteLength: data_len,
+    };
   }
 
   describe("end-to-end URL lazy-read path", () => {
@@ -190,8 +199,12 @@ describe("parseIonUrl Real WASM End-to-End", () => {
       const scans_rc = get_scans(handle, query_type, 0, 1000, 0, output_slot);
       expect(scans_rc).toBe(0);
 
-      const scans_data = read_json_from_slot(output_slot);
+      const scans_data = read_bridge_from_slot(output_slot);
       expect(scans_data).toBeTruthy();
+      expect(scans_data.magic).toBe(0x42544e51);
+      expect(scans_data.layoutVersion).toBe(1);
+      expect(scans_data.payloadKind).toBe(1);
+      expect(scans_data.totalBytes).toBe(scans_data.byteLength);
 
       const after_getscans_range_read_count = range_read_calls.length;
 
